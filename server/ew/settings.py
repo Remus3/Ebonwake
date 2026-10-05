@@ -24,10 +24,13 @@ from . import market, progress
 
 ANCHORS = ("tl", "tr", "bl", "br", "ml", "mr")
 WIDGETS = {"grindSession": True, "grindBuff": True, "eventsSoon": True,
-           "leveling": False, "season": False, "marketTicker": False}
-# Plan 026 rule names; default off except marketAlert and buffEnding.
+           "leveling": False, "season": False, "marketTicker": False,
+           "worldBoss": False}
+# Plan 026 rule names (+ plan 032 bossSoon); default off except marketAlert
+# and buffEnding.
 NOTIFY = {"marketAlert": True, "buffEnding": True, "hotTime": False,
-          "resetPassed": False, "newCoupon": False, "gameExit": False}
+          "resetPassed": False, "newCoupon": False, "gameExit": False,
+          "bossSoon": False}
 THEMES = ("system", "dark", "light")
 MODS = ("Control", "Ctrl", "Alt", "Shift", "CommandOrControl", "Super")
 _KEY_RE = re.compile(r"^([A-Z0-9]|F([1-9]|1[0-9]|2[0-4]))$")

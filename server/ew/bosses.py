@@ -217,11 +217,13 @@ class BossService:
         """GET /api/bosses body."""
         now = self._now()
         today = utc_to_pt(now).date()
-        remaining = []
+        remaining, slots = [], []
         for slot in self._week[today.weekday()]:
             at, row = _spawn(self.table, slot, today)
-            if at + _dt.timedelta(minutes=row["despawn_min"]) > now:
+            gone = at + _dt.timedelta(minutes=row["despawn_min"]) <= now
+            if not gone:
                 remaining.append(dict(row, up=at <= now))
+            slots.append(dict(row, up=at <= now and not gone, past=gone))  # plan 032
         looted_raw = self._load()
         looted = {}
         for k in sorted(looted_raw):
@@ -234,7 +236,7 @@ class BossService:
                 "verified": self.table["verified"], "dst_assumption": DST_ASSUMPTION,
                 "rules": self.table["rules"],
                 "next": next_spawns(now, 3, self.table),
-                "today": {"day": today.isoformat(), "remaining": remaining},
+                "today": {"day": today.isoformat(), "remaining": remaining, "slots": slots},
                 "looted": looted,
                 "garmoth": {"looted": garmoth,
                             "cap": self.table["rules"]["garmoth_loot_per_week"],

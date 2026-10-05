@@ -25,7 +25,13 @@
    arrow vs the previous different price (C.tickerTrack, overlay memory only),
    net after tax and a pre-order badge when present; a row mutes once its
    source age passes the TTL. Offline keeps the last rows under a muted
-   `offline` header; each row mutes once its own data passes the TTL. */
+   `offline` header; each row mutes once its own data passes the TTL.
+   World boss (plan 032): opt-in (default off) next spawn name(s) and
+   countdown from GET /api/bosses (same cadence as Today), the following
+   spawn muted below; a boss ticked looted for that PT day (or Garmoth at its
+   weekly cap) is greyed; Garmoth shows n/3. Countdowns run locally from
+   at_utc; once a spawn passes the next one leads. Offline keeps the rows,
+   muted. Nothing is read from the game's own boss notice. */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -55,6 +61,9 @@
   let tickerStale = false;
   let tickerMem = null;
   let tickerSig = null;
+  let boss = null;
+  let bossStale = false;
+  let bossSig = null;
 
   // Plan 022: a row shows only when its widget is on and it has something to say.
   function showRow(id, enabled, text) {
@@ -208,6 +217,41 @@
     document.getElementById('ov-ticker-row').hidden = !rows.length && !tickerStale;
   }
 
+  // Names rebuilt only when they change; greyed names carry ew-boss-looted.
+  function bossNames(lab, r, fallback) {
+    while (lab.firstChild) lab.removeChild(lab.firstChild);
+    if (!r) { lab.textContent = fallback; lab.title = ''; return; }
+    r.names.forEach(function (n, i) {
+      if (i) lab.appendChild(document.createTextNode(' + '));
+      const s = document.createElement('span');
+      if (n.looted) s.className = 'ew-boss-looted';
+      s.textContent = n.label;
+      lab.appendChild(s);
+    });
+    lab.title = r.text;
+  }
+
+  function drawBoss(now) {
+    const rows = boss ? C.bossRows(boss, now, 2) : [];
+    const first = rows[0] || null;
+    const second = rows[1] || null;
+    const sig = JSON.stringify([bossStale, rows.map(function (r) { return r.names; })]);
+    if (sig !== bossSig) {
+      bossSig = sig;
+      bossNames(document.getElementById('ov-boss-name'), first, 'World boss');
+      bossNames(document.getElementById('ov-boss-next-name'), second, 'then');
+    }
+    const v = document.getElementById('ov-boss');
+    if (first) v.textContent = first.left;
+    else v.textContent = boss ? 'none' : (bossStale ? 'offline' : '-');
+    v.className = 'ew-ov-val' + (bossStale || (first && first.done) ? ' ew-stale' : '');
+    showRow('ov-boss-row', true, v.textContent);
+    const n = document.getElementById('ov-boss-next');
+    n.textContent = second ? second.left : '';
+    n.className = 'ew-ov-val ew-stale';
+    showRow('ov-boss-next-row', true, n.textContent);
+  }
+
   function tick() {
     const now = Date.now();
     document.getElementById('ov-daily').textContent = C.fmtDuration(C.nextDailyReset(now) - now);
@@ -217,6 +261,7 @@
     if (W.eventsSoon) drawEvents(now);
     if (W.leveling) drawLeveling(now);
     if (W.marketTicker) drawTicker(now);
+    if (W.worldBoss) drawBoss(now);
   }
 
   function getJSON(path) {
@@ -280,6 +325,16 @@
     }).then(function () { drawTicker(Date.now()); });
   }
 
+  function loadBoss() {
+    getJSON('/api/bosses').then(function (d) {
+      if (!d || typeof d !== 'object' || !Array.isArray(d.next)) throw new Error('bad body');
+      boss = d;
+      bossStale = false;
+    }).catch(function () {
+      bossStale = true;
+    }).then(function () { drawBoss(Date.now()); });
+  }
+
   function loadGame() {
     getJSON('/api/game').then(function (d) {
       const g = C.normalizeGame(d);
@@ -306,6 +361,7 @@
     if (W.eventsSoon) loadEvents();
     if (W.leveling) loadLeveling();
     if (W.season) loadSeason();
+    if (W.worldBoss) loadBoss();
     loadGame();
   }
 
@@ -335,6 +391,8 @@
       if (W.season) drawSeason();
       tickerStale = true;
       if (W.marketTicker) drawTicker(Date.now());
+      bossStale = true;
+      if (W.worldBoss) drawBoss(Date.now());
       gameStale = true;
       drawGame();
       src.close();

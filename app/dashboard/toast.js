@@ -15,7 +15,7 @@
   const DATA_MS = 60000;
   const SOURCES = [
     ['market', '/api/market/watch'], ['grind', '/api/grind'], ['leveling', '/api/leveling'],
-    ['events', '/api/events'], ['today', '/api/today']
+    ['events', '/api/events'], ['today', '/api/today'], ['bosses', '/api/bosses']
   ];
   const queue = C.toastQueue();
   const ledger = C.notifyLedger();
@@ -113,7 +113,7 @@
       const t = Date.now();
       const next = { at: t, market: docs.market || null, grind: docs.grind || null, grindAt: at.grind,
         leveling: docs.leveling || null, levelingAt: at.leveling, events: docs.events || null,
-        today: docs.today || null, game: docs.game || null };
+        today: docs.today || null, game: docs.game || null, bosses: docs.bosses || null };
       fire(ledger.take(C.notifyRules(prev, next, t, prefs()), t));
       prev = next;
     });
