@@ -45,7 +45,7 @@ and every headless run goes through the fleet kit.
    All side effects injectable; tests never spawn, never touch a git remote,
    never call schtasks.
 2. `tools/loop_task.py install|remove|status|run-now`: per-user Task Scheduler
-   task `\Ebonwake\LaneLoop` every 15 min (TimeTrigger repetition PT15M,
+   task `\EbonwakeOps\LaneLoop` every 15 min (TimeTrigger repetition PT15M,
    IgnoreNew, LeastPrivilege), action `pythonw.exe tools/ew_loop.py tick`,
    WorkingDirectory = repo root; status reads back state (Ready / Running /
    Disabled), last run, last result via `schtasks /Query /XML` + `/FO LIST /V`.
@@ -150,7 +150,7 @@ checklist ends in `[ ] /done`; one push.
 ## Proposed CLAUDE.md rules (EW rules section; land on the operator's own go)
 
 ```
-## Loop (plan 015) - armed as \Ebonwake\LaneLoop, every 15 min
+## Loop (plan 015) - armed as \EbonwakeOps\LaneLoop, every 15 min
 
 1. The loop tick (`tools/ew_loop.py tick`) is the default executor. A session
    adds work by adding a ROADMAP row (`[ ] open`, `(priority)` to jump the

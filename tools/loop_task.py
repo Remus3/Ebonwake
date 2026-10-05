@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import logon_task  # noqa: E402  (shared schtasks helpers: decode, pythonw, user)
 
 ROOT = Path(__file__).resolve().parent.parent
-TASK = "\\Ebonwake\\LaneLoop"
+TASK = "\\EbonwakeOps\\LaneLoop"  # a root task named "Ebonwake" (the launcher) blocks a folder of that name
 INTERVAL = "PT15M"
 TIME_LIMIT = "PT6H"
 NS = logon_task.NS
