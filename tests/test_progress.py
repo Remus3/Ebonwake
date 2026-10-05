@@ -7,6 +7,7 @@ a fake, never one from config/local.json.
 
 import http.client
 import json
+import re
 import threading
 
 import pytest
@@ -361,7 +362,7 @@ def test_corrupt_doc_degrades(tmp_path):
     v = progress.ProgressService(st, None).view()
     assert [t["id"] for t in v["tracks"]] == ["ok"]
     assert v["tracks"][0]["steps"] == [{"id": "a", "title": "A", "done": False,
-                                        "done_at": None}]
+                                        "done_at": None, "gates": [], "ready": None}]  # 034
     assert v["character"]["cls"] == "Deadeye" and v["character"]["level"] is None
 
 
@@ -406,7 +407,7 @@ def _req(s, method, path, body=None, ctype="application/json", host=None):
 def test_route_get_progress(psrv):
     st, doc = _req(psrv, "GET", "/api/progress")
     assert st == 200 and set(doc) == {"character", "tracks", "season", "profile",
-                                    "brackets"}  # 013 season, 023 brackets
+                                    "brackets", "seeds"}  # 013 season, 023 brackets, 034
     assert doc["profile"]["status"] in ("pending", "ok")  # refresh runs off the request
     assert _wait(lambda: _req(psrv, "GET", "/api/progress")[1]["profile"]["status"] == "ok")
     doc = _req(psrv, "GET", "/api/progress")[1]
@@ -579,3 +580,281 @@ def test_get_view_survives_thread_start_failure(tmp_path):
     s2 = progress.ProgressService(Store(tmp_path / "store"), c, spawn=_sync)
     s2.view()
     assert len(f.calls) == 1  # in-flight slot was released after the failed start
+
+
+# --- plan 034: track seeds (gear roadmap, graduation readiness, adventure logs)
+
+SEED_IDS = ["gear_roadmap", "graduation_readiness", "fughar_journal", "igor_bartali",
+            "emma_bartali"]
+AP_TABLE = {"ap": {"source": "https://example.test/ap", "verified": "2026-08-13", "note": "",
+                   "rows": [{"min": 0, "value": 0}, {"min": 240, "value": 40},
+                            {"min": 250, "value": 57}, {"min": 340, "value": 250}]}}
+
+
+def _seed_svc(tmp_path, tables=None, level=None):
+    return progress.ProgressService(Store(tmp_path / "store"), bracket_tables=tables or {},
+                                    level=level)
+
+
+def _track(view, seed_id):
+    return next(t for t in view["tracks"] if t.get("seed_id") == seed_id)
+
+
+def _stepof(track, sid):
+    return next(st for st in track["steps"] if st["id"] == sid)
+
+
+def _gates(step):
+    return {g["stat"]: g for g in step["gates"]}
+
+
+def _seed_doc(**over):
+    step = {"id": "a", "title": "a", "note": "", "source": "https://a.b", "verified": False}
+    step.update(over.pop("step", {}))
+    doc = {"id": "ok", "title": "t", "kind": "quest", "note": "", "source": "https://a.b",
+           "verified": False, "steps": [step]}
+    doc.update(over)
+    return doc
+
+
+def test_seed_files_present_and_ordered():
+    seeds, errors = progress.load_seeds()
+    assert errors == []
+    assert [s["id"] for s in seeds] == SEED_IDS
+    assert sorted(p.stem for p in progress.SEED_DIR.glob("*.json")) == sorted(SEED_IDS)
+
+
+@pytest.mark.parametrize("seed_id", SEED_IDS)
+def test_seed_file_schema(seed_id):
+    raw = (progress.SEED_DIR / f"{seed_id}.json").read_bytes()
+    assert all(b < 128 for b in raw) and b"\r" not in raw  # ASCII + LF
+    doc = json.loads(raw)
+    assert doc["id"] == seed_id and doc["kind"] in ("quest", "gear")
+    assert progress.validate_seed(doc)["id"] == seed_id
+    ids = [s["id"] for s in doc["steps"]]
+    assert ids and len(ids) == len(set(ids))
+    for st in doc["steps"]:  # every row sourced; verified is a date or false
+        assert {"id", "title", "note", "source", "verified"} <= set(st)
+        assert st["source"].startswith("https://"), st["id"]
+        assert st["verified"] is False or re.match(r"^\d{4}-\d{2}-\d{2}$", st["verified"])
+
+
+def test_research_facts_carried():
+    by = {s["id"]: s for s in progress.load_seeds()[0]}
+    fj = {st["id"]: st for st in by["fughar_journal"]["steps"]}
+    assert fj["task-kratuga"]["ap"] == 250 and fj["task-kratuga"]["dp"] == 310
+    assert sum(re.match(r"^b\d-c\d$", k) is not None for k in fj) == 15  # 3 books x 5
+    gr = {st["id"]: st for st in by["gear_roadmap"]["steps"]}
+    assert gr["olvia-academy"]["min_level"] == 60 and gr["hammer-challenge"]["ap"] == 340
+    assert list(gr)[:3] == ["tuvala-pen", "graduate", "olvia-academy"]
+    assert any(st["verified"] is False for st in by["igor_bartali"]["steps"])
+
+
+@pytest.mark.parametrize("bad", [
+    {"id": "x"},
+    _seed_doc(id="Bad-id"),
+    _seed_doc(kind="season"),
+    _seed_doc(steps=[]),
+    _seed_doc(step={"source": "http://a.b"}),
+    _seed_doc(step={"verified": "2026-13-01"}),
+    _seed_doc(step={"verified": True}),
+    _seed_doc(step={"title": "a" + chr(233)}),
+    _seed_doc(step={"title": ""}),
+    _seed_doc(step={"ap": 1000}),
+    _seed_doc(step={"min_level": 0}),
+    _seed_doc(step={"dp": True}),
+    _seed_doc(step={"extra": 1}),
+    _seed_doc(step={"id": "A_b"}),
+    _seed_doc(extra=1),
+    dict(_seed_doc(), steps=_seed_doc()["steps"] * 2),
+])
+def test_validate_seed_rejects(bad):
+    with pytest.raises(ValueError):
+        progress.validate_seed(bad)
+
+
+def test_broken_seed_file_skipped(tmp_path):
+    good = json.loads((progress.SEED_DIR / "igor_bartali.json").read_text(encoding="ascii"))
+    (tmp_path / "igor_bartali.json").write_text(json.dumps(good), encoding="ascii")
+    (tmp_path / "broken.json").write_text("{nope", encoding="ascii")
+    (tmp_path / "mismatch.json").write_text(json.dumps(dict(good, id="not_the_stem")),
+                                            encoding="ascii")
+    seeds, errors = progress.load_seeds(tmp_path)
+    assert [s["id"] for s in seeds] == ["igor_bartali"] and len(errors) == 2
+
+
+def test_get_lists_seeds_none_added(tmp_path):
+    v = _seed_svc(tmp_path).view()
+    assert [s["id"] for s in v["seeds"]] == SEED_IDS
+    for s in v["seeds"]:
+        assert s["added"] is False and s["track"] is None and s["steps"] > 0
+        assert {"title", "kind", "unverified", "source", "verified"} <= set(s)
+    assert next(s for s in v["seeds"] if s["id"] == "igor_bartali")["unverified"] == 2
+    assert all(t.get("seed_id") is None for t in v["tracks"])
+
+
+def test_seed_adds_custom_track_with_steps_copied(tmp_path):
+    s = _seed_svc(tmp_path)
+    n0 = len(s.view()["tracks"])
+    v = s.track_seed("gear_roadmap")
+    assert len(v["tracks"]) == n0 + 1
+    t = _track(v, "gear_roadmap")
+    assert t["kind"] == "gear" and t["title"] == "Post-graduation gear roadmap"
+    assert t["id"] == "post-graduation-gear-roadmap"
+    assert t["steps"][0]["id"] == "tuvala-pen" and t["done"] == 0
+    olvia = _stepof(t, "olvia-academy")
+    assert olvia["min_level"] == 60 and olvia["verified"] is False  # official dates unread
+    assert olvia["source"].startswith("https://") and olvia["note"]
+    seed = next(x for x in v["seeds"] if x["id"] == "gear_roadmap")
+    assert seed["added"] is True and seed["track"] == t["id"]
+    # an ordinary plan 004 track: steps toggle and survive a restart
+    s.step({"track": t["id"], "step": "tuvala-pen", "done": True})
+    t2 = _track(_seed_svc(tmp_path).view(), "gear_roadmap")
+    assert t2["done"] == 1 and _stepof(t2, "olvia-academy")["note"] == olvia["note"]
+
+
+def test_seed_twice_is_noop(tmp_path):
+    s = _seed_svc(tmp_path)
+    tid = _track(s.track_seed("fughar_journal"), "fughar_journal")["id"]
+    s.step({"track": tid, "step": "b1-c1", "done": True})
+    before = s.store.get("progress")["tracks"]
+    v = s.track_seed("fughar_journal")
+    assert s.store.get("progress")["tracks"] == before
+    assert sum(t.get("seed_id") == "fughar_journal" for t in v["tracks"]) == 1
+    assert _track(v, "fughar_journal")["done"] == 1
+
+
+def test_seed_after_remove_re_adds(tmp_path):
+    s = _seed_svc(tmp_path)
+    tid = _track(s.track_seed("igor_bartali"), "igor_bartali")["id"]
+    s.remove_track(tid)
+    assert next(x for x in s.view()["seeds"] if x["id"] == "igor_bartali")["added"] is False
+    assert _track(s.track_seed("igor_bartali"), "igor_bartali")["done"] == 0
+
+
+def test_seed_title_clash_gets_unique_id(tmp_path):
+    s = _seed_svc(tmp_path)
+    s.add_track({"title": "Igor Bartali adventure log", "kind": "quest", "steps": ["mine"]})
+    assert _track(s.track_seed("igor_bartali"), "igor_bartali")["id"] == \
+        "igor-bartali-adventure-log-2"
+
+
+def test_seed_all_five_on_fresh_store(tmp_path):
+    s = _seed_svc(tmp_path)
+    for sid in SEED_IDS:
+        v = s.track_seed(sid)
+    assert all(x["added"] for x in v["seeds"])
+    assert len(v["tracks"]) == 3 + 5
+
+
+@pytest.mark.parametrize("arg", ["nope", "", 5, None, {"id": "gear_roadmap"}, "GEAR_ROADMAP",
+                                 "../gear_roadmap"])
+def test_seed_validation(tmp_path, arg):
+    with pytest.raises(ValueError):
+        _seed_svc(tmp_path).track_seed(arg)
+
+
+def test_seed_respects_track_cap(tmp_path):
+    s = _seed_svc(tmp_path)
+    for n in range(progress.MAX_TRACKS - 3):
+        s.add_track({"title": f"T{n}", "kind": "quest", "steps": ["a"]})
+    with pytest.raises(ValueError):
+        s.track_seed("gear_roadmap")
+
+
+def test_gates_unknown_without_character(tmp_path):
+    t = _track(_seed_svc(tmp_path).track_seed("fughar_journal"), "fughar_journal")
+    k = _stepof(t, "task-kratuga")
+    g = _gates(k)
+    assert set(g) == {"level", "ap", "dp"}
+    assert all(x["state"] == "unknown" and x["have"] is None and x["gap"] is None
+               for x in g.values())
+    assert k["ready"] is None
+    assert set(_gates(_stepof(t, "b1-c1"))) == {"level"}
+
+
+def test_gates_ready_and_needs(tmp_path):
+    s = _seed_svc(tmp_path, tables=AP_TABLE)
+    s.track_seed("fughar_journal")
+    v = s.set_character({"level": 56, "gs": {"ap": 245, "dp": 320}})
+    k = _stepof(_track(v, "fughar_journal"), "task-kratuga")
+    g = _gates(k)
+    assert g["level"] == {"stat": "level", "need": 55, "have": 56, "gap": 0, "state": "ready",
+                          "label": "ready"}
+    assert g["dp"]["state"] == "ready" and g["dp"]["label"] == "ready"
+    assert g["ap"]["state"] == "needs" and g["ap"]["gap"] == 5
+    assert g["ap"]["label"] == "needs +5 AP"
+    assert g["ap"]["bonus_gain"] == 17  # plan 023: bracket 240 (+40) -> 250 (+57)
+    assert k["ready"] is False
+    v = s.set_character({"gs": {"ap": 250}})
+    k = _stepof(_track(v, "fughar_journal"), "task-kratuga")
+    assert k["ready"] is True and _gates(k)["ap"]["label"] == "ready"
+
+
+def test_gate_level_uses_sample_level(tmp_path):
+    t = _track(_seed_svc(tmp_path, level=lambda: 60).track_seed("gear_roadmap"), "gear_roadmap")
+    assert _gates(_stepof(t, "olvia-academy"))["level"]["state"] == "ready"
+    assert t["steps"][0]["gates"] == [] and t["steps"][0]["ready"] is None
+
+
+def test_gate_needs_level_label(tmp_path):
+    s = _seed_svc(tmp_path)
+    s.track_seed("gear_roadmap")
+    v = s.set_character({"level": 57})
+    lv = _gates(_stepof(_track(v, "gear_roadmap"), "olvia-academy"))["level"]
+    assert lv["label"] == "needs +3 lv" and "bonus_gain" not in lv
+
+
+def test_gate_dp_needs_label(tmp_path):
+    s = _seed_svc(tmp_path)
+    s.track_seed("fughar_journal")
+    v = s.set_character({"gs": {"dp": 300}})
+    assert _gates(_stepof(_track(v, "fughar_journal"), "task-kratuga"))["dp"]["label"] == \
+        "needs +10 DP"
+
+
+def test_bonus_gain_none_without_ap_table(tmp_path):
+    s = _seed_svc(tmp_path)
+    s.track_seed("gear_roadmap")
+    v = s.set_character({"gs": {"ap": 300}})
+    ap = _gates(_stepof(_track(v, "gear_roadmap"), "hammer-challenge"))["ap"]
+    assert ap["gap"] == 40 and ap["bonus_gain"] is None
+
+
+def test_custom_track_steps_have_no_gates(tmp_path):
+    gear = next(t for t in _seed_svc(tmp_path).view()["tracks"] if t["kind"] == "gear")
+    assert all(st["gates"] == [] and st["ready"] is None for st in gear["steps"])
+    assert all("verified" not in st for st in gear["steps"])
+    assert gear["seed_id"] is None
+
+
+def test_corrupt_seed_meta_degrades(tmp_path):
+    s = _seed_svc(tmp_path)
+    tid = _track(s.track_seed("fughar_journal"), "fughar_journal")["id"]
+    doc = s.store.get("progress")
+    t = next(t for t in doc["tracks"] if t["id"] == tid)
+    t["steps"][0].update(min_level=999, ap="x", note=5, verified="never", source="ftp://x")
+    t["seed_id"] = "Bad Id"
+    s.store.put("progress", doc)
+    t = next(t for t in _seed_svc(tmp_path).view()["tracks"] if t["id"] == tid)
+    st = t["steps"][0]
+    assert st["gates"] == [] and "note" not in st and "verified" not in st
+    assert "source" not in st and t["seed_id"] is None
+
+
+def test_seed_error_does_not_break_tab(tmp_path, monkeypatch):
+    monkeypatch.setattr(progress, "SEED_DIR", tmp_path / "missing")
+    s = _seed_svc(tmp_path)
+    assert s.view()["seeds"] == []
+    with pytest.raises(ValueError):
+        s.track_seed("gear_roadmap")
+
+
+def test_route_post_track_seed(psrv):
+    st, doc = _req(psrv, "POST", "/api/progress", {"track_seed": "graduation_readiness"})
+    assert st == 200 and _track(doc, "graduation_readiness")["total"] == 6
+    st, doc2 = _req(psrv, "POST", "/api/progress", {"track_seed": "graduation_readiness"})
+    assert st == 200 and len(doc2["tracks"]) == len(doc["tracks"])
+    assert _req(psrv, "POST", "/api/progress", {"track_seed": "nope"})[0] == 400
+    doc = _req(psrv, "GET", "/api/progress")[1]
+    assert next(x for x in doc["seeds"] if x["id"] == "graduation_readiness")["added"] is True

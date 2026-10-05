@@ -314,10 +314,11 @@ class Handler(BaseHTTPRequestHandler):
     def _post_progress(self, body):
         ops = {"character": "set_character", "step": "step", "add_track": "add_track",
                "remove_track": "remove_track", "claim": "claim", "obj_add": "obj_add",
-               "obj_edit": "obj_edit", "obj_del": "obj_del", "brackets_set": "brackets_set"}
+               "obj_edit": "obj_edit", "obj_del": "obj_del", "brackets_set": "brackets_set",
+               "track_seed": "track_seed"}
         if len(body) != 1 or not (set(ops) & set(body)):
             raise ValueError("body must be one of {character|step|add_track|remove_track|"
-                             "claim|obj_add|obj_edit|obj_del|brackets_set: ...}")
+                             "claim|obj_add|obj_edit|obj_del|brackets_set|track_seed: ...}")
         (op, arg), = body.items()
         return getattr(self.server.progress, ops[op])(arg)
 

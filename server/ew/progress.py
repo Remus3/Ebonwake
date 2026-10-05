@@ -76,6 +76,21 @@ SEED = [
 ]
 
 
+# Plan 034: tracked track seeds, one JSON per track, copied into the store as an
+# ordinary custom track on request. SEED_ORDER is the "Add track" select order.
+SEED_DIR = Path(__file__).resolve().parent / "data" / "tracks"
+SEED_ORDER = ("gear_roadmap", "graduation_readiness", "fughar_journal", "igor_bartali",
+              "emma_bartali")
+SEED_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+SEED_KINDS = ("quest", "gear")
+SEED_FIELDS = {"id", "title", "kind", "note", "source", "verified", "steps"}
+STEP_FIELDS = {"id", "title", "min_level", "ap", "dp", "note", "source", "verified"}
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+MAX_NOTE = 200
+GATES = (("min_level", "level", "lv", LEVEL_RANGE), ("ap", "ap", "AP", GS_RANGE),
+         ("dp", "dp", "DP", GS_RANGE))
+
+
 def _iso_now(clock):
     return _dt.datetime.fromtimestamp(clock(), _dt.timezone.utc).replace(
         microsecond=0).isoformat()
@@ -240,6 +255,135 @@ def _unique(base, taken):
         n += 1
 
 
+# -- plan 034 track seeds ----------------------------------------------------
+
+def _ascii(v, max_len, allow_empty=False):
+    return (isinstance(v, str) and len(v) <= max_len and (allow_empty or v.strip() != "")
+            and all(32 <= ord(ch) <= 126 for ch in v))
+
+
+def _date_or_false(v):
+    if v is False:
+        return True
+    if not isinstance(v, str) or not DATE_RE.match(v):
+        return False
+    try:
+        _dt.date.fromisoformat(v)
+    except ValueError:
+        return False
+    return True
+
+
+def _source_ok(v):
+    return _ascii(v, MAX_NOTE) and v.startswith("https://")
+
+
+def _step_meta(st):
+    """The valid plan 034 fields of a step dict (gates, note, source, verified);
+    anything malformed is dropped, never guessed."""
+    out = {}
+    for key, _stat, _unit, rng in GATES:
+        v = st.get(key)
+        if _is_int(v) and rng[0] <= v <= rng[1]:
+            out[key] = v
+    if _ascii(st.get("note"), MAX_NOTE, allow_empty=True):
+        out["note"] = st["note"]
+    if _source_ok(st.get("source")):
+        out["source"] = st["source"]
+    if "verified" in st and _date_or_false(st["verified"]):
+        out["verified"] = st["verified"]
+    return out
+
+
+def validate_seed(doc):
+    """Normalised copy of one seed track file, or ValueError."""
+    if not isinstance(doc, dict) or set(doc) != SEED_FIELDS:
+        raise ValueError(f"seed must be {{{', '.join(sorted(SEED_FIELDS))}}}")
+    if not isinstance(doc["id"], str) or not SEED_ID_RE.match(doc["id"]):
+        raise ValueError("seed id must match ^[a-z][a-z0-9_]{0,39}$")
+    if not _ascii(doc["title"], MAX_TITLE) or doc["kind"] not in SEED_KINDS:
+        raise ValueError(f"seed needs an ASCII title and kind {'/'.join(SEED_KINDS)}")
+    if not _ascii(doc["note"], MAX_NOTE, allow_empty=True) or not _source_ok(doc["source"]) \
+            or not _date_or_false(doc["verified"]):
+        raise ValueError("seed note / source (https) / verified (date or false) invalid")
+    steps = doc["steps"]
+    if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_STEPS:
+        raise ValueError(f"seed steps must be a list of 1..{MAX_STEPS}")
+    out, seen = [], set()
+    for st in steps:
+        if not isinstance(st, dict) or not {"id", "title", "note", "source", "verified"} <= \
+                set(st) or set(st) - STEP_FIELDS:
+            raise ValueError(f"each step must be {{{', '.join(sorted(STEP_FIELDS))}}}")
+        if not isinstance(st["id"], str) or not ID_RE.match(st["id"]) or st["id"] in seen:
+            raise ValueError(f"step id must be unique and match ^[a-z0-9-]{{1,40}}$: {st['id']!r}")
+        seen.add(st["id"])
+        if not _ascii(st["title"], MAX_TITLE):
+            raise ValueError(f"step {st['id']}: title must be 1..{MAX_TITLE} ASCII characters")
+        meta = _step_meta(st)
+        bad = sorted(k for k in set(st) - {"id", "title"} if k not in meta)
+        if bad:
+            raise ValueError(f"step {st['id']}: invalid {', '.join(bad)}")
+        out.append(dict({"id": st["id"], "title": st["title"]}, **meta))
+    return dict({k: doc[k] for k in SEED_FIELDS - {"steps"}}, steps=out)
+
+
+def load_seeds(path=None):
+    """([seed], [error]) from the tracked seed dir; a broken file is skipped
+    with an error line, never breaking the Progress tab. SEED_ORDER first."""
+    root = Path(SEED_DIR if path is None else path)
+    if not root.is_dir():
+        return [], [f"seeds: no directory {root.name}"]
+    try:
+        files = sorted(root.glob("*.json"))
+    except OSError as e:
+        return [], [f"seeds: {e}"[:200]]
+    seeds, errors = [], []
+    for f in files:
+        try:
+            s = validate_seed(json.loads(f.read_text(encoding="ascii")))
+            if s["id"] != f.stem:
+                raise ValueError("id does not match the file name")
+        except (OSError, ValueError) as e:
+            errors.append(f"{f.name}: {e}"[:200])
+            continue
+        seeds.append(s)
+    rank = {sid: n for n, sid in enumerate(SEED_ORDER)}
+    seeds.sort(key=lambda s: (rank.get(s["id"], len(rank)), s["id"]))
+    return seeds, errors
+
+
+def _gates(st, level, gs, ap_rows):
+    """Plan 034 gate chips for a step: [{stat, need, have, gap, state, label}]
+    (ap also `bonus_gain`, the plan 023 bonus AP the gap is worth), and
+    ready: True | False (a gate needs more) | None (no gate, or a stat unset)."""
+    have_of = {"level": level, "ap": gs.get("ap"), "dp": gs.get("dp")}
+    out = []
+    for key, stat, unit, _rng in GATES:
+        need = st.get(key)
+        if need is None:
+            continue
+        have = have_of[stat] if _is_int(have_of[stat]) else None
+        if have is None:
+            g = {"stat": stat, "need": need, "have": None, "gap": None, "state": "unknown",
+                 "label": f"set {'level' if stat == 'level' else unit}"}
+        else:
+            gap = max(0, need - have)
+            g = {"stat": stat, "need": need, "have": have, "gap": gap,
+                 "state": "needs" if gap else "ready",
+                 "label": f"needs +{gap} {unit}" if gap else "ready"}
+        if stat == "ap":
+            gain = None
+            if g["state"] == "needs" and ap_rows:
+                a, b = brackets.lookup(ap_rows, have)["value"], brackets.lookup(ap_rows, need)["value"]
+                gain = b - a if a is not None and b is not None else None
+            g["bonus_gain"] = gain
+        out.append(g)
+    states = {g["state"] for g in out}
+    if "needs" in states:
+        return out, False
+    return out, (True if states == {"ready"} else None)
+
+
 def _make_steps(titles):
     steps, seen = [], set()
     for t in titles:
@@ -364,10 +508,13 @@ def _clean_track(t):
                 and st["id"] not in seen):
             continue
         seen.add(st["id"])
-        steps.append({"id": st["id"], "title": st["title"],
-                      "done_at": _parse_iso(st.get("done_at"))})
+        steps.append(dict({"id": st["id"], "title": st["title"],
+                           "done_at": _parse_iso(st.get("done_at"))}, **_step_meta(st)))
     if kind != "season":
-        return {"id": tid, "title": title, "kind": kind, "steps": steps}
+        sid = t.get("seed_id")
+        return {"id": tid, "title": title, "kind": kind,
+                "seed_id": sid if isinstance(sid, str) and SEED_ID_RE.match(sid) else None,
+                "steps": steps}
     if not isinstance(t.get("objectives"), list):
         objs, seed = _migrate_steps(steps)
         return {"id": tid, "title": title, "kind": kind, "seed": seed, "objectives": objs}
@@ -432,6 +579,7 @@ class ProgressService:
             except ValueError as e:  # a broken data file never breaks the Progress tab
                 bracket_tables, self.bracket_error = {}, str(e)
         self.bracket_tables = bracket_tables
+        self.seeds, self.seed_errors = load_seeds()  # plan 034; errors never break the tab
         self._lock = threading.Lock()  # read-modify-write; Store guards each file op
         with self._lock:
             doc = store.get("progress")
@@ -529,6 +677,8 @@ class ProgressService:
             level = self._level(character)
             if self._auto_tick(tracks, level):
                 self._save(character, tracks)
+        tables = brackets.load(self.store.get("brackets_override"), tracked=self.bracket_tables)
+        ap_rows = tables["ap"]["rows"] if "ap" in tables else None
         out, season = [], None
         for t in tracks:
             if t["kind"] == "season":
@@ -540,21 +690,33 @@ class ProgressService:
                               "claimed": sv["claimed"], "unclaimed": sv["unclaimed"],
                               "next": sv["next"], "level": level}
                 continue
-            steps = [{"id": s["id"], "title": s["title"], "done": s["done_at"] is not None,
-                      "done_at": s["done_at"]} for s in t["steps"]]
+            steps = []
+            for s in t["steps"]:
+                gates, ready = _gates(s, level, character["gs"], ap_rows)
+                steps.append(dict(s, done=s["done_at"] is not None, gates=gates, ready=ready))
             done = sum(s["done"] for s in steps)
-            out.append({"id": t["id"], "title": t["title"], "kind": t["kind"], "steps": steps,
+            out.append({"id": t["id"], "title": t["title"], "kind": t["kind"],
+                        "seed_id": t["seed_id"], "steps": steps,
                         "done": done, "total": len(steps), "pct": pct(done, len(steps))})
         return {"character": character, "tracks": out, "season": season,
                 "profile": self.profile_view(refresh=refresh),
-                "brackets": self._brackets(character)}
+                "brackets": self._brackets(character, tables),
+                "seeds": self._seed_list(tracks)}
 
-    def _brackets(self, character):
+    def _seed_list(self, tracks):
+        """Plan 034 "Add track" choices; `track` is the store track a seed made."""
+        made = {t["seed_id"]: t["id"] for t in tracks if t.get("seed_id")}
+        return [{"id": s["id"], "title": s["title"], "kind": s["kind"],
+                 "steps": len(s["steps"]),
+                 "unverified": sum(st["verified"] is False for st in s["steps"]),
+                 "source": s["source"], "verified": s["verified"],
+                 "added": s["id"] in made, "track": made.get(s["id"])} for s in self.seeds]
+
+    def _brackets(self, character, tables):
         try:
             epoch = self.epoch() if self.epoch is not None else None
         except Exception:  # a broken feed never breaks the Progress tab
             epoch = None
-        tables = brackets.load(self.store.get("brackets_override"), tracked=self.bracket_tables)
         return brackets.summary(character["gs"], tables, epoch=epoch)
 
     def source(self):
@@ -746,6 +908,25 @@ class ProgressService:
                 tracks.append({"id": tid, "title": title, "kind": arg["kind"],
                                "steps": _make_steps(steps)})
             self._save(character, tracks)
+        return self.view(refresh=False)
+
+    def track_seed(self, arg):
+        """Seed id -> a plan 004 custom track with the seed's steps copied (later
+        edits are the operator's). A seed already in the store is a no-op."""
+        if not isinstance(arg, str) or not SEED_ID_RE.match(arg):
+            raise ValueError("track_seed must be a seed id")
+        seed = next((s for s in self.seeds if s["id"] == arg), None)
+        if seed is None:
+            raise ValueError(f"unknown track seed: {arg}")
+        with self._lock:
+            character, tracks = self._load()
+            if not any(t.get("seed_id") == arg for t in tracks):
+                if len(tracks) >= MAX_TRACKS:
+                    raise ValueError(f"at most {MAX_TRACKS} tracks")
+                tracks.append({"id": _unique(slug(seed["title"]), {t["id"] for t in tracks}),
+                               "title": seed["title"], "kind": seed["kind"], "seed_id": arg,
+                               "steps": [dict(st, done_at=None) for st in seed["steps"]]})
+                self._save(character, tracks)
         return self.view(refresh=False)
 
     def brackets_set(self, arg):

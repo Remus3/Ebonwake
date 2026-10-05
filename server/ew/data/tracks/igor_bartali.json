@@ -1,0 +1,19 @@
+{
+  "id": "igor_bartali",
+  "title": "Igor Bartali adventure log",
+  "kind": "quest",
+  "note": "+6 AP / +6 DP family-wide, permanent. Chapter list not transcribed: unlock and chapter steps are unverified.",
+  "source": "https://www.blackdesertfoundry.com/new-player-guide/",
+  "verified": "2026-08-11",
+  "steps": [
+    {"id": "unlock", "title": "Igor Bartali log unlocked (Adventure Log)",
+     "note": "Unlock requirement not recorded; check the Adventure Log in game",
+     "source": "https://www.blackdesertfoundry.com/new-player-guide/", "verified": false},
+    {"id": "chapters", "title": "All Igor Bartali chapters done",
+     "note": "Chapter count and per-chapter tasks not recorded",
+     "source": "https://www.blackdesertfoundry.com/new-player-guide/", "verified": false},
+    {"id": "reward-ap-dp", "title": "+6 AP / +6 DP family-wide received",
+     "note": "Permanent, family-wide",
+     "source": "https://www.blackdesertfoundry.com/new-player-guide/", "verified": "2026-08-11"}
+  ]
+}

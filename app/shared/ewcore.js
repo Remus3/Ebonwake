@@ -723,6 +723,7 @@
 
   const TRACK_KINDS = ['quest', 'season', 'gear'];
   const ID = /^[a-z0-9-]{1,40}$/;   // server ID_RE
+  const SEED_ID = /^[a-z][a-z0-9_]{0,39}$/;   // server SEED_ID_RE (plan 034)
   const STEPS_MAX = 60;              // server MAX_STEPS
   const LEVEL_MAX = 75;              // server levels.LEVEL_MAX (plan 018)
   const LEVEL = [1, LEVEL_MAX];
@@ -765,6 +766,42 @@
       const all = br.dp.all_dr;
       push('dp_all', 'dp_all_dr', bracketLine('DP', all, function (v) { return 'all-DR +' + v; }, 'all-DR'), false);
     }
+    return out;
+  }
+
+  // Plan 034: "Add track" seed choices from GET /api/progress `seeds`; an added
+  // seed stays listed but disabled (seeding twice is a server no-op anyway).
+  function seedOptions(seeds) {
+    if (!Array.isArray(seeds)) return [];
+    const out = [];
+    seeds.forEach(function (s) {
+      if (!plainObject(s) || typeof s.id !== 'string' || !SEED_ID.test(s.id)) return;
+      const title = typeof s.title === 'string' && s.title ? s.title : s.id;
+      const unv = isInt(s.unverified, 1) ? ' (' + s.unverified + ' to verify)' : '';
+      out.push({ id: s.id, label: title + (s.added === true ? ' - added' : unv), added: s.added === true });
+    });
+    return out;
+  }
+
+  // Plan 034: gate chips for a track step: [{text, cls, title}]. `ready` is ok,
+  // `needs` warn (with the plan 023 bonus-AP hint), unknown stats muted.
+  function gateChips(step) {
+    const gates = plainObject(step) && Array.isArray(step.gates) ? step.gates : [];
+    const unit = { level: 'Lv', ap: 'AP', dp: 'DP' };
+    const out = [];
+    gates.forEach(function (g) {
+      if (!plainObject(g) || !unit[g.stat] || !isNum(g.need)) return;
+      const need = unit[g.stat] + ' ' + g.need;
+      if (g.state === 'ready') {
+        out.push({ text: need + ' ready', cls: 'ok', title: 'gate met' });
+      } else if (g.state === 'needs' && isNum(g.gap)) {
+        const sfx = g.stat === 'level' ? ' lv' : ' ' + unit[g.stat];
+        const bonus = g.stat === 'ap' && isNum(g.bonus_gain) && g.bonus_gain > 0 ? ' (+' + g.bonus_gain + ' bonus AP)' : '';
+        out.push({ text: need + ': needs +' + g.gap + sfx + bonus, cls: 'warn', title: 'have ' + g.have });
+      } else {
+        out.push({ text: need, cls: 'unknown', title: 'set ' + (g.stat === 'level' ? 'level' : unit[g.stat]) + ' on the Character card' });
+      }
+    });
     return out;
   }
 
@@ -924,6 +961,7 @@
     const v = body[k];
     if (k === 'character') return validCharacter(v);
     if (k === 'remove_track') return typeof v === 'string' && ID.test(v);
+    if (k === 'track_seed') return typeof v === 'string' && SEED_ID.test(v);
     if (k === 'step') {
       return plainObject(v) && onlyKeys(v, ['track', 'step', 'done']) && typeof v.track === 'string' &&
         ID.test(v.track) && typeof v.step === 'string' && ID.test(v.step) && typeof v.done === 'boolean';
@@ -2875,6 +2913,8 @@
     gsTotal: gsTotal,
     bracketLines: bracketLines,
     trackPct: trackPct,
+    seedOptions: seedOptions,
+    gateChips: gateChips,
     withStep: withStep,
     OBJ_KINDS: OBJ_KINDS,
     fmtTarget: fmtTarget,
