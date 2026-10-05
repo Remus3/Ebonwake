@@ -93,3 +93,18 @@ freshness pill), one card per track (progress bar + scrollable step list,
 click toggles), Add track. Fits 1280x800.
 
 Acceptance: node tests green; self-test 7/7 fit.
+
+Slice B notes (contract reading, no adjudication needed):
+- `trackPct` recomputes from `steps[].done_at` (optimistic toggles); pct is
+  rounded but capped at 99 until every step is done. The client shows its own
+  pct, not the server's.
+- Bridge guard ids (`track`, `step`, `remove_track`): `^[a-z0-9_-]{1,40}$`;
+  `add_track.steps` 0-200 titles (UI requires >= 1). Character POST sends
+  `{level, gs: {ap, aap, dp}}`; `name`/`cls` are accepted by the guard but not
+  sent by the UI.
+- No profile = `profile: null` OR `profile.status == "none"`; both render the
+  "no family configured" card. Freshness uses the plan 002 shape
+  `{fetched_at, age_s, ttl_s, stale, error}`, default TTL 3600 s.
+- A POST answer that is not a full GET body triggers a re-read; GET 404 shows
+  "progress API not on this server yet".
+- Overlay unchanged (read-only GET; nothing in this slice's file list).

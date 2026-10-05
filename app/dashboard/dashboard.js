@@ -1,5 +1,6 @@
 /* EW dashboard shell: tabs from /api/state, server pill, reset clocks.
-   Plan 001 renders placeholders; plans 002+ fill each tab (market.js, today.js). */
+   Plan 001 renders placeholders; plans 002+ fill each tab (market.js, today.js,
+   progress.js). */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -31,6 +32,7 @@
     try { localStorage.setItem('ew.tab', id); } catch (e) { /* storage optional */ }
     if (id === 'market' && window.EWMarket) window.EWMarket.show();
     if (id === 'today' && window.EWToday) window.EWToday.show();
+    if (id === 'progress' && window.EWProgress) window.EWProgress.show();
   }
 
   function render(state) {
@@ -54,6 +56,8 @@
         p.lastChild.lastChild.id = 'daily-reset';
         p.appendChild(card('Weekly reset', el('div', 'ew-num', '-')));
         p.lastChild.lastChild.id = 'weekly-reset';
+      } else if (t.id === 'progress' && window.EWProgress) {
+        window.EWProgress.mount(p);
       } else if (t.id === 'market' && window.EWMarket) {
         window.EWMarket.mount(p);
       } else if (t.id === 'system') {

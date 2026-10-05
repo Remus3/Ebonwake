@@ -181,16 +181,19 @@
     return base;
   }
 
-  function marketPill(fr) {
+  // Pill for any cached web source (market, profile): same freshness shape.
+  function sourcePill(fr, name, dfltTtl) {
     const error = (fr && fr.error) || null;
     if (!fr || !fr.fetched_at || !isNum(fr.age_s)) {
-      return { cls: 'unknown', label: 'arsha no data', stale: true, error: error };
+      return { cls: 'unknown', label: name + ' no data', stale: true, error: error };
     }
-    const ttl = isNum(fr.ttl_s) && fr.ttl_s > 0 ? fr.ttl_s : 300;
+    const ttl = isNum(fr.ttl_s) && fr.ttl_s > 0 ? fr.ttl_s : dfltTtl;
     let cls = fr.age_s <= ttl ? 'ok' : (fr.age_s <= 3 * ttl ? 'warn' : 'bad');
     if (fr.stale && cls === 'ok') cls = 'warn';
-    return { cls: cls, label: 'arsha ' + fmtAge(fr.age_s) + ' ago', stale: !!fr.stale, error: error };
+    return { cls: cls, label: name + ' ' + fmtAge(fr.age_s) + ' ago', stale: !!fr.stale, error: error };
   }
+
+  function marketPill(fr) { return sourcePill(fr, 'arsha', 300); }
 
   function isInt(v, min) {
     return typeof v === 'number' && Number.isSafeInteger(v) && v >= min;
@@ -370,8 +373,158 @@
     return { ok: true, body: { add: add } };
   }
 
+  // ---- Progress (plan 004) ----
+  // A step is done when it carries a done_at stamp; counts are re-derived on
+  // the client so an optimistic toggle updates the bar before the server answers.
+
+  const TRACK_KINDS = ['quest', 'season', 'gear'];
+  const ID = /^[a-z0-9_-]{1,40}$/;
+  const STEPS_MAX = 200;
+  const LEVEL = [1, 70];
+  const STAT = [0, 999];
+
+  function gsTotal(ap, aap, dp) {
+    if (!isNum(ap) || !isNum(aap) || !isNum(dp)) return null;
+    return (ap + aap) / 2 + dp;
+  }
+
+  // Whole percent, rounded but capped at 99 so an unfinished track never reads 100.
+  function trackPct(track) {
+    let done = 0;
+    let total = 0;
+    const steps = track && Array.isArray(track.steps) ? track.steps : [];
+    steps.forEach(function (s) {
+      if (!plainObject(s)) return;
+      total += 1;
+      if (s.done_at) done += 1;
+    });
+    const pct = total ? (done === total ? 100 : Math.min(99, Math.round(100 * done / total))) : 0;
+    return { done: done, total: total, pct: pct };
+  }
+
+  // Optimistic update: a copy of the GET body with one step's done_at set (iso)
+  // or cleared (null) and that track's counts re-derived. Input never mutated.
+  function withStep(data, trackId, stepId, iso) {
+    if (!plainObject(data) || !Array.isArray(data.tracks)) return data === undefined ? null : data;
+    const copy = Object.assign({}, data);
+    copy.tracks = data.tracks.map(function (t) {
+      if (!t || t.id !== trackId || !Array.isArray(t.steps)) return t;
+      const nt = Object.assign({}, t);
+      nt.steps = t.steps.map(function (s) {
+        if (!s || s.id !== stepId) return s;
+        return Object.assign({}, s, { done_at: iso });
+      });
+      return Object.assign(nt, trackPct(nt));
+    });
+    return copy;
+  }
+
+  function inRange(v, r) { return isInt(v, r[0]) && v <= r[1]; }
+
+  function validCharacter(c) {
+    if (!plainObject(c) || !Object.keys(c).length || !onlyKeys(c, ['name', 'cls', 'level', 'gs'])) return false;
+    if (c.name !== undefined && !validTitle(c.name)) return false;
+    if (c.cls !== undefined && !validTitle(c.cls)) return false;
+    if (c.level !== undefined && !inRange(c.level, LEVEL)) return false;
+    if (c.gs === undefined) return true;
+    return plainObject(c.gs) && Object.keys(c.gs).length > 0 && onlyKeys(c.gs, ['ap', 'aap', 'dp']) &&
+      Object.keys(c.gs).every(function (k) { return inRange(c.gs[k], STAT); });
+  }
+
+  // Exact shape check for POST /api/progress bodies (main-process IPC guard).
+  function validProgressBody(body) {
+    if (!plainObject(body)) return false;
+    const keys = Object.keys(body);
+    if (keys.length !== 1) return false;
+    const k = keys[0];
+    const v = body[k];
+    if (k === 'character') return validCharacter(v);
+    if (k === 'remove_track') return typeof v === 'string' && ID.test(v);
+    if (k === 'step') {
+      return plainObject(v) && onlyKeys(v, ['track', 'step', 'done']) && typeof v.track === 'string' &&
+        ID.test(v.track) && typeof v.step === 'string' && ID.test(v.step) && typeof v.done === 'boolean';
+    }
+    if (k === 'add_track') {
+      return plainObject(v) && onlyKeys(v, ['title', 'kind', 'steps']) && validTitle(v.title) &&
+        TRACK_KINDS.indexOf(v.kind) >= 0 && Array.isArray(v.steps) && v.steps.length <= STEPS_MAX &&
+        v.steps.every(validTitle);
+    }
+    return false;
+  }
+
+  function wholeIn(s, r) {
+    const t = s === undefined || s === null ? '' : String(s).trim();
+    if (!/^\d+$/.test(t)) return null;
+    const v = Number(t);
+    return inRange(v, r) ? v : null;
+  }
+
+  // Character card inputs -> {character: {level, gs}} body, or an operator error.
+  function parseCharacterForm(form) {
+    const f = form || {};
+    const level = wholeIn(f.level, LEVEL);
+    if (level === null) return { ok: false, error: 'level must be a whole number ' + LEVEL[0] + '-' + LEVEL[1] };
+    const gs = {};
+    for (const k of ['ap', 'aap', 'dp']) {
+      const v = wholeIn(f[k], STAT);
+      if (v === null) return { ok: false, error: k.toUpperCase() + ' must be a whole number ' + STAT[0] + '-' + STAT[1] };
+      gs[k] = v;
+    }
+    return { ok: true, body: { character: { level: level, gs: gs } } };
+  }
+
+  // Add-track form: steps one per line, blank lines dropped.
+  function parseTrackForm(form) {
+    const f = form || {};
+    const title = typeof f.title === 'string' ? f.title.trim() : '';
+    if (!title) return { ok: false, error: 'title required' };
+    if (!validTitle(title)) return { ok: false, error: 'title: up to ' + TITLE_MAX + ' plain characters' };
+    if (TRACK_KINDS.indexOf(f.kind) < 0) return { ok: false, error: 'kind must be quest, season or gear' };
+    const steps = String(f.steps || '').split(/\r?\n/).map(function (s) { return s.trim(); })
+      .filter(function (s) { return s; });
+    if (!steps.length) return { ok: false, error: 'at least one step (one per line)' };
+    if (steps.length > STEPS_MAX) return { ok: false, error: 'at most ' + STEPS_MAX + ' steps' };
+    if (!steps.every(validTitle)) return { ok: false, error: 'each step: up to ' + TITLE_MAX + ' plain characters' };
+    return { ok: true, body: { add_track: { title: title, kind: f.kind, steps: steps } } };
+  }
+
+  // /api/progress `profile`: null or status "none" = no family configured.
+  function profilePill(profile) {
+    if (!plainObject(profile) || profile.status === 'none') {
+      return { cls: 'unknown', label: 'no profile', stale: true, error: null, none: true };
+    }
+    const p = sourcePill(profile.freshness, 'profile', 3600);
+    p.none = false;
+    return p;
+  }
+
+  function plainText(v) {
+    return (typeof v === 'string' && v.trim() && v.length <= TITLE_MAX) || isNum(v) ? String(v) : null;
+  }
+
+  // BDO-REST-API adventurer profile -> [label, value] rows from known keys only.
+  function profileRows(data) {
+    if (!plainObject(data)) return [];
+    const rows = [];
+    const push = function (label, v) { const t = plainText(v); if (t !== null) rows.push([label, t]); };
+    push('Family', data.familyName);
+    push('Region', data.region);
+    if (plainObject(data.guild)) push('Guild', data.guild.name);
+    const chars = Array.isArray(data.characters) ? data.characters.filter(plainObject) : [];
+    const main = chars.filter(function (c) { return c.main; })[0] || chars[0];
+    if (main && plainText(main.name)) {
+      const bits = [plainText(main.class), plainText(main.level)].filter(Boolean).join(' ');
+      push('Main', main.name + (bits ? ' - ' + bits : ''));
+    }
+    if (chars.length) push('Characters', chars.length);
+    push('Contribution', data.contributionPoints);
+    return rows;
+  }
+
   // The only routes the dashboard bridge forwards, each with its body check.
-  const POST_VALIDATORS = { '/api/market/watch': validWatchBody, '/api/today': validTodayBody };
+  const POST_VALIDATORS = {
+    '/api/market/watch': validWatchBody, '/api/today': validTodayBody, '/api/progress': validProgressBody
+  };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
   function validPost(route, body) {
@@ -390,6 +543,14 @@
     withTick: withTick,
     validTodayBody: validTodayBody,
     parseTodayForm: parseTodayForm,
+    gsTotal: gsTotal,
+    trackPct: trackPct,
+    withStep: withStep,
+    validProgressBody: validProgressBody,
+    parseCharacterForm: parseCharacterForm,
+    parseTrackForm: parseTrackForm,
+    profilePill: profilePill,
+    profileRows: profileRows,
     validPost: validPost,
     POST_ROUTES: POST_ROUTES,
     fmtSilver: fmtSilver,
