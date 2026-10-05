@@ -13,7 +13,9 @@
   const NOTE_MAX = 20000; // server note limit (C.NOTE_MAX)
   const S = {
     data: null, err: null, last: null, timer: null, ui: null, busy: false,
-    section: null, drafts: {}, preview: false
+    section: null, drafts: {}, preview: false,
+    // Plan 035 EV panel: open step id, rate table (GET once), per-step inputs and replies.
+    ev: null, table: null, evIn: {}, evOut: {}
   };
 
   function el(tag, cls, text) {
@@ -246,8 +248,96 @@
       if (armed(x, 'x')) send({ delete_step: r.id }, 'deleted');
     });
     row.appendChild(x);
+    row.appendChild(button('ew-tx', 'EV', 'expected attempts and cost', function () {
+      S.ev = S.ev === r.id ? null : r.id;
+      if (S.ev && !S.table) loadTable();
+      drawPlan();
+    }));
     if (typeof r.note === 'string' && r.note) row.appendChild(el('div', 'ew-pnote ew-muted ew-gnum', r.note));
+    if (S.ev === r.id) row.appendChild(evPanel(r));
     return row;
+  }
+
+  // ---- EV panel (plan 035) ----
+
+  function loadTable() {
+    getJSON('/api/deadeye/enhance').then(function (d) {
+      if (d && Array.isArray(d.families) && Array.isArray(d.rows)) S.table = d;
+    }, function (e) { S.table = { err: e.message, families: [], rows: [] }; }).then(drawPlan);
+  }
+
+  function evInputs(r) {
+    if (!S.evIn[r.id]) {
+      const fams = S.table ? S.table.families : [];
+      S.evIn[r.id] = { family: C.enhanceFamilyGuess(r.item, fams) || fams[0] || '', fs: '0', crons: false };
+    }
+    return S.evIn[r.id];
+  }
+
+  function tableSteps(family, r) {
+    const have = (S.table ? S.table.rows : []).filter(function (x) { return x && x.family === family; })
+      .map(function (x) { return x.step; });
+    return C.enhanceSubSteps(r.current, r.target).filter(function (s) { return have.indexOf(s) >= 0; });
+  }
+
+  function calc(r) {
+    const inp = evInputs(r);
+    const steps = tableSteps(inp.family, r);
+    if (C.parseFs(inp.fs) === null) { S.evOut[r.id] = { err: 'FS: a whole number 0-' + C.ENHANCE_MAX_FS }; drawPlan(); return; }
+    if (!steps.length) { S.evOut[r.id] = { err: 'no ' + inp.family + ' rate rows for ' + r.current + ' -> ' + r.target }; drawPlan(); return; }
+    S.evOut[r.id] = { busy: true };
+    drawPlan();
+    Promise.all(steps.map(function (s) {
+      return getJSON(C.enhancePath(inp.family, s, inp.fs, inp.crons)).catch(function (e) { return { step: s, cost_note: e.message }; });
+    })).then(function (rows) { S.evOut[r.id] = { rows: rows }; drawPlan(); });
+  }
+
+  function evPanel(r) {
+    const box = el('div', 'ew-pnote ew-dev');
+    if (!S.table) { box.appendChild(el('div', 'ew-muted', 'loading rate table...')); return box; }
+    if (S.table.err) { box.appendChild(el('div', 'ew-err', S.table.err)); return box; }
+    const inp = evInputs(r);
+    const line = el('div', 'ew-dline');
+    const fam = el('select');
+    fam.title = 'gear family';
+    S.table.families.forEach(function (f) {
+      const o = el('option', null, f);
+      o.value = f;
+      fam.appendChild(o);
+    });
+    fam.value = inp.family;
+    fam.addEventListener('change', function () { inp.family = fam.value; });
+    const fs = el('input');
+    fs.type = 'text';
+    fs.maxLength = 3;
+    fs.size = 4;
+    fs.value = inp.fs;
+    fs.title = 'failstack';
+    fs.addEventListener('input', function () { inp.fs = fs.value; });
+    const cl = el('label', 'ew-tlabel');
+    const cr = el('input');
+    cr.type = 'checkbox';
+    cr.checked = inp.crons;
+    cr.addEventListener('change', function () { inp.crons = cr.checked; });
+    cl.appendChild(cr);
+    cl.appendChild(el('span', null, 'crons'));
+    [fam, el('span', 'ew-muted', 'FS'), fs, cl,
+      button('ew-btn ew-bbtn', 'Calc', 'expected attempts and silver per level', function () { calc(r); })]
+      .forEach(function (x) { line.appendChild(x); });
+    box.appendChild(line);
+    const out = S.evOut[r.id];
+    if (out && out.busy) box.appendChild(el('div', 'ew-muted', 'calculating...'));
+    if (out && out.err) box.appendChild(el('div', 'ew-err', out.err));
+    if (out && out.rows) {
+      out.rows.forEach(function (b) {
+        const f = C.fmtEv(b);
+        box.appendChild(el('div', 'ew-gnum', C.evLine(b)));
+        if (f.note) box.appendChild(el('div', 'ew-muted', f.step + ': ' + f.note));
+      });
+      box.appendChild(el('div', 'ew-muted', '~ = formula estimate between table points; constant FS; ' +
+        'a failure\'s downgrade re-climb is not counted.'));
+    }
+    return box;
   }
 
   function drawPlan() {

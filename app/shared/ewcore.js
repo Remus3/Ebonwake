@@ -1672,6 +1672,76 @@
     return { ok: true, body: { add_step: add } };
   }
 
+  // ---- Enhancement EV (plan 035) ----
+  // GET /api/deadeye/enhance?family=&step=&fs=&crons=0|1 -> {chance_pct, approx,
+  // attempts_mean, attempts_p90, pity_cap, crons_mean, cost_mean_silver, ...}.
+  // Math on sourced tables and cached prices only.
+
+  const ENHANCE_MAX_FS = 999;
+
+  // Typed FS -> int 0..999, or null.
+  function parseFs(text) {
+    const s = typeof text === 'string' ? text.trim() : (isNum(text) ? String(text) : '');
+    if (!/^[0-9]{1,3}$/.test(s)) return null;
+    const n = Number(s);
+    return n <= ENHANCE_MAX_FS ? n : null;
+  }
+
+  // Levels a plan 007 step climbs through: (current, target], each the level
+  // one attempt reaches (the server's `step` key).
+  function enhanceSubSteps(current, target) {
+    const a = levelIndex(current);
+    const b = levelIndex(target);
+    return a >= 0 && b > a ? DEADEYE_LEVELS.slice(a + 1, b + 1) : [];
+  }
+
+  // A gear family named inside the operator's item text, else null.
+  function enhanceFamilyGuess(item, families) {
+    if (typeof item !== 'string' || !Array.isArray(families)) return null;
+    const low = item.toLowerCase();
+    for (const f of families) {
+      if (typeof f === 'string' && f && low.indexOf(f.replace(/_/g, ' ')) >= 0) return f;
+    }
+    return null;
+  }
+
+  function enhancePath(family, step, fs, crons) {
+    if (typeof family !== 'string' || !/^[a-z][a-z0-9_]{0,23}$/.test(family)) return null;
+    if (typeof step !== 'string' || !step || parseFs(fs) === null) return null;
+    return '/api/deadeye/enhance?family=' + encodeURIComponent(family) + '&step=' +
+      encodeURIComponent(step) + '&fs=' + parseFs(fs) + '&crons=' + (crons ? 1 : 0);
+  }
+
+  function fmtAttempts(n) {
+    if (!isNum(n)) return '-';
+    return n < 100 ? n.toFixed(1) : fmtSilver(n);
+  }
+
+  // One EV reply -> display strings; any missing number shows '-'.
+  function fmtEv(b) {
+    const o = b && typeof b === 'object' ? b : {};
+    const pct = isNum(o.chance_pct) ? (o.approx ? '~' : '') + o.chance_pct.toFixed(2) + '%' : '-';
+    return {
+      step: typeof o.step === 'string' ? o.step : '-',
+      chance: pct,
+      attempts: fmtAttempts(o.attempts_mean),
+      p90: isNum(o.attempts_p90) ? String(o.attempts_p90) : '-',
+      pity: isNum(o.pity_cap) ? String(o.pity_cap) : '-',
+      crons: isNum(o.crons_mean) && o.crons_mean > 0 ? fmtSilver(o.crons_mean) : '-',
+      silver: isNum(o.cost_mean_silver) ? fmtSilver(o.cost_mean_silver) : '-',
+      note: typeof o.cost_note === 'string' ? o.cost_note : '',
+      // unverified_used: preview fields this result rests on (a crons-off result
+      // ignores a preview cron count); older replies fall back to `verified`.
+      unverified: Array.isArray(o.unverified_used) ? o.unverified_used.length > 0 : o.verified === false
+    };
+  }
+
+  function evLine(b) {
+    const f = fmtEv(b);
+    return f.step + '  ' + f.chance + '  ' + f.attempts + ' tries (p90 ' + f.p90 + ', pity ' + f.pity +
+      ')  crons ' + f.crons + '  silver ' + f.silver + (f.unverified ? '  [unverified]' : '');
+  }
+
   // ---- Game state (plan 008) ----
   // GET /api/game -> {state, since, log_file, last_event, screenshots, configured}.
   // Display only: nothing here ever reaches the game.
@@ -3045,6 +3115,13 @@
     renderMarkdown: renderMarkdown,
     validDeadeyeBody: validDeadeyeBody,
     parseStepForm: parseStepForm,
+    ENHANCE_MAX_FS: ENHANCE_MAX_FS,
+    parseFs: parseFs,
+    enhanceSubSteps: enhanceSubSteps,
+    enhanceFamilyGuess: enhanceFamilyGuess,
+    enhancePath: enhancePath,
+    fmtEv: fmtEv,
+    evLine: evLine,
     validLevelingBody: validLevelingBody,
     parseSampleForm: parseSampleForm,
     parseHotForm: parseHotForm,

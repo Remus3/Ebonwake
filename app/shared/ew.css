@@ -271,6 +271,8 @@ html, body {
 .ew-prow.done .ew-mname { color: var(--fk-text-muted); text-decoration: line-through; }
 .ew-prow .ew-tx:disabled { visibility: hidden; }
 .ew-pnote { grid-column: 1 / -1; padding-left: 22px; overflow: hidden; text-overflow: ellipsis; }
+.ew-dev { display: flex; flex-direction: column; gap: 3px; white-space: pre; } /* plan 035 EV panel */
+.ew-dev .ew-dline input[type="text"] { width: 4em; }
 .ew-dform { gap: 4px; margin-top: 6px; }
 .ew-dline { display: flex; align-items: center; gap: 6px; }
 .ew-dform .ew-dline input[type="text"] { flex: 1; min-width: 0; width: auto; box-sizing: border-box; }

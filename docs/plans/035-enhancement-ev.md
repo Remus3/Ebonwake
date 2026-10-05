@@ -38,3 +38,42 @@ ToS check: math on sourced tables and cached read-only prices; no game or
 market action.
 
 Depends on: none.
+
+## As-built deviations
+
+Self-adjudicated by the build lane (2026-10-05).
+
+1. Row key `step` = the level the attempt reaches (`PRI` = +0 -> PRI);
+   Kharazad's preview cron list "PRI 120 .. NOV 3,650" is read as the
+   attempt FROM that level (DUO 120 .. DEC 3,650), matching Sovereign's
+   "PRI->DUO 320" list shape. Alternative: attempt TO that level. Why: both
+   lists then have 9 entries over the same steps. Reverses if: a verified
+   source shows per-target values.
+2. Chance: fs == 0 (with `base_pct`) and fs == `softcap_fs` return the table
+   value exactly; between them the plan formula capped at the soft-cap value
+   (`approx: true`); no `base_pct` (Edana) derives base = max / (1 + 0.1 *
+   softcap). Explicit `points` win inside their span. A row with no formula
+   data outside its points (Blackstar PEN) or none at all (Blackstar TET,
+   threshold only) gives `chance_pct: null`, never an extrapolation.
+   Alternative: extrapolate linearly. Why: invented numbers are worse than a
+   dash. Reverses if: a sourced Blackstar soft cap is found.
+3. `softcap_fs` / `max_pct_at_softcap` are required keys but may both be
+   null; an optional `unverified: [field, ...]` list names preview-only fields
+   (crons, Blackstar points) so a verified chance row is not marked wholly
+   unverified: the EV reply carries `unverified_used` (the preview fields the
+   result rests on; a crons-off result ignores a preview cron count) and the
+   panel tags `[unverified]` from it. Optional `materials: [[item_id, qty]]` is in the schema but
+   unseeded (no verified per-step quantities); cost is null unless crons are
+   on and the Cron Stone (16080) has a cached price.
+4. `pity_cap` = threshold + 1 attempts (the guaranteed one); `agris_threshold`
+   is returned beside it. Crons are billed on non-guaranteed attempts only.
+   FS is held constant and a failure's downgrade re-climb is not modelled (the
+   panel says so).
+5. Operator overrides: POST `/api/deadeye` ops `rate_set` (a full row) /
+   `rate_del` ({family, step}), store domain `enhance`; no dashboard editor
+   and not added to the renderer bridge validator this slice (loopback POST
+   only). Alternative: a new POST route + bridge entry + editor UI. Why: plan
+   scope is the EV panel; the store pattern is in place for a later editor.
+   Reverses if: the operator asks for in-app editing.
+6. GET `/api/deadeye/enhance` with no query returns the effective table
+   (families, rows) for the panel's family picker; `fs` is 0..999.
