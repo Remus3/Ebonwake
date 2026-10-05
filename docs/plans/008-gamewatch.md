@@ -1,6 +1,6 @@
 # Plan 008 - Session-log tail + ScreenShot watcher
 
-Status: open. Lanes: `build` (slice A), `data` (slice B).
+Status: done (2026-10-05); refute rounds 2/3 PASS. Lanes: `build` (slice A), `data` (slice B).
 
 ## Goal
 
