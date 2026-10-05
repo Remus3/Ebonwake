@@ -120,7 +120,11 @@ test('game.js: safe DOM, GET-only, uses the shared helpers', () => {
   const src = read('dashboard/game.js');
   assert.doesNotMatch(src, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
   assert.match(src, /\/api\/game/);
-  assert.doesNotMatch(src, /POST|ewApi|method:/, 'the game card never writes');
+  // Plan 009 lets the card POST, but only through the preload bridge to
+  // /api/ocr and /api/grind (ocr.test.js); never a renderer fetch POST.
+  assert.doesNotMatch(src, /method:/, 'no renderer fetch POST');
+  const routes = (src.match(/\.post\('([^']+)'/g) || []).map((m) => m.slice(7, -1)).sort();
+  assert.deepStrictEqual([...new Set(routes)], ['/api/grind', '/api/ocr']);
   for (const f of ['normalizeGame', 'gameStateLabel', 'gameSinceText', 'fmtClock']) {
     assert.match(src, new RegExp('C\\.' + f + '\\('), f);
   }

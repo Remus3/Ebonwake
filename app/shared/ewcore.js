@@ -1109,6 +1109,57 @@
     return fmtClock(sinceMs, now) + ' (' + fmtAge(Math.max(0, now - sinceMs) / 1000) + ' ago)';
   }
 
+  // ---- OCR (plan 009) ----
+  // POST /api/ocr {file} -> {text, silver, buffs}. Nothing is applied on its
+  // own: the card offers "use silver" / "arm buff", which go through the
+  // existing grind routes as normal operator input.
+
+  const OCR_NAME_MAX = 255;
+  const OCR_TEXT_MAX = 20000;
+
+  // Exact shape check for POST /api/ocr bodies (main-process IPC guard): a bare
+  // file name as the watcher lists it - never a path. The server checks the list.
+  function validOcrBody(body) {
+    if (!exact(body, ['file'])) return false;
+    const f = body.file;
+    return typeof f === 'string' && f.trim().length > 0 && f.length <= OCR_NAME_MAX &&
+      !/[\u0000-\u001f\u007f\\/:]/.test(f) && f !== '.' && f !== '..';
+  }
+
+  function normalizeOcr(d) {
+    if (!plainObject(d)) return null;
+    const text = typeof d.text === 'string' ? d.text.replace(/\r\n?/g, '\n').slice(0, OCR_TEXT_MAX) : '';
+    const silver = Number.isInteger(d.silver) && inRange(d.silver, SILVER) ? d.silver : null;
+    const seen = [];
+    const buffs = [];
+    (Array.isArray(d.buffs) ? d.buffs : []).forEach(function (b) {
+      if (!plainObject(b) || !validName(b.name) || !isNum(b.minutes)) return;
+      const m = Math.min(BUFF_MINUTES[1], Math.round(b.minutes));
+      const n = b.name.toLowerCase();
+      if (m < BUFF_MINUTES[0] || seen.indexOf(n) >= 0) return;
+      seen.push(n);
+      buffs.push({ name: b.name, minutes: m });
+    });
+    return { text: text, silver: silver, buffs: buffs };
+  }
+
+  // An OCR buff -> the grind "buff" POST body, or null when it would not pass.
+  function ocrBuffBody(b) {
+    if (!plainObject(b)) return null;
+    const body = { buff: { name: b.name, minutes: b.minutes } };
+    return validGrindBody(body) ? body : null;
+  }
+
+  // Silver -> the plain digits the grind stop form parses (and the clipboard gets).
+  function ocrSilverInput(n) {
+    return Number.isInteger(n) && inRange(n, SILVER) ? String(n) : null;
+  }
+
+  function ocrBuffLabel(b) {
+    const m = b.minutes;
+    return b.name + ' - ' + (m < 60 ? m + 'm' : fmtDuration(m * 60000));
+  }
+
   // Overlay widgets (spec section 3: each opt-in, default on). Main reads
   // config.overlay.widgets and hands the overlay a query string; only a literal
   // false turns a widget off.
@@ -1137,7 +1188,8 @@
   // The only routes the dashboard bridge forwards, each with its body check.
   const POST_VALIDATORS = {
     '/api/market/watch': validWatchBody, '/api/today': validTodayBody, '/api/progress': validProgressBody,
-    '/api/grind': validGrindBody, '/api/events': validEventsBody, '/api/deadeye': validDeadeyeBody
+    '/api/grind': validGrindBody, '/api/events': validEventsBody, '/api/deadeye': validDeadeyeBody,
+    '/api/ocr': validOcrBody
   };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
@@ -1157,6 +1209,13 @@
     normalizeGame: normalizeGame,
     fmtClock: fmtClock,
     gameSinceText: gameSinceText,
+    OCR_NAME_MAX: OCR_NAME_MAX,
+    OCR_TEXT_MAX: OCR_TEXT_MAX,
+    validOcrBody: validOcrBody,
+    normalizeOcr: normalizeOcr,
+    ocrBuffBody: ocrBuffBody,
+    ocrSilverInput: ocrSilverInput,
+    ocrBuffLabel: ocrBuffLabel,
     lastDailyReset: lastDailyReset,
     lastWeeklyReset: lastWeeklyReset,
     isDone: isDone,
