@@ -1,4 +1,4 @@
-"""Fleet kit v5 is vendored byte-for-byte and the CLAUDE.md FLEET-COMMON block is
+"""Fleet kit v6 is vendored byte-for-byte and the CLAUDE.md FLEET-COMMON block is
 byte-identical. Never edit the kit locally; MAIN ships new versions."""
 
 import hashlib
@@ -22,11 +22,11 @@ def test_fleet_kit_conformance():
     assert _load().conformance(ROOT) == []
 
 
-def test_kit_is_v5_with_all_files():
+def test_kit_is_v6_with_all_files():
     import json
     man = json.loads((ROOT / "ops" / "fleet_kit" / "MANIFEST.json").read_text("ascii"))
-    assert man["version"] == 5
-    assert {"fleet_secrets.py", "fleet_watch.py", "tokens.css", "tokens.json"} <= set(man["files"])
+    assert man["version"] == 6
+    assert {"fleet_lanes.py", "fleet_secrets.py", "fleet_watch.py", "tokens.css", "tokens.json"} <= set(man["files"])
 
 
 def test_shared_slots_governor_is_byte_identical():

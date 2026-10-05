@@ -92,7 +92,7 @@ edit. Tree-specific rules go BELOW this block, never inside it.
 
 # EW rules (tree-specific)
 
-EW channel code: `EW`. Kit: v5, vendored at `ops/fleet_kit/`. Kit conformance:
+EW channel code: `EW`. Kit: v6, vendored at `ops/fleet_kit/`. Kit conformance:
 `tests/test_fleet_kit_conformance.py`. Hand-off: `EW-NEXT-SESSION.txt` (tracked).
 
 ## Operator standing orders (given 2026-10-04, binding on every EW session)
@@ -130,10 +130,11 @@ EW channel code: `EW`. Kit: v5, vendored at `ops/fleet_kit/`. Kit conformance:
 10. HEADLESS FIRST. As much work as possible runs through the laned headless
     driver `tools/ew_lane.py` (kit `fleet_headless.spawn`, account B via
     `CLAUDE_HEADLESS_BASE_URL`, fail closed). Up to 3 named lanes (`build`,
-    `data`, `review`), each in its OWN git worktree under `../ew-worktrees/<lane>`,
-    each holding one machine-wide slot from the shared governor
-    `ops/loop/slots.py` (`max_slots=3`, default lock dir). Never a single
-    repo-wide lock.
+    `data`, `review`), cap 3, claimed through kit v6 `fleet_lanes.run_lane`
+    (lane lock `ops/loop/control/lanes/<i>.lock`, OWN clean worktree
+    `../ew-worktrees/lane-<i>`), each executor call taking exactly ONE
+    machine-wide governor slot at the call (`spawn(governor="queued")`), never
+    around git. Never a single repo-wide lock.
 11. RESTARTS ALLOWED. The EW server, overlay and dashboard may be restarted at any
     time, even while the operator is in game (they never touch the game process).
 12. SECRETS: credentials and API keys live ONLY in user environment variables and
