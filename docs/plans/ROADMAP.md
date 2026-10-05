@@ -38,7 +38,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 031 | World boss schedule: NA table as sourced data, DST-correct next-spawn API | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 032 | World boss overlay widget + Today card + 5/15-min notification | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 033 | Weekly content planner gated by level and gear (Black Shrine, Atoraxxion, Jetina, LoML, Garmoth, Edania) | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
-| 034 | Post-graduation gear roadmap track + graduation readiness + adventure-log seeds | [ ] open |
+| 034 | Post-graduation gear roadmap track + graduation readiness + adventure-log seeds | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 035 | Enhancement EV calculator: per-step chance tables, expected attempts and cost, Agris pity cap | [ ] open |
 | 036 | Failstack bank + Agris pity tracker + cron budget | [ ] open |
 | 037 | Shopping list from the enhancement plan: materials x arsha prices, can-afford-by | [ ] open |

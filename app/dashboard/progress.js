@@ -6,7 +6,9 @@
    reverted on error. Every node is built with DOM APIs - no HTML from data.
    Season tracks (plan 013) render as a season card: n/N, done-but-unclaimed
    highlighted with a claim mark (claiming itself stays the operator's act in
-   game), next 3 open objectives, the full list, and an add-objective row. */
+   game), next 3 open objectives, the full list, and an add-objective row.
+   Plan 034: the Add track card lists sourced seed tracks (POST track_seed);
+   seeded steps show level / AP / DP gate chips and a `verify` badge. */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -146,7 +148,32 @@
     });
   }
 
+  function addSeed() {
+    const sel = S.ui.seed.select;
+    if (!sel.value) { msg('addMsg', 'pick a track to add'); return; }
+    send({ track_seed: sel.value }, 'addMsg', 'added');
+  }
+
   // ---- render ----
+
+  // Plan 034: the "Add track" seed select; keeps the current pick across polls.
+  function drawSeeds() {
+    const sel = S.ui.seed.select;
+    const keep = sel.value;
+    sel.textContent = '';
+    const opts = C.seedOptions(S.data && S.data.seeds);
+    const first = el('option', null, opts.length ? 'add a sourced track...' : 'no sourced tracks');
+    first.value = '';
+    sel.appendChild(first);
+    opts.forEach(function (o) {
+      const op = el('option', null, o.label);
+      op.value = o.id;
+      op.disabled = o.added;
+      sel.appendChild(op);
+    });
+    sel.value = opts.some(function (o) { return o.id === keep && !o.added; }) ? keep : '';
+    S.ui.seed.btn.disabled = !opts.some(function (o) { return !o.added; });
+  }
 
   function liveGs() {
     const f = S.ui.char;
@@ -261,8 +288,28 @@
       cb.disabled = key(t.id, s.id) in S.pending;
       cb.addEventListener('change', function () { toggle(t, s); });
       lab.appendChild(cb);
-      lab.appendChild(el('span', 'ew-mname', String(s.title || s.id)));
+      const name = el('span', 'ew-mname', String(s.title || s.id));
+      if (typeof s.note === 'string' && s.note) name.title = s.note;
+      lab.appendChild(name);
       r.appendChild(lab);
+      // Plan 034: seeded steps carry level / AP / DP gates and a verified stamp.
+      const chips = C.gateChips(s);
+      if (chips.length || s.verified === false) {
+        const meta = el('span', 'ew-tmeta');
+        if (!done) {
+          chips.forEach(function (g) {
+            const p = el('span', 'ew-pill ' + g.cls, g.text);
+            p.title = g.title;
+            meta.appendChild(p);
+          });
+        }
+        if (s.verified === false) {
+          const v = el('span', 'ew-pill unknown', 'verify');
+          v.title = 'unverified seed step; check in game' + (typeof s.source === 'string' ? ' or ' + s.source : '');
+          meta.appendChild(v);
+        }
+        r.appendChild(meta);
+      }
       list.appendChild(r);
     });
     body.appendChild(list);
@@ -460,6 +507,7 @@
     if (!ui || !ui.panel.isConnected) return;
     drawCharacter();
     drawProfile();
+    drawSeeds();
     if (!S.editing || force === true) drawTracks();
   }
 
@@ -535,6 +583,16 @@
     const c = el('section', 'ew-card ew-mcard');
     c.appendChild(el('h2', null, 'Add track'));
     const body = el('div', 'ew-cbody');
+    // Plan 034: sourced seed tracks (gear roadmap, graduation, adventure logs).
+    const sform = el('form', 'ew-form ew-seedform');
+    const select = el('select');
+    select.name = 'track_seed';
+    sform.appendChild(select);
+    const sbtn = el('button', 'ew-btn', 'Add');
+    sbtn.type = 'submit';
+    sform.appendChild(sbtn);
+    sform.addEventListener('submit', function (ev) { ev.preventDefault(); addSeed(); });
+    body.appendChild(sform);
     const form = el('form', 'ew-form');
     const f = {};
     const title = el('input');
@@ -565,7 +623,7 @@
     form.addEventListener('submit', function (ev) { ev.preventDefault(); addTrack(); });
     body.appendChild(form);
     c.appendChild(body);
-    return { card: c, form: f, msg: m };
+    return { card: c, form: f, msg: m, seed: { select: select, btn: sbtn } };
   }
 
   function mount(panel) {
@@ -578,7 +636,7 @@
     S.editing = null;
     S.ui = {
       panel: panel, char: ch.form, charMsg: ch.msg, profile: pr, add: ad.form, addMsg: ad.msg,
-      addCard: ad.card, tracks: []
+      addCard: ad.card, seed: ad.seed, tracks: []
     };
     if (!S.timer) poll(false);
     else draw();

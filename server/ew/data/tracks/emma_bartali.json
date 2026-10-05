@@ -1,0 +1,22 @@
+{
+  "id": "emma_bartali",
+  "title": "Emma Bartali adventure log",
+  "kind": "quest",
+  "note": "Gives 2 OCT Kharazad pieces. Chapter list not transcribed: unlock and chapter steps are unverified.",
+  "source": "https://www.blackdesertfoundry.com/kharazad-accessories-guide/",
+  "verified": "2026-08-10",
+  "steps": [
+    {"id": "kharazad-first", "title": "Free PEN Kharazad from Alustin first",
+     "note": "Order from the new-player guide",
+     "source": "https://www.blackdesertfoundry.com/new-player-guide/", "verified": "2026-08-11"},
+    {"id": "unlock", "title": "Emma Bartali log unlocked (Adventure Log)",
+     "note": "Unlock requirement not recorded; check the Adventure Log in game",
+     "source": "https://www.blackdesertfoundry.com/kharazad-accessories-guide/", "verified": false},
+    {"id": "chapters", "title": "All Emma Bartali chapters done",
+     "note": "Chapter count and per-chapter tasks not recorded",
+     "source": "https://www.blackdesertfoundry.com/kharazad-accessories-guide/", "verified": false},
+    {"id": "reward-oct", "title": "2 OCT Kharazad pieces received",
+     "note": "Enhancing Kharazad uses Essence of Dawn; no break on fail",
+     "source": "https://www.blackdesertfoundry.com/kharazad-accessories-guide/", "verified": "2026-08-10"}
+  ]
+}

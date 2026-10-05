@@ -34,4 +34,39 @@ ToS check: sourced static data and operator ticks only.
 
 Depends on: 023.
 
+## As-built deviations
+
+Self-adjudicated by the build lane 2026-10-05; each names what reverses it.
+
+1. Store tracks carry `seed_id` (null on operator / plan 004 tracks). Decision:
+   one extra key marks a seeded track so "added" and idempotence need no title
+   match. Alternatives: match by title (breaks on a clash or a rename), a
+   separate store domain (two sources of truth). Reverses if: a plan adds track
+   rename and wants re-seeding to follow the rename.
+2. Step `verified` is a `YYYY-MM-DD` page stamp or `false`; tracks also carry
+   track-level `source` / `verified` / `note`. Steps take `{id, title,
+   min_level?, ap?, dp?, note, source, verified}` exactly; anything else fails
+   `validate_seed`, and a malformed stored field is dropped, never guessed.
+   Reverses if: research adopts a richer provenance shape fleet-wide.
+3. Data is transcribed from research 0003 (its URLs and page dates), not
+   re-fetched this run. Igor / Emma chapter lists are not in 0003, so their
+   unlock and chapter steps are `verified: false`; Fughar's four known tasks
+   (Kratuga 777 kills 250 AP / 310 DP, amity, 1 B silver show, 55 Calpheon
+   topics) are separate steps because their chapter is not recorded.
+   Reverses if: a deep dive transcribes the chapter lists (replace the rows).
+4. Seed kinds are `quest` / `gear` only (no `season` seed). Graduation
+   readiness is a `quest` track, not folded into the plan 013 pass objectives
+   as research 0003 C07 suggested: plan 034 lists it as its own seed file.
+   Reverses if: the operator wants it inside the season card.
+5. Gates: level = the higher of the plan 011 sample and character level (same
+   rule as plan 013 auto-ticks); `ap` compares sheet AP only (not AAP); a step
+   is `ready: true` only when every gate is met, `false` when any needs more,
+   `null` when it has no gate or a stat is unset. The plan 023 hint is
+   `bonus_gain` on the AP gate (bonus AP at the gate minus bonus AP now, null
+   when either bracket is untranscribed). Chips hide on done steps.
+   Reverses if: a seed needs an AAP-specific gate (add `aap`).
+6. Seed-file errors are kept on the service (`seed_errors`) and skip the file;
+   they are not in the GET body, matching plan 023's `bracket_error`.
+   Reverses if: the Server card grows a data-file health row.
+
 Dependency guard: before writing code the lane checks that `server/ew/brackets.py` exists (plan 023). If any is missing, the lane changes nothing, writes `"status": "blocked", "needs": ["023"]` into its progress JSON (`ops/loop/control/progress/p034-build.json`) and exits 0. Plan 019's tick turns that clean, marked run into item state `blocked` (not `no-change`) and re-dispatches the row once every Depends-on row is `[x]`; plan 019's work-list gate normally keeps the row from being dispatched that early. If this row ran before plan 019 landed and was recorded `no-change`, 019's re-arm step makes it dispatchable again.

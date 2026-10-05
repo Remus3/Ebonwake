@@ -267,3 +267,59 @@ test('progress.js renders bracket lines with a verify badge', () => {
   assert.match(src, /C\.bracketLines\(/);
   assert.match(src, /'verify'/);
 });
+
+// ---- plan 034: track seeds + gate chips ----
+
+test('validProgressBody accepts track_seed with a seed id only', () => {
+  for (const ok of ['gear_roadmap', 'igor_bartali', 'a']) {
+    assert.strictEqual(C.validPost('/api/progress', { track_seed: ok }), true, ok);
+  }
+  for (const bad of ['', 'Gear', '_x', '../x', 'gear-roadmap', 'a'.repeat(41), 5, null, { id: 'x' }]) {
+    assert.strictEqual(C.validPost('/api/progress', { track_seed: bad }), false, JSON.stringify(bad));
+  }
+  assert.strictEqual(C.validPost('/api/progress', { track_seed: 'a', remove_track: 'b' }), false);
+});
+
+test('seedOptions: labels, added disabled, junk dropped', () => {
+  const opts = C.seedOptions([
+    { id: 'gear_roadmap', title: 'Gear roadmap', added: false, unverified: 0 },
+    { id: 'igor_bartali', title: 'Igor', added: false, unverified: 2 },
+    { id: 'emma_bartali', title: 'Emma', added: true, unverified: 2 },
+    { id: 'BAD', title: 'x' }, 'junk', null,
+  ]);
+  assert.deepStrictEqual(opts, [
+    { id: 'gear_roadmap', label: 'Gear roadmap', added: false },
+    { id: 'igor_bartali', label: 'Igor (2 to verify)', added: false },
+    { id: 'emma_bartali', label: 'Emma - added', added: true },
+  ]);
+  assert.deepStrictEqual(C.seedOptions(undefined), []);
+});
+
+test('gateChips: ready / needs (with bonus AP hint) / unknown', () => {
+  const chips = C.gateChips({ gates: [
+    { stat: 'level', need: 55, have: 56, gap: 0, state: 'ready' },
+    { stat: 'ap', need: 250, have: 245, gap: 5, state: 'needs', bonus_gain: 17 },
+    { stat: 'dp', need: 310, have: null, gap: null, state: 'unknown' },
+    { stat: 'ap', need: 340, have: 300, gap: 40, state: 'needs', bonus_gain: null },
+    { stat: 'level', need: 60, have: 57, gap: 3, state: 'needs' },
+    { stat: 'bogus', need: 1 }, 'junk',
+  ] });
+  assert.deepStrictEqual(chips.map((c) => [c.text, c.cls]), [
+    ['Lv 55 ready', 'ok'],
+    ['AP 250: needs +5 AP (+17 bonus AP)', 'warn'],
+    ['DP 310', 'unknown'],
+    ['AP 340: needs +40 AP', 'warn'],
+    ['Lv 60: needs +3 lv', 'warn'],
+  ]);
+  assert.deepStrictEqual(C.gateChips({ title: 'no gates' }), []);
+  assert.deepStrictEqual(C.gateChips(null), []);
+});
+
+test('progress.js wires the seed select, gate chips and unverified badge', () => {
+  const src = read('dashboard/progress.js');
+  assert.match(src, /track_seed:/);
+  assert.match(src, /C\.seedOptions\(/);
+  assert.match(src, /C\.gateChips\(/);
+  assert.match(src, /s\.verified === false/);
+  assert.doesNotMatch(src, /innerHTML/);
+});
