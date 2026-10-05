@@ -46,6 +46,8 @@ def _fakes(tmp_path, rc=0):
 
     def progress(root, task, pct, step, eta_s, status):
         seen["progress"].append((task, pct, status))
+        seen.setdefault("progress_root", []).append(root)
+        seen.setdefault("step", []).append(step)
 
     def record(kind, secs, ok=True):
         seen["record"].append((kind, ok))
@@ -62,7 +64,37 @@ def test_run_lane_claims_lane_one_governor_slot_at_spawn(tmp_path):
     assert code == "EW" and kw["cwd"] == wt and kw["governor"] == "queued"
     assert kw["kind"] == "build"
     assert seen["record"] == [("lane-data-read", True)]
-    assert seen["progress"][-1] == ("lane-data", 100, "done")
+    assert seen["progress"] == [("lane-1", 20, "running"), ("lane-1", 100, "done")]
+    assert all(s.startswith("data: ") for s in seen["step"])
+
+
+def test_progress_file_is_lane_index_in_main_tree(tmp_path):
+    # FLEET item 13 d: progress/lane-<i>.json (i = lane-lock index) in the MAIN
+    # checkout, even when root is a linked worktree.
+    main = tmp_path / "main"
+    (main / ".git" / "worktrees" / "lane-1").mkdir(parents=True)
+    linked = tmp_path / "linked"
+    linked.mkdir()
+    (linked / ".git").write_text(f"gitdir: {main / '.git' / 'worktrees' / 'lane-1'}\n")
+    seen, _, f = _fakes(tmp_path)
+    ew_lane.run_lane("build", "x", root=linked, **f)
+    assert {Path(r).resolve() for r in seen["progress_root"]} == {main.resolve()}
+    assert ew_lane.progress_task(2) == "lane-2"
+    with pytest.raises(ValueError):
+        ew_lane.progress_task(10)
+
+
+def test_refused_claim_writes_no_progress(tmp_path):
+    seen, _, f = _fakes(tmp_path)
+
+    @contextlib.contextmanager
+    def refused(root, code, name, run_id, cap):
+        raise RuntimeError("lanes_full")
+        yield
+
+    with pytest.raises(RuntimeError):
+        ew_lane.run_lane("data", "x", root=tmp_path, **dict(f, lane_ctx=refused))
+    assert seen["progress"] == [] and seen["record"] == [("lane-data-read", False)]
 
 
 def test_failed_run_marks_failed(tmp_path):
@@ -76,6 +108,7 @@ def test_dry_run_spawns_nothing(tmp_path):
     seen, _, f = _fakes(tmp_path)
     out = ew_lane.run_lane("review", "x", dry_run=True, root=tmp_path, **f)
     assert out["dry_run"] and seen["spawn"] == [] and seen["lane"] == []
+    assert seen["progress"] == []
 
 
 def test_code_lane_runs_accept_edits_read_lane_does_not(tmp_path):
