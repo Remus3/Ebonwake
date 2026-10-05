@@ -1,0 +1,31 @@
+{
+  "ap": {
+    "source": "https://www.blackdesertfoundry.com/ap-and-dp-brackets-guide/",
+    "verified": "2026-08-13",
+    "note": "Sheet AP lower bound -> bonus AP; AAP brackets on the same table. Rows from research 0003 section 1.2 excerpt; value null = span not transcribed (277-308, 316-448), add the rows with brackets_set.",
+    "rows": [
+      {"min": 100, "value": 5}, {"min": 140, "value": 10}, {"min": 170, "value": 15},
+      {"min": 184, "value": 20}, {"min": 209, "value": 30}, {"min": 235, "value": 40},
+      {"min": 245, "value": 48}, {"min": 249, "value": 57}, {"min": 253, "value": 69},
+      {"min": 257, "value": 83}, {"min": 261, "value": 101}, {"min": 265, "value": 122},
+      {"min": 269, "value": 137}, {"min": 273, "value": 142}, {"min": 277, "value": null},
+      {"min": 309, "value": 200}, {"min": 316, "value": null}, {"min": 449, "value": 297}
+    ]
+  },
+  "dp_dr": {
+    "source": "https://www.blackdesertfoundry.com/ap-and-dp-brackets-guide/",
+    "verified": "2026-08-13",
+    "note": "DP lower bound -> damage reduction rate %. Rows from research 0003 section 1.2 excerpt; value null = span not transcribed (211-400), add the rows with brackets_set.",
+    "rows": [
+      {"min": 203, "value": 1}, {"min": 211, "value": null}, {"min": 401, "value": 30}
+    ]
+  },
+  "dp_all_dr": {
+    "source": "https://www.blackdesertfoundry.com/ap-and-dp-brackets-guide/",
+    "verified": "2026-08-13",
+    "note": "DP lower bound -> all damage reduction. Rows from research 0003 section 1.2 excerpt; value null = span not transcribed (256-530), add the rows with brackets_set.",
+    "rows": [
+      {"min": 253, "value": 2}, {"min": 256, "value": null}, {"min": 531, "value": 101}
+    ]
+  }
+}

@@ -171,6 +171,24 @@
       put(f.dp, gs.dp);
     }
     liveGs();
+    drawBrackets();
+  }
+
+  // Plan 023: what the stored AP / AAP / DP are worth, and the next bracket.
+  function drawBrackets() {
+    const box = S.ui.char.brackets;
+    box.textContent = '';
+    C.bracketLines(S.data && S.data.brackets).forEach(function (l) {
+      const row = el('div', 'ew-stats');
+      row.appendChild(el('span', 'ew-num', l.text));
+      if (l.cliff) row.appendChild(el('span', 'ew-badge', 'cliff'));
+      if (l.verify) {
+        const badge = el('span', 'ew-pill unknown', 'verify');
+        badge.title = 'bracket table predates the newest XP patch; re-check the source';
+        row.appendChild(badge);
+      }
+      box.appendChild(row);
+    });
   }
 
   function drawProfile() {
@@ -479,6 +497,8 @@
     f.gs = el('span', 'ew-num', '-');
     gsRow.appendChild(f.gs);
     body.appendChild(gsRow);
+    f.brackets = el('div', 'ew-brackets');
+    body.appendChild(f.brackets);
     const form = el('form', 'ew-form ew-cform');
     f.level = field(form, 'level', numInput(C.LEVEL_MAX), 'level');
     f.ap = field(form, 'AP', numInput(999), 'ap');

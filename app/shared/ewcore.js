@@ -574,6 +574,41 @@
     return (ap + aap) / 2 + dp;
   }
 
+  // Plan 023: GET /api/progress `brackets` -> [{key, text, cliff, verify}],
+  // one line per set stat (DP gives a DR % line and an all-DR line). A null
+  // value is a span the tracked table does not hold: said so, never guessed.
+  function bracketLine(label, b, fmt, unit, pctUnit) {
+    if (!b || typeof b !== 'object' || !isNum(b.x)) return null;
+    if (b.value === null) {
+      const span = isNum(b.bracket_min) && isNum(b.bracket_max) ? ' (' + b.bracket_min + '-' + b.bracket_max + ')' : '';
+      return label + ' ' + b.x + ' -> ' + unit + ' not in table' + span;
+    }
+    if (!isNum(b.value)) return null;
+    let s = label + ' ' + b.x + ' -> ' + fmt(b.value);
+    if (!isNum(b.next_min)) return s + ' (top bracket)';
+    s += '; +' + (b.next_min - b.x) + ' ' + label + ' to ' + b.next_min;
+    return s + (isNum(b.next_gain) ? ' gives +' + b.next_gain + (pctUnit ? '%' : '') : ': next bracket not in table');
+  }
+
+  function bracketLines(br) {
+    if (!br || typeof br !== 'object') return [];
+    const tables = br.tables && typeof br.tables === 'object' ? br.tables : {};
+    const verify = function (name) { return !!(tables[name] && tables[name].reverify === true); };
+    const bonus = function (v) { return '+' + v + ' bonus'; };
+    const out = [];
+    const push = function (key, table, text, cliff) {
+      if (text) out.push({ key: key, text: text, cliff: cliff === true, verify: verify(table) });
+    };
+    push('ap', 'ap', bracketLine('AP', br.ap, bonus, 'bonus'), br.ap && br.ap.cliff);
+    push('aap', 'ap', bracketLine('AAP', br.aap, bonus, 'bonus'), br.aap && br.aap.cliff);
+    if (br.dp && typeof br.dp === 'object') {
+      push('dp', 'dp_dr', bracketLine('DP', br.dp, function (v) { return v + '% DR'; }, 'DR', true), br.dp.cliff);
+      const all = br.dp.all_dr;
+      push('dp_all', 'dp_all_dr', bracketLine('DP', all, function (v) { return 'all-DR +' + v; }, 'all-DR'), false);
+    }
+    return out;
+  }
+
   // Whole percent, floored like the server's pct(), so 100 only when every step is done.
   function trackPct(track) {
     let done = 0;
@@ -1937,6 +1972,7 @@
     validTodayBody: validTodayBody,
     parseTodayForm: parseTodayForm,
     gsTotal: gsTotal,
+    bracketLines: bracketLines,
     trackPct: trackPct,
     withStep: withStep,
     OBJ_KINDS: OBJ_KINDS,
