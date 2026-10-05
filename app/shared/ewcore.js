@@ -1890,6 +1890,154 @@
     return parts.join(' | ');
   }
 
+  // ---- Home / Now (plan 025) ----
+  // One glance screen composed from the existing GET payloads. snapshots:
+  // {today, grind, leveling, progress, events, market (GET /api/market/watch),
+  // at: {<key>: fetchedMs}}; a missing or malformed payload (404 on an old
+  // server) drops its card, never the screen. Read-only; the input is never
+  // mutated. Cards: {id, title, tab, meta, rows: [{label, value, note, cls,
+  // tick}], empty}; `tick` is a /api/today item id (the one Home write).
+
+  const BUFF_WARN_S = 300;
+
+  function nowCard(id, title, tab, rows, empty) {
+    return { id: id, title: title, tab: tab, meta: '', rows: rows, empty: rows.length ? null : empty };
+  }
+
+  function nowRow(label, value, note, cls) {
+    return { label: label, value: value || '', note: note || '', cls: cls || '', tick: null };
+  }
+
+  // Daily + weekly resets, then each distinct custom item rule, soonest first.
+  function nowResets(today, now) {
+    const rows = [nowRow('Daily reset', fmtDuration(nextDailyReset(now) - now)),
+      nowRow('Weekly reset', fmtDuration(nextWeeklyReset(now) - now))];
+    const rules = {};
+    (today ? today.items : []).forEach(function (it) {
+      const rule = plainObject(it) && validTitle(it.title) ? itemRule(it.kind, it.reset) : null;
+      if (!rule) return;
+      const k = fmtResetRule(rule);
+      if (!rules[k]) rules[k] = { next: nextResetOf(rule, now), titles: [] };
+      rules[k].titles.push(it.title);
+    });
+    Object.keys(rules).map(function (k) { return [k, rules[k]]; })
+      .sort(function (a, b) { return a[1].next - b[1].next || (a[0] < b[0] ? -1 : 1); })
+      .forEach(function (p) { rows.push(nowRow(p[1].titles.join(', '), fmtDuration(p[1].next - now), p[0])); });
+    return nowCard('resets', 'Next resets', 'today', rows, '');
+  }
+
+  function nowDailies(today, now) {
+    const g = groupItems(today.items, now).daily;
+    const rows = g.items.filter(function (it) { return !it.done; }).map(function (it) {
+      const r = nowRow(validTitle(it.title) ? it.title : it.id, '');
+      r.tick = it.id;
+      return r;
+    });
+    const c = nowCard('dailies', 'Dailies left', 'today', rows,
+      g.total ? 'all ' + g.total + ' dailies done' : 'no dailies - add them on Today');
+    c.meta = g.done + '/' + g.total + ' done';
+    return c;
+  }
+
+  function nowBuffs(grind, at, now) {
+    const rows = buffsLive(grind.buffs, at, now).filter(function (b) { return typeof b.name === 'string'; })
+      .map(function (b) {
+        return nowRow(b.name, fmtDuration(b.left_s * 1000), '', b.left_s <= BUFF_WARN_S ? 'warn' : '');
+      });
+    return nowCard('buffs', 'Buffs', 'grind', rows, 'no buffs running');
+  }
+
+  function nowSession(grind, at, now) {
+    const el = liveElapsed(grind.active, at, now);
+    const rows = [];
+    if (el !== null) {
+      const ref = grind.active.spot;
+      rows.push(nowRow(spotName(grind.spots, ref), fmtElapsed(el)));
+      const sp = (Array.isArray(grind.spots) ? grind.spots : []).filter(function (s) {
+        return plainObject(s) && s.id === ref;
+      })[0];
+      const sph = sp && isNum(sp.silver_per_h) ? fmtSilver(sp.silver_per_h) + '/h' : '-';
+      rows.push(nowRow('avg silver here', sph));
+    }
+    return nowCard('session', 'Grind session', 'grind', rows, 'no session running');
+  }
+
+  function nowLeveling(d, at, now) {
+    const el = sinceFetch(at, now);
+    const rows = [];
+    if (d.level !== null && d.pct !== null) {
+      rows.push(nowRow('Lv ' + d.level + ' ' + (Math.floor(d.pct * 10) / 10).toFixed(1) + '%',
+        'ETA ' + (d.eta_next_s === null ? '-' : fmtEta(d.eta_next_s - el)),
+        d.rate_pct_h === null ? '' : fmtRate(d.rate_pct_h)));
+    }
+    const h = hotLive(d.hot, d.xp_stack_pct, at, now);
+    if (h.active.length) {
+      const ends = Math.min.apply(null, h.active.map(function (a) { return a.ends_in_s; }));
+      rows.push(nowRow('Hot Time +' + h.stack + '%', 'ends ' + fmtEta(ends), '', 'ok'));
+    } else if (h.next) {
+      rows.push(nowRow('Next Hot Time' + (isNum(h.next.pct) ? ' +' + h.next.pct + '%' : ''),
+        'in ' + fmtEta(h.next.starts_in_s)));
+    }
+    return nowCard('leveling', 'Level ETA', 'progress', rows, 'no XP sample yet');
+  }
+
+  function nowAlerts(market) {
+    const rows = [];
+    market.items.forEach(function (it) {
+      if (!plainObject(it)) return;
+      const hit = alertFor(it.price, it.below, it.above);
+      if (!hit) return;
+      const name = typeof it.name === 'string' && it.name ? it.name : '#' + it.id;
+      rows.push(nowRow(name, fmtSilver(it.price), hit + ' ' + fmtSilver(hit === 'below' ? it.below : it.above), 'ok'));
+    });
+    return nowCard('alerts', 'Market alerts', 'market', rows,
+      market.items.length ? 'no alert hits' : 'watchlist empty');
+  }
+
+  function nowEnding(events, at, now) {
+    const rows = eventRows(events.items, at, now).filter(function (r) { return r.soon; }).map(function (r) {
+      return nowRow(r.title, fmtLeft(r.left_s), typeof r.code === 'string' ? r.code : '', 'warn');
+    });
+    return nowCard('ending', 'Ending within 48 h', 'events', rows, 'nothing ends within 48 h');
+  }
+
+  function nowCoupons(events) {
+    const rows = suggestedRows(events.suggested, events.items).map(function (c) {
+      return nowRow(c.code, c.date || '', c.title);
+    });
+    return nowCard('coupons', 'New coupons', 'events', rows, 'no new coupons');
+  }
+
+  function composeNow(snapshots, nowMs) {
+    const s = plainObject(snapshots) ? snapshots : {};
+    const at = function (k) { return plainObject(s.at) && isNum(s.at[k]) ? s.at[k] : nowMs; };
+    const has = function (k, list) { return plainObject(s[k]) && (!list || Array.isArray(s[k][list])); };
+    const today = has('today', 'items') ? s.today : null;
+    const cards = [nowResets(today, nowMs)];
+    if (today) cards.push(nowDailies(today, nowMs));
+    if (has('grind')) {
+      cards.push(nowBuffs(s.grind, at('grind'), nowMs));
+      cards.push(nowSession(s.grind, at('grind'), nowMs));
+    }
+    const lv = has('leveling') ? normalizeLeveling(s.leveling) : null;
+    if (lv) cards.push(nowLeveling(lv, at('leveling'), nowMs));
+    if (has('market', 'items')) cards.push(nowAlerts(s.market));
+    if (has('events', 'items')) {
+      cards.push(nowEnding(s.events, at('events'), nowMs));
+      if (plainObject(s.events.suggested)) cards.push(nowCoupons(s.events));
+    }
+    return cards;
+  }
+
+  // Plan 025 M8: open Events-tab items that end before the next weekly reset,
+  // soonest first (the Today tab's read-only Events card).
+  function eventsThisWeek(items, fetchedMs, now) {
+    const limit = Math.floor((nextWeeklyReset(now) - now) / 1000);
+    return eventRows(items, fetchedMs, now).filter(function (r) {
+      return (r.status === 'active' || r.status === 'upcoming') && r.left_s !== null && r.left_s <= limit;
+    });
+  }
+
   // Overlay widgets (spec section 3). Main reads config.overlay.widgets and
   // hands the overlay a query string. Default on (only a literal false turns
   // one off), except the WIDGETS_OPT_IN ones: default off, only a literal true
@@ -2037,6 +2185,8 @@
     normalizeLeveling: normalizeLeveling,
     hotLive: hotLive,
     levelingLine: levelingLine,
+    composeNow: composeNow,
+    eventsThisWeek: eventsThisWeek,
     overlayWidgets: overlayWidgets,
     widgetsQuery: widgetsQuery,
     widgetsFromQuery: widgetsFromQuery,

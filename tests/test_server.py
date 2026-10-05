@@ -58,7 +58,8 @@ def test_version_contract(srv):
 def test_state_lists_tabs(srv):
     doc = json.loads(_get(srv, "/api/state")[2])
     ids = [t["id"] for t in doc["tabs"]]
-    assert ids[0] == "today" and "system" in ids and len(ids) == 7
+    # plan 025: Home first and default; the other tab ids are unchanged.
+    assert ids == ["home", "today", "market", "progress", "grind", "events", "deadeye", "system"]
 
 
 def test_foreign_host_rejected(srv):
