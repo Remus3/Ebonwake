@@ -24,7 +24,7 @@
 
   function getJSON(path) {
     return fetch(C.SERVER + path).then(function (r) {
-      if (r.status === 404) throw new Error('grind API not on this server yet');
+      if (r.status === 404) throw new Error(C.notOnServer(path));
       if (!r.ok) {
         return r.json().catch(function () { return null; }).then(function (b) {
           throw new Error(b && typeof b.error === 'string' ? b.error : 'HTTP ' + r.status);

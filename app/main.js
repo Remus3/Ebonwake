@@ -22,6 +22,20 @@ function readConfig() {
   }
 }
 
+// Plan 020: the app's own commit, read once at start (hidden spawn, no console),
+// handed to the dashboard preload as a launch argument; 'unknown' on failure.
+function readAppCommit() {
+  try {
+    const out = childProcess.execFileSync('git', ['rev-parse', '--short', 'HEAD'],
+      { cwd: REPO, encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    const sha = out.trim();
+    return /^[0-9a-f]{4,40}$/.test(sha) ? sha : 'unknown';
+  } catch (e) {
+    return 'unknown';
+  }
+}
+const APP_COMMIT = readAppCommit();
+
 let dashboard = null;
 let overlay = null;
 
@@ -31,7 +45,8 @@ function createDashboard() {
     title: 'Ebonwake', backgroundColor: '#0f1216', show: true,
     webPreferences: {
       contextIsolation: true, nodeIntegration: false, sandbox: true,
-      preload: path.join(__dirname, 'preload.js')
+      preload: path.join(__dirname, 'preload.js'),
+      additionalArguments: ['--ew-app-commit=' + APP_COMMIT]
     }
   });
   dashboard.removeMenu();
@@ -169,6 +184,13 @@ function createTray() {
   })));
   trayIcon.on('click', showDashboard);
 }
+
+// Plan 020: the dashboard's outdated-server pill reuses the tray restart path.
+ipcMain.handle('ew:restart-server', async function (event) {
+  if (!dashboard || event.sender !== dashboard.webContents) return { ok: false, error: 'not allowed' };
+  await restartServer();
+  return { ok: true };
+});
 
 if (process.env.EW_SELFTEST) {
   selftest.switches().forEach(function (s) { app.commandLine.appendSwitch.apply(app.commandLine, s); });
