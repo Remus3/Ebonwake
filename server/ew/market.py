@@ -69,7 +69,13 @@ class ArshaClient:
         self.fetch = fetch or default_fetch
         self.clock = clock
         self.cache_dir = Path(cache_dir) if cache_dir is not None else _DEFAULT_CACHE
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()      # guards _keylocks
+        self._bo_lock = threading.Lock()   # guards backoff.json read-modify-write
+        self._keylocks = {}
+
+    def _keylock(self, key):
+        with self._lock:
+            return self._keylocks.setdefault(key, threading.Lock())
 
     # -- paths / state ----------------------------------------------------
     def _key(self, kind, item_id, sid):
@@ -82,19 +88,26 @@ class ArshaClient:
         return self.cache_dir / "backoff.json"
 
     def _backoffs(self):
-        doc = _read_json(self._backoff_path())
+        with self._bo_lock:
+            doc = _read_json(self._backoff_path())
         return doc if isinstance(doc, dict) else {}
 
     def backoff_state(self, kind, item_id=0, sid=0):
-        return self._backoffs().get(self._key(kind, item_id, sid), {})
+        bo = self._backoffs().get(self._key(kind, item_id, sid), {})
+        if not (isinstance(bo, dict) and isinstance(bo.get("n", 0), int)
+                and isinstance(bo.get("until", 0), (int, float))):
+            return {}  # corrupt entry = no backoff, never a 500
+        return bo
 
     def _set_backoff(self, key, entry):
-        doc = self._backoffs()
-        if entry:
-            doc[key] = entry
-        else:
-            doc.pop(key, None)
-        atomic_write_json(self._backoff_path(), doc)
+        with self._bo_lock:
+            doc = _read_json(self._backoff_path())
+            doc = doc if isinstance(doc, dict) else {}
+            if entry:
+                doc[key] = entry
+            else:
+                doc.pop(key, None)
+            atomic_write_json(self._backoff_path(), doc)
 
     # -- core -------------------------------------------------------------
     def _url(self, kind, item_id, sid):
@@ -130,11 +143,15 @@ class ArshaClient:
     def get(self, kind, item_id=0, sid=0):
         key = self._key(kind, item_id, sid)
         ttl = TTL[kind]
-        with self._lock:
+        # Per-key lock: one in-flight fetch per key (dedupe); other keys and
+        # fresh-cache reads never wait behind a slow upstream.
+        with self._keylock(key):
             now = self.clock()
             cached = _read_json(self._cache_path(key))
-            if not (isinstance(cached, dict) and "fetched_at" in cached):
-                cached = None
+            if not (isinstance(cached, dict) and "data" in cached
+                    and isinstance(cached.get("fetched_at"), (int, float))
+                    and not isinstance(cached.get("fetched_at"), bool)):
+                cached = None  # corrupt cache = no cache
             if cached and now - cached["fetched_at"] < ttl:
                 return self._result(cached, now, ttl, False, None)
             bo = self.backoff_state(kind, item_id, sid)

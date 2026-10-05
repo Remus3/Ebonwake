@@ -352,3 +352,60 @@ def test_state_reports_market_source(msrv):
     _req(msrv, "GET", "/api/market/watch")
     st, doc = _req(msrv, "GET", "/api/state")
     assert doc["sources"]["market"]["status"] == "ok"
+
+
+# --- concurrency / corrupt state (verifier round 1) --------------------------
+
+def test_watchlist_concurrent_read_write(tmp_path):
+    wl = market.Watchlist(Store(tmp_path / "store"), seed=[])
+    errors = []
+    stop = threading.Event()
+
+    def reader():
+        while not stop.is_set():
+            try:
+                wl.items()
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+    t = threading.Thread(target=reader)
+    t.start()
+    try:
+        for i in range(300):
+            wl.add({"id": 1 + i % 7, "sid": 0})
+    except Exception as e:  # noqa: BLE001
+        errors.append(e)
+    finally:
+        stop.set()
+        t.join()
+    assert errors == []
+    assert len(wl.items()) == 7
+
+
+def test_slow_fetch_does_not_block_other_keys(tmp_path):
+    gate = threading.Event()
+
+    def fetch(url, timeout):
+        if "id=1&" in url or url.endswith("id=1"):
+            gate.wait(5)
+        return json.dumps(dict(SUB, id=2)).encode()
+
+    c = market.ArshaClient(fetch=fetch, clock=Clock(), cache_dir=tmp_path / "cache")
+    c.sublist(2)  # warm key 2
+    t = threading.Thread(target=c.sublist, args=(1,))
+    t.start()
+    done = threading.Event()
+    threading.Thread(target=lambda: (c.sublist(2), done.set())).start()
+    assert done.wait(2), "fresh key 2 waited behind slow key 1"
+    gate.set()
+    t.join()
+
+
+def test_corrupt_cache_and_backoff_degrade(tmp_path):
+    c, f = _client(tmp_path, {"GetWorldMarketSubList": SUB})
+    (tmp_path / "cache").mkdir(parents=True, exist_ok=True)
+    key = c._key("sublist", 4901, 0)
+    (tmp_path / "cache" / f"{key}.json").write_text('{"fetched_at": "x", "data": 1}')
+    (tmp_path / "cache" / "backoff.json").write_text(json.dumps({key: "junk"}))
+    res = c.sublist(4901)
+    assert res["data"]["id"] == 4901 and res["error"] is None
