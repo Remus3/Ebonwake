@@ -384,5 +384,18 @@
 
   function show() { poll(false); }
 
-  window.EWGrind = { mount: mount, show: show };
+  // Plan 009: an OCR'd silver amount goes into the stop form's silver field,
+  // only while a session runs and the form is mounted. Nothing is posted - the
+  // operator still presses "Stop + log". Returns whether it was filled.
+  function prefillSilver(text) {
+    if (!S.ui || !active() || typeof text !== 'string') return false;
+    S.ui.form.silver.value = text;
+    msg('silver filled from screenshot - check, then Stop + log');
+    return true;
+  }
+
+  // Re-read after another card wrote to /api/grind (the OCR "arm buff").
+  function refresh() { if (S.ui) poll(true); }
+
+  window.EWGrind = { mount: mount, show: show, prefillSilver: prefillSilver, refresh: refresh };
 })();

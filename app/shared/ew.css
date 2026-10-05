@@ -244,4 +244,13 @@ html.ew-overlay, html.ew-overlay body { background: transparent; }
 .ew-game .ew-grow .ew-mname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ew-game .ew-ghint { padding: 2px 4px; overflow-wrap: anywhere; }
 .ew-game .ew-gshots { margin-top: 8px; }
+/* Plan 009: OCR result panel; hidden must beat flex; the text scrolls inside. */
+.ew-game [hidden] { display: none; }
+.ew-game .ew-ocr { margin-top: 8px; border-top: 1px solid var(--fk-border); padding-top: 6px; }
+.ew-game .ew-ocrtext {
+  margin: 4px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font: 12px/1.35 var(--ew-mono); background: var(--fk-surface); border: 1px solid var(--fk-border);
+  border-radius: var(--ew-radius); padding: 4px 6px;
+}
+.ew-game .ew-bbtn:disabled { opacity: .5; cursor: default; }
 .ew-card h2 .ew-pill { text-transform: none; letter-spacing: 0; font-weight: 400; }
