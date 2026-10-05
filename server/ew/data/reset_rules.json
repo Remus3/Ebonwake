@@ -1,0 +1,14 @@
+[
+  {"name": "Black Shrine (5/week)",
+   "reset": {"every": "week", "weekday": 6, "at": "00:00"},
+   "source": "BDFoundry 2026-07-10; official patch notes 2026-09-10 (research 0003 C05)",
+   "verified": true},
+  {"name": "Altar of Blood weekly",
+   "reset": {"every": "week", "weekday": 6, "at": "00:00"},
+   "source": "BDFoundry 2026-07-10; official patch notes 2026-09-10 (research 0003 C05)",
+   "verified": true},
+  {"name": "Black Spirit's Adventure dice",
+   "reset": {"every": "day", "at": "05:00"},
+   "source": "community guide 2023 (research 0003 section 1.6); unverified",
+   "verified": false}
+]

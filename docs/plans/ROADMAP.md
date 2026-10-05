@@ -25,7 +25,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 018 | Level cap 75 readiness: one level range, patch epoch for XP rates, re-seeded milestones, XP buff presets | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 019 | Loop dependency gate: skip a ROADMAP row until its Depends-on plans are done | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 020 | Server health + version-skew guard, System freshness card, honest 404 copy, / redirect | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
-| 021 | Multi-cadence resets: per-item reset rule (Sunday weeklies, non-midnight dailies) | [ ] open (priority) |
+| 021 | Multi-cadence resets: per-item reset rule (Sunday weeklies, non-midnight dailies) | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 022 | Overlay placement off the minimap, content-sized height, legibility | [ ] open (priority) |
 | 023 | AP/DP bracket calculator: bonus AP, DR %, next-bracket gain on the Progress card | [ ] open (priority) |
 | 024 | Olvia Academy deadline vs level ETA: red pill when Lv 60 lands after enrolment closes | [ ] open (priority) |

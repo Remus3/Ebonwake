@@ -342,10 +342,99 @@
 
   function lastWeeklyReset(now) { return nextWeeklyReset(now) - 7 * DAY_MS; }
 
-  function isDone(tickIso, kind, now) {
+  // ---- Per-item reset rules (plan 021) ----
+  // {every: 'day'|'week', weekday: 0-6 (Mon=0, week only), at: 'HH:MM' UTC}; an
+  // item without one keeps its kind's default (server today.DEFAULT_RULES).
+
+  const AT = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const RULE_KIND = { day: 'daily', week: 'weekly' };
+
+  // Normalised copy of a rule (server today.validate_rule), or null.
+  function validResetRule(r) {
+    if (!plainObject(r) || !onlyKeys(r, ['every', 'weekday', 'at'])) return null;
+    const at = r.at === undefined ? '00:00' : r.at;
+    if (typeof at !== 'string' || !AT.test(at)) return null;
+    if (r.every === 'day') return r.weekday === undefined ? { every: 'day', at: at } : null;
+    if (r.every !== 'week' || !isInt(r.weekday, 0) || r.weekday > 6) return null;
+    return { every: 'week', weekday: r.weekday, at: at };
+  }
+
+  // A valid rule that fits an item of `kind` (events take none), or null.
+  function itemRule(kind, r) {
+    const rule = validResetRule(r);
+    return rule && RULE_KIND[rule.every] === kind ? rule : null;
+  }
+
+  function lastResetOf(rule, now) {
+    const d = new Date(now);
+    const at = (Number(rule.at.slice(0, 2)) * 60 + Number(rule.at.slice(3))) * 60000;
+    let back = 0;
+    let period = DAY_MS;
+    if (rule.every === 'week') {
+      back = (d.getUTCDay() - (rule.weekday + 1) % 7 + 7) % 7;
+      period = 7 * DAY_MS;
+    }
+    const when = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - back) + at;
+    return when > now ? when - period : when;
+  }
+
+  function nextResetOf(rule, now) {
+    return lastResetOf(rule, now) + (rule.every === 'week' ? 7 * DAY_MS : DAY_MS);
+  }
+
+  // 'Sun 00:00 UTC' (week) or '05:00 UTC' (day).
+  function fmtResetRule(r) {
+    const rule = validResetRule(r);
+    if (!rule) return '';
+    return (rule.every === 'week' ? WEEKDAYS[rule.weekday] + ' ' : '') + rule.at + ' UTC';
+  }
+
+  // 'resets Sun 00:00 UTC in 2d 4h' for an item's own rule.
+  function fmtResetCountdown(r, now) {
+    const rule = validResetRule(r);
+    if (!rule) return '';
+    return 'resets ' + fmtResetRule(rule) + ' in ' + fmtDuration(nextResetOf(rule, now) - now);
+  }
+
+  // Changes whenever any list's or item's reset passes (Today redraw trigger).
+  function resetKey(items, now) {
+    const keys = [lastResetOf({ every: 'day', at: '00:00' }, now),
+      lastResetOf({ every: 'week', weekday: 3, at: '00:00' }, now)];
+    (Array.isArray(items) ? items : []).forEach(function (it) {
+      const rule = plainObject(it) ? itemRule(it.kind, it.reset) : null;
+      if (rule) keys.push(lastResetOf(rule, now));
+    });
+    return keys.join(':');
+  }
+
+  // Preset rows from GET /api/today reset_presets -> [{name, label, kind, reset}];
+  // unverified rows are labelled '(verify)'. Junk rows are dropped.
+  function resetPresets(d) {
+    const rows = plainObject(d) && Array.isArray(d.reset_presets) ? d.reset_presets : [];
+    const out = [];
+    rows.forEach(function (p) {
+      if (!plainObject(p) || !validTitle(p.name)) return;
+      const rule = itemRule(p.kind, p.reset);
+      if (!rule) return;
+      out.push({ name: p.name, label: p.name + ' - ' + fmtResetRule(rule) +
+        (p.verified === true ? '' : ' (verify)'), kind: p.kind, reset: rule });
+    });
+    return out;
+  }
+
+  // A preset -> add-form field strings (title, kind, reset weekday, reset at).
+  function presetForm(p) {
+    return { title: p.name, kind: p.kind, until: '',
+      reset_weekday: p.reset.every === 'week' ? String(p.reset.weekday) : '', reset_at: p.reset.at };
+  }
+
+  function isDone(tickIso, kind, now, reset) {
     if (typeof tickIso !== 'string' || !tickIso) return false;
     const t = Date.parse(tickIso);
     if (!isFinite(t)) return false;
+    const rule = itemRule(kind, reset);
+    if (rule) return t >= lastResetOf(rule, now);
     if (kind === 'daily' || kind === 'event') return t >= lastDailyReset(now);
     if (kind === 'weekly') return t >= lastWeeklyReset(now);
     return false;
@@ -381,8 +470,9 @@
     (Array.isArray(items) ? items : []).forEach(function (it) {
       if (!plainObject(it) || KINDS.indexOf(it.kind) < 0 || typeof it.id !== 'string') return;
       const x = Object.assign({}, it);
-      if (now !== undefined) x.done = isDone(it.ticked_at, it.kind, now);
+      if (now !== undefined) x.done = isDone(it.ticked_at, it.kind, now, it.reset);
       else x.done = !!it.done;
+      x.reset = itemRule(it.kind, it.reset);
       if (x.kind === 'event') {
         x.days_left = now === undefined ? null : eventDaysLeft(it.until, now);
         if (x.days_left !== null && x.days_left < 0) return;
@@ -429,9 +519,10 @@
         SLUG.test(v.id) && isInt(v.to, 0);
     }
     if (k === 'add') {
-      return plainObject(v) && onlyKeys(v, ['title', 'kind', 'until']) && validTitle(v.title) &&
+      return plainObject(v) && onlyKeys(v, ['title', 'kind', 'until', 'reset']) && validTitle(v.title) &&
         KINDS.indexOf(v.kind) >= 0 &&
-        (v.until === undefined || v.until === null || isoDateMs(v.until) !== null);
+        (v.until === undefined || v.until === null || isoDateMs(v.until) !== null) &&
+        (v.reset === undefined || v.reset === null || itemRule(v.kind, v.reset) !== null);
     }
     return false;
   }
@@ -451,6 +542,18 @@
       const until = typeof f.until === 'string' ? f.until.trim() : '';
       if (isoDateMs(until) === null) return { ok: false, error: 'event needs an end date (YYYY-MM-DD)' };
       add.until = until;
+    }
+    // Optional custom reset (plan 021): blank weekday + blank time = kind default.
+    const wd = typeof f.reset_weekday === 'string' ? f.reset_weekday.trim() : '';
+    const at = typeof f.reset_at === 'string' ? f.reset_at.trim() : '';
+    if (wd || at) {
+      if (f.kind === 'event') return { ok: false, error: 'event items take no custom reset' };
+      if (wd && f.kind !== 'weekly') return { ok: false, error: 'reset weekday is for weekly items' };
+      if (at && !AT.test(at)) return { ok: false, error: 'reset time must be HH:MM (UTC)' };
+      add.reset = f.kind === 'weekly' ?
+        { every: 'week', weekday: wd ? Number(wd) : 3, at: at || '00:00' } :
+        { every: 'day', at: at || '00:00' };
+      if (!itemRule(f.kind, add.reset)) return { ok: false, error: 'reset weekday must be 0-6 (Mon=0)' };
     }
     return { ok: true, body: { add: add } };
   }
@@ -1817,6 +1920,15 @@
     ocrBuffLabel: ocrBuffLabel,
     lastDailyReset: lastDailyReset,
     lastWeeklyReset: lastWeeklyReset,
+    validResetRule: validResetRule,
+    itemRule: itemRule,
+    lastResetOf: lastResetOf,
+    nextResetOf: nextResetOf,
+    fmtResetRule: fmtResetRule,
+    fmtResetCountdown: fmtResetCountdown,
+    resetKey: resetKey,
+    resetPresets: resetPresets,
+    presetForm: presetForm,
     isDone: isDone,
     eventDaysLeft: eventDaysLeft,
     fmtDaysLeft: fmtDaysLeft,
