@@ -2422,11 +2422,142 @@
     return text === 'ok' || ovQuiet(text);
   }
 
+  // ---- Settings (plan 030) ----
+  // Form model for the Settings tab. The server (server/ew/settings.py) is the
+  // authority; these mirror its allowlist so the bridge refuses anything else.
+  // Every key is a dotted config/local.json path; secrets and loop never appear.
+  const THEMES = ['system', 'dark', 'light'];
+  const UI_SCALE = [0.9, 1.3];
+  const NOTIFY_RULES_PREFS = ['marketAlert', 'buffEnding', 'hotTime', 'resetPassed', 'newCoupon', 'gameExit'];
+  const SETTINGS_GROUPS = [
+    { id: 'overlay', title: 'Overlay', fields: WIDGETS.map(function (w) {
+      return { key: 'overlay.widgets.' + w, label: 'Widget: ' + w, type: 'bool' };
+    }).concat([
+      { key: 'overlay.anchor', label: 'Anchor', type: 'anchor', options: OVERLAY_ANCHORS },
+      { key: 'overlay.display', label: 'Display (blank = primary)', type: 'display' },
+      { key: 'overlay.scale', label: 'Scale', type: 'number', min: OVERLAY_SCALE[0], max: OVERLAY_SCALE[1], step: 0.05 },
+      { key: 'overlay.opacity', label: 'Opacity', type: 'number', min: OVERLAY_OPACITY[0], max: OVERLAY_OPACITY[1], step: 0.05 }
+    ]) },
+    { id: 'hotkeys', title: 'Hotkeys', fields: [
+      { key: 'hotkeys.toggleOverlay', label: 'Toggle overlay', type: 'hotkey' },
+      { key: 'hotkeys.showDashboard', label: 'Show dashboard', type: 'hotkey' }
+    ] },
+    { id: 'profile', title: 'Profile', fields: [
+      { key: 'profile.family', label: 'Family name (blank = none)', type: 'family' }
+    ] },
+    { id: 'appearance', title: 'Appearance', fields: [
+      { key: 'ui.theme', label: 'Theme', type: 'enum', options: THEMES },
+      { key: 'ui.scale', label: 'Dashboard scale', type: 'number', min: UI_SCALE[0], max: UI_SCALE[1], step: 0.05 }
+    ] },
+    { id: 'notify', title: 'Notifications', fields: NOTIFY_RULES_PREFS.map(function (n) {
+      return { key: 'notify.' + n, label: n, type: 'bool' };
+    }).concat([{ key: 'coupons.check', label: 'Coupon suggestions', type: 'bool' }]) },
+    { id: 'market', title: 'Market', fields: [
+      { key: 'market.vp', label: 'Value Pack active', type: 'bool' },
+      { key: 'market.fame_pct', label: 'Family fame bonus (0-1.5 %)', type: 'number', min: 0, max: 1.5, step: 0.05 }
+    ] }
+  ];
+  const SETTINGS_FIELDS = {};
+  SETTINGS_GROUPS.forEach(function (g) { g.fields.forEach(function (f) { SETTINGS_FIELDS[f.key] = f; }); });
+  const SETTINGS_KEYS = Object.keys(SETTINGS_FIELDS);
+  const FAMILY_RE = /^[A-Za-z0-9_]{2,16}$/;
+
+  function settingValueOk(f, v) {
+    switch (f.type) {
+      case 'bool': return typeof v === 'boolean';
+      case 'anchor': return validAnchor(v) && (typeof v === 'string' || (Math.abs(v.x) <= 100000 && Math.abs(v.y) <= 100000));
+      case 'display': return v === null || (Number.isInteger(v) && v >= 0 && v <= 16);
+      case 'number': return isNum(v) && v >= f.min && v <= f.max;
+      case 'hotkey': return validAccelerator(v) && v.length <= 64;
+      case 'family': return v === '' || (typeof v === 'string' && FAMILY_RE.test(v));
+      case 'enum': return typeof v === 'string' && f.options.indexOf(v) >= 0;
+      default: return false;
+    }
+  }
+
+  // Bridge check for POST /api/settings: {set: {key: value}} over the allowlist.
+  function validSettingsBody(body) {
+    if (!plainObject(body) || Object.keys(body).length !== 1 || !plainObject(body.set)) return false;
+    const keys = Object.keys(body.set);
+    return keys.length >= 1 && keys.length <= 64 && keys.every(function (k) {
+      return Object.prototype.hasOwnProperty.call(SETTINGS_FIELDS, k) && settingValueOk(SETTINGS_FIELDS[k], body.set[k]);
+    });
+  }
+
+  // One raw form input -> {value} or {error}. Checkboxes pass a boolean;
+  // anchors pass a named anchor or 'x,y'; everything else passes a string.
+  function parseSettingInput(key, raw) {
+    const f = SETTINGS_FIELDS[key];
+    if (!f) return { error: key + ': unknown setting' };
+    let v = raw;
+    const s = typeof raw === 'string' ? raw.trim() : raw;
+    if (f.type === 'number') v = typeof s === 'string' && /^-?\d+(\.\d+)?$/.test(s) ? Number(s) : NaN;
+    else if (f.type === 'display') v = s === '' ? null : (typeof s === 'string' && /^\d+$/.test(s) ? Number(s) : NaN);
+    else if (f.type === 'anchor' && typeof s === 'string' && s.indexOf(',') >= 0) {
+      const m = /^(-?\d+)\s*,\s*(-?\d+)$/.exec(s);
+      v = m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+    } else if (typeof s === 'string') v = s;
+    if (!settingValueOk(f, v)) {
+      let hint = 'invalid';
+      if (f.type === 'number') hint = 'a number ' + f.min + '-' + f.max;
+      else if (f.type === 'hotkey') hint = 'modifier(s) + key, e.g. Control+Alt+E';
+      else if (f.type === 'family') hint = '2-16 letters, digits or _';
+      else if (f.type === 'anchor') hint = OVERLAY_ANCHORS.join('|') + ' or x,y';
+      else if (f.type === 'display') hint = 'blank or a display number 0-16';
+      return { error: f.label + ': ' + hint };
+    }
+    return { value: v };
+  }
+
+  // Text shown in an input for a stored value.
+  function settingInputText(key, v) {
+    const f = SETTINGS_FIELDS[key];
+    if (!f) return '';
+    if (f.type === 'anchor' && plainObject(v)) return v.x + ',' + v.y;
+    if (v === null || v === undefined) return '';
+    return String(v);
+  }
+
+  function sameSetting(a, b) {
+    if (plainObject(a) && plainObject(b)) return a.x === b.x && a.y === b.y;
+    return a === b;
+  }
+
+  // Edited values that differ from the saved ones, as a POST body (or null).
+  function settingsBody(saved, edits) {
+    const set = {};
+    Object.keys(edits || {}).forEach(function (k) {
+      if (!SETTINGS_FIELDS[k]) return;
+      if (!saved || !sameSetting(saved[k], edits[k])) set[k] = edits[k];
+    });
+    return Object.keys(set).length ? { set: set } : null;
+  }
+
+  // What the app must redo after a save, from the server's `changed` list.
+  function settingsEffects(changed) {
+    const ks = Array.isArray(changed) ? changed : [];
+    const has = function (p) { return ks.some(function (k) { return typeof k === 'string' && k.indexOf(p) === 0; }); };
+    return { overlay: has('overlay.'), shell: has('hotkeys.') || has('ui.scale'), theme: has('ui.theme') };
+  }
+
+  // data-theme for ui.theme; 'system' follows prefers-color-scheme.
+  function themeAttr(theme, prefersDark) {
+    if (theme === 'light' || theme === 'dark') return theme;
+    if (theme === 'system') return prefersDark ? 'dark' : 'light';
+    return 'dark';
+  }
+
+  // Dashboard zoom factor from config ui.scale (main process).
+  function uiScale(config) {
+    const u = config && plainObject(config.ui) ? config.ui.scale : undefined;
+    return isNum(u) && u >= UI_SCALE[0] && u <= UI_SCALE[1] ? u : 1;
+  }
+
   // The only routes the dashboard bridge forwards, each with its body check.
   const POST_VALIDATORS = {
     '/api/market/watch': validWatchBody, '/api/today': validTodayBody, '/api/progress': validProgressBody,
     '/api/grind': validGrindBody, '/api/events': validEventsBody, '/api/deadeye': validDeadeyeBody,
-    '/api/ocr': validOcrBody, '/api/leveling': validLevelingBody
+    '/api/ocr': validOcrBody, '/api/leveling': validLevelingBody, '/api/settings': validSettingsBody
   };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
@@ -2478,7 +2609,7 @@
   const POST_LABELS = {
     '/api/market/watch': 'Market watch', '/api/today': 'Today', '/api/progress': 'Progress',
     '/api/grind': 'Grind', '/api/events': 'Events', '/api/deadeye': 'Deadeye', '/api/ocr': 'OCR',
-    '/api/leveling': 'Leveling'
+    '/api/leveling': 'Leveling', '/api/settings': 'Settings'
   };
 
   // One POST result (the ew:post bridge reply) -> one toast.
@@ -2832,6 +2963,16 @@
     ovServerRowHidden: ovServerRowHidden,
     validPost: validPost,
     POST_ROUTES: POST_ROUTES,
+    THEMES: THEMES,
+    SETTINGS_GROUPS: SETTINGS_GROUPS,
+    SETTINGS_KEYS: SETTINGS_KEYS,
+    validSettingsBody: validSettingsBody,
+    parseSettingInput: parseSettingInput,
+    settingInputText: settingInputText,
+    settingsBody: settingsBody,
+    settingsEffects: settingsEffects,
+    themeAttr: themeAttr,
+    uiScale: uiScale,
     fmtSilver: fmtSilver,
     fmtSilverExact: fmtSilverExact,
     SEARCH_DEBOUNCE_MS: SEARCH_DEBOUNCE_MS,

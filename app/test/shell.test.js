@@ -64,7 +64,9 @@ test('appCommit is read-only; restart is one allowlisted, sender-checked IPC', (
   const m = read('main.js');
   assert.match(pre, /appCommit: function \(\) \{ return APP_COMMIT; \}/);
   assert.match(pre, /ipcRenderer\.invoke\('ew:restart-server'\)/);
-  assert.strictEqual((pre.match(/ipcRenderer\.\w+\(/g) || []).length, 3, 'post + restart + notify only');
+  // plan 030 adds the two payload-free settings reloads (settings.test.js).
+  assert.strictEqual((pre.match(/ipcRenderer\.\w+\(/g) || []).length, 5,
+    'post + restart + notify + 2 reloads only');
   assert.match(m, /rev-parse', '--short', 'HEAD'/);
   assert.match(m, /windowsHide: true/);
   assert.match(m, /additionalArguments: \['--ew-app-commit=' \+ APP_COMMIT[,\]]/);
@@ -80,11 +82,14 @@ test('ew:notify is the one new allowlisted channel: sender-checked, validated, r
   const pre = read('preload.js');
   const m = read('main.js');
   const channels = (pre.match(/ipcRenderer\.\w+\('([^']+)'/g) || []).map((s) => s.replace(/^.*'([^']+)'$/, '$1')).sort();
-  assert.deepStrictEqual(channels, ['ew:notify', 'ew:post', 'ew:restart-server']);
+  // plan 030 adds the two payload-free settings reloads (settings.test.js).
+  assert.deepStrictEqual(channels, ['ew:notify', 'ew:post', 'ew:reload-overlay', 'ew:reload-shell',
+    'ew:restart-server']);
   assert.match(pre, /notify: function \(n\) \{ return ipcRenderer\.invoke\('ew:notify', n\); \}/);
   assert.match(pre, /notifyPrefs: function \(\) \{ return NOTIFY_ARG; \}/);
   const mainChannels = (m.match(/ipcMain\.(handle|on)\('([^']+)'/g) || []).map((s) => s.replace(/^.*'([^']+)'$/, '$1')).sort();
-  assert.deepStrictEqual(mainChannels, ['ew:notify', 'ew:overlay-size', 'ew:post', 'ew:restart-server']);
+  assert.deepStrictEqual(mainChannels, ['ew:notify', 'ew:overlay-size', 'ew:post', 'ew:reload-overlay',
+    'ew:reload-shell', 'ew:restart-server']);
   const h = m.slice(m.indexOf("ipcMain.handle('ew:notify'"), m.indexOf("ipcMain.handle('ew:notify'") + 900);
   assert.match(h, /event\.sender !== dashboard\.webContents/);
   assert.match(h, /core\.validNotify\(n\)/);
