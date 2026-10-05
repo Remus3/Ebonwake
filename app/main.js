@@ -4,6 +4,7 @@
 'use strict';
 
 const { app, BrowserWindow, globalShortcut, screen } = require('electron');
+const selftest = require('./selftest');
 const fs = require('fs');
 const path = require('path');
 const core = require('./shared/ewcore');
@@ -72,6 +73,13 @@ if (!app.requestSingleInstanceLock()) {
     createOverlay();
     globalShortcut.register(keys.toggleOverlay, toggleOverlay);
     globalShortcut.register(keys.showDashboard, showDashboard);
+    if (process.env.EW_SELFTEST) {
+      selftest.run({
+        app: app, dashboard: dashboard, overlay: overlay, keys: keys,
+        globalShortcut: globalShortcut, toggleOverlay: toggleOverlay,
+        out: process.env.EW_SELFTEST
+      });
+    }
   });
   app.on('will-quit', function () { globalShortcut.unregisterAll(); });
   app.on('window-all-closed', function () { /* overlay keeps the app alive */ });

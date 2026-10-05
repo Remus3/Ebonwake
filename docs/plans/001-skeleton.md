@@ -1,6 +1,6 @@
 # Plan 001 - Skeleton
 
-Status: in progress (2026-10-04). Lane: `build`.
+Status: done (2026-10-04). Lane: `build`.
 
 ## Goal
 
@@ -38,3 +38,25 @@ A runnable, tested shell for every moving part, so plans 002+ only add data.
 - `npx electron app` (after `npm install --prefix app`) shows the tabbed
   dashboard; `Ctrl+Alt+E` toggles a click-through overlay. (Desktop run-check;
   not CI.)
+
+## Desktop run-check (2026-10-04)
+
+`EW_SELFTEST=<out.json>` (optional `EW_SELFTEST_STAY=1`) runs `app/selftest.js`
+inside the real app: clicks every tab via `executeJavaScript`, measures page
+overflow, captures both windows, checks overlay corner alpha, focusability and
+`globalShortcut.isRegistered`, then toggles the overlay through the same
+handler the hotkey calls. It drives only EW's own windows.
+
+Result: 7/7 tabs switch and fit (content 1264x761, scroll == client), both
+hotkeys registered, toggle flips visibility, overlay corner alpha 0, native
+ex-style `0x8080028` = NOACTIVATE | LAYERED | TRANSPARENT | TOPMOST
+(click-through). Defect found and fixed: `html` painted `--fk-surface`, making
+the overlay opaque; the root now carries `class="ew-overlay"` with a
+transparent background (guarded by `app/test/shell.test.js`).
+
+A physical Ctrl+Alt+E press was not sent this session (BDO running, desktop
+input interrupted); registration + handler toggle are verified instead. The
+operator's in-game check stays in the hand-off.
+
+Launcher: `tools/launch.py` (server if unhealthy, then Electron, no console);
+the Desktop shortcut "Ebonwake" runs it with pythonw.

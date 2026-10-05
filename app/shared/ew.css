@@ -54,7 +54,7 @@ html, body {
 .ew-muted { color: var(--fk-text-muted); }
 
 /* Overlay: glanceable, corner-anchored, translucent. */
-.ew-overlay body, body.ew-overlay { background: transparent; }
+html.ew-overlay, html.ew-overlay body { background: transparent; }
 .ew-ov {
   margin: 0; padding: 8px 10px; border-radius: var(--ew-radius);
   background: color-mix(in srgb, var(--fk-surface) 72%, transparent);
