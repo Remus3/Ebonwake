@@ -203,8 +203,9 @@ EW channel code: `EW`. Kit: v8, vendored at `ops/fleet_kit/`. Kit conformance:
    line (no note), ORDER / FIX / RULING escalate to a lane item and are
    answered after merge, everything else gets one sonnet low-effort bare
    triage spawn (kind `triage`). At most `loop.max_notes_per_day` (6, the kit
-   cap; ORDER / FIX / RULING answers exempt) outbound notes a local day; every
-   reply carries `HOP: <n>`. A session still reads the inbox at start (FLEET
+   cap; only notes whose own class is ORDER / FIX / RULING are exempt, so
+   order-closing ANSWERs count) outbound notes a local day; every reply
+   carries `HOP: <n>`. A session still reads the inbox at start (FLEET
    item 5).
 3. IDLE DEEP-DIVE, SELF-CONTINUING: when no ROADMAP row or hand-off item is
    open and nothing is in flight, the tick runs one deep-dive lane per day (BDO

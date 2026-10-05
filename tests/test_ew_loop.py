@@ -172,7 +172,8 @@ def test_inbox_baseline_then_one_answer_per_note(tmp_path):
     (inbox / "old-from-MAIN-ORDER-x.md").write_text("# From MAIN - ORDER\nold\n")
     root = make_root(tmp_path, roadmap="", handoff="",
                      local={"loop": {"inbox_dir": str(inbox), "outbox_dir": str(outbox)}})
-    sp = FakeSpawn([{"rc": 0, "error": None, "result": "# From EW - ANSWER\nyes " + chr(0x2014) + " ok"}])
+    sp = FakeSpawn([{"rc": 0, "error": None,
+                     "result": "VERDICT: ANSWER\nyes " + chr(0x2014) + " ok"}])
     d = deps(root, spawn=sp)
     ew_loop.tick(deps=d, no_push=True)  # baseline: history is not news
     assert [c for c in sp.calls if c.get("note", "").endswith(".md")] == []
@@ -183,13 +184,18 @@ def test_inbox_baseline_then_one_answer_per_note(tmp_path):
     inbox_calls = [c for c in sp.calls if c.get("note", "").endswith(".md")]
     assert [c["note"] for c in inbox_calls] == ["n1-from-MAIN-QUESTION-y.md"]
     c = inbox_calls[0]
-    assert c["model"] == "sonnet" and c["effort"] == "low" and c["writes_code"] is False
+    # kit v8 item 14 b: one triage spawn, sonnet, effort low, bare, kind triage
+    assert c["model"] == "sonnet" and c["effort"] == "low" and c["bare"] is True
+    assert c["kind"] == "triage" and c["writes_code"] is False
     assert "governor" not in c and c["stdin"] is True
-    replies = list(outbox.glob("*-from-EW-ANSWER-re-n1-from-MAIN-QUESTION-y.md"))
+    replies = list(outbox.glob("*-from-EW-ANSWER-to-MAIN-*.md"))
     assert len(replies) == 1
-    assert replies[0].read_bytes().decode("ascii").endswith("yes - ok\n")
+    text = replies[0].read_bytes().decode("ascii")
+    assert "HOP: 2" in text and "yes - ok" in text and "n1-from-MAIN-QUESTION-y.md" in text
     ew_loop.tick(deps=d, no_push=True)  # re-run is a no-op
     assert len([c for c in sp.calls if c.get("note", "").endswith(".md")]) == 1
+    seen = (root / "ops/loop/control/inbox_seen.jsonl").read_text()
+    assert "n1-from-MAIN-QUESTION-y.md" in seen and "n3-from-MAIN-INFORMATION-w.md" in seen
 
 
 def test_inbox_failed_answer_is_reoffered(tmp_path):
@@ -199,7 +205,7 @@ def test_inbox_failed_answer_is_reoffered(tmp_path):
     root = make_root(tmp_path, roadmap="", handoff="",
                      local={"loop": {"inbox_dir": str(inbox), "outbox_dir": str(outbox)}})
     sp = FakeSpawn([{"rc": 1, "error": "boom", "result": None},
-                    {"rc": 0, "error": None, "result": "fine"}])
+                    {"rc": 0, "error": None, "result": "VERDICT: ANSWER\nfine"}])
     d = deps(root, spawn=sp)
     ew_loop.tick(deps=d, no_push=True)
     (inbox / "a-from-MAIN-QUESTION-q.md").write_text("# From MAIN - QUESTION\ndo\n")
@@ -207,6 +213,24 @@ def test_inbox_failed_answer_is_reoffered(tmp_path):
     assert not list(outbox.iterdir())
     ew_loop.tick(deps=d, no_push=True)
     assert len(list(outbox.iterdir())) == 1
+
+
+def test_triage_noreply_or_ack_writes_no_note(tmp_path):
+    inbox, outbox = tmp_path / "in", tmp_path / "out"
+    inbox.mkdir()
+    outbox.mkdir()
+    root = make_root(tmp_path, roadmap="", handoff="",
+                     local={"loop": {"inbox_dir": str(inbox), "outbox_dir": str(outbox)}})
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: NOREPLY"},
+                    {"rc": 0, "error": None, "result": "no verdict at all"}])
+    d = deps(root, spawn=sp)
+    ew_loop.tick(deps=d, no_push=True)
+    (inbox / "a-from-MAIN-QUESTION-q.md").write_text("# From MAIN - QUESTION\nq\n")
+    (inbox / "b-from-SS-PROPOSAL-p.md").write_text("# From SS - PROPOSAL\np\n")
+    ew_loop.tick(deps=d, no_push=True)
+    assert not list(outbox.iterdir()) and len(sp.calls) == 2
+    ew_loop.tick(deps=d, no_push=True)
+    assert len(sp.calls) == 2
 
 
 def _inbox_root(tmp_path, roadmap="", local_extra=None):
@@ -239,31 +263,73 @@ def test_order_note_escalates_to_lane_item_then_answers_after_merge(tmp_path):
     ew_loop.tick(deps=d, no_push=True)
     calls = [c for c in sp.calls if c.get("note") == name]
     assert len(calls) == 1 and "abc123" in calls[0]["prompt"]
-    assert len(list(outbox.glob("*-re-b-from-MAIN-ORDER-to-EW-harden.md"))) == 1
+    assert calls[0]["kind"] == "inbox"
+    replies = list(outbox.glob("*-re-b-from-MAIN-ORDER-to-EW-harden.md"))
+    assert len(replies) == 1
+    lines = replies[0].read_text().splitlines()
+    assert lines[0] == "# From EW - ANSWER" and lines[1] == "HOP: 2"
     ew_loop.tick(deps=d, no_push=True)
     assert len([c for c in sp.calls if c.get("note") == name]) == 1
 
 
 def test_daily_note_cap_defers_answers(tmp_path):
     root, inbox, outbox = _inbox_root(tmp_path, local_extra={"max_notes_per_day": 1})
-    sp = FakeSpawn([{"rc": 0, "error": None, "result": "ok"}] * 3)
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: ANSWER\nok"}] * 3)
     d = deps(root, spawn=sp)
     ew_loop.tick(deps=d, no_push=True)
     (inbox / "q1-from-MAIN-QUESTION-a.md").write_text("q1\n")
-    (inbox / "q2-from-MAIN-QUESTION-b.md").write_text("q2\n")
-    ew_loop.tick(deps=d, no_push=True)  # two answers, one destination: ONE note
-    assert len(list(outbox.iterdir())) == 1
-    (inbox / "q3-from-MAIN-QUESTION-c.md").write_text("q3\n")
+    (inbox / "q2-from-SS-QUESTION-b.md").write_text("q2\n")
     doc = ew_loop.tick(deps=d, no_push=True)
     assert len(list(outbox.iterdir())) == 1
     assert any("daily note cap 1" in s for s in doc["log"])
-    assert len(sp.calls) == 2  # the capped note is not even triaged
+    assert any("1 capped" in s for s in doc["log"])
+    assert not any("deliver-failed" in s for s in doc["log"])
 
 
-def test_default_cap_is_six_and_config_cannot_raise_it(tmp_path):
-    root, _, _ = _inbox_root(tmp_path, local_extra={"max_notes_per_day": 40})
-    assert ew_loop.Tick(deps(root)).cap.cap == 6
+def test_answers_to_one_destination_batch_into_one_note(tmp_path):
+    root, inbox, outbox = _inbox_root(tmp_path)
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: ANSWER\nfirst"},
+                    {"rc": 0, "error": None, "result": "VERDICT: ANSWER\nsecond"}])
+    d = deps(root, spawn=sp)
+    ew_loop.tick(deps=d, no_push=True)
+    (inbox / "q1-from-MAIN-QUESTION-a.md").write_text("# From MAIN - QUESTION\nq1\n")
+    (inbox / "q2-from-MAIN-QUESTION-b.md").write_text("# From MAIN - QUESTION\nq2\n")
+    ew_loop.tick(deps=d, no_push=True)
+    notes = list(outbox.iterdir())
+    assert len(notes) == 1
+    body = notes[0].read_text()
+    assert "first" in body and "second" in body and "HOP: 2" in body
+    ledger = (root / "ops/loop/control/outbound_notes.jsonl").read_text().splitlines()
+    assert len(ledger) == 1 and json.loads(ledger[0])["parts"] == 2
+
+
+def test_max_notes_default_is_kit_cap_and_config_cannot_raise_it(tmp_path):
     assert ew_loop.load_config(tmp_path)["max_notes_per_day"] == 6
+    root = make_root(tmp_path, local={"loop": {"max_notes_per_day": 12}})
+    assert ew_loop.load_config(root)["max_notes_per_day"] == 6
+    root2 = make_root(tmp_path / "b", local={"loop": {"max_notes_per_day": 2}})
+    assert ew_loop.load_config(root2)["max_notes_per_day"] == 2
+
+
+def test_order_answer_respects_slot_held_by_a_batch(tmp_path):
+    # verifier r1 finding 2: the order answer must not take the slot a batch holds
+    root, inbox, outbox = _inbox_root(tmp_path, roadmap=ROADMAP,
+                                      local_extra={"max_notes_per_day": 1})
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: ANSWER\nq answer"},
+                    {"rc": 0, "error": None, "result": "# From EW - ANSWER\ndone"}])
+    d = deps(root, spawn=sp)
+    ew_loop.tick(deps=d, no_push=True)
+    order = "o-from-MAIN-ORDER-to-EW-x.md"
+    (inbox / "a-from-MAIN-QUESTION-q.md").write_text("# From MAIN - QUESTION\nq\n")
+    (inbox / order).write_text("# From MAIN - ORDER\ndo\n")
+    rec = {"id": ew_loop.order_id(order), "kind": "order", "state": "merged",
+           "commit": "c0ffee", "verdict": "PASS", "rounds": 0, "title": order}
+    ew_loop.Items(root).put(rec)
+    doc = ew_loop.tick(deps=d, no_push=True)
+    assert len(list(outbox.iterdir())) == 1
+    line = [s for s in doc["log"] if s.startswith("inbox:")][-1]
+    assert "deliver-failed" not in line and "1 capped" in line
+    assert [c.get("note") for c in sp.calls] == ["a-from-MAIN-QUESTION-q.md"]
 
 
 def test_ack_class_and_hop_limit_are_ledger_lines_not_notes(tmp_path):
@@ -276,73 +342,68 @@ def test_ack_class_and_hop_limit_are_ledger_lines_not_notes(tmp_path):
     (inbox / "c-from-MAIN-QUESTION-z.md").write_text("# From MAIN - QUESTION\nHOP: 2\nq?\n")
     doc = ew_loop.tick(deps=d, no_push=True)
     assert sp.calls == [] and not list(outbox.iterdir())
-    assert sum("inbox ack (ledger, no note)" in s for s in doc["log"]) == 3
-    ledger = (root / "ops/loop/control/inbox_ledger.jsonl").read_text().splitlines()
-    assert [json.loads(x)["action"] for x in ledger] == ["ack"] * 3
+    assert sum(s.startswith("inbox ack") for s in doc["log"]) == 3
+    seen = (root / "ops/loop/control/inbox_seen.jsonl").read_text().splitlines()
+    assert [json.loads(x)["action"] for x in seen] == ["ack"] * 3
 
 
-def test_triage_is_sonnet_low_bare_kind_triage_and_noreply_writes_nothing(tmp_path):
+def test_ack_quoting_an_order_name_is_not_escalated(tmp_path):
+    # verifier r2: escalation follows classify(), not an -ORDER- token anywhere
+    root, inbox, outbox = _inbox_root(tmp_path, roadmap=ROADMAP)
+    sp = FakeSpawn()
+    d = deps(root, spawn=sp)
+    ew_loop.tick(deps=d, no_push=True)
+    for name in ("a-from-MAIN-ACK-re-b-from-EW-ANSWER-re-c-from-MAIN-ORDER-to-EW-x.md",
+                 "d-from-MAIN-ANSWER-re-e-FIX-plan.md"):
+        (inbox / name).write_text("# From MAIN - ACK\nseen\n")
+    doc = ew_loop.tick(deps=d, no_push=True)
+    assert sp.calls == [] and not list(outbox.iterdir())
+    assert not (root / "ops/loop/control/loop_orders.json").exists()
+    assert sum(s.startswith("inbox ack") for s in doc["log"]) == 2
+
+
+def test_note_settled_by_pre_v8_ledger_is_not_retriaged(tmp_path):
     root, inbox, outbox = _inbox_root(tmp_path)
-    sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: NOREPLY"},
-                    {"rc": 0, "error": None,
-                     "result": "VERDICT: ANSWER\n# From EW - ANSWER re q\nport 8940"}])
+    sp = FakeSpawn()
     d = deps(root, spawn=sp)
     ew_loop.tick(deps=d, no_push=True)
-    (inbox / "p-from-MAIN-STATUS-a.md").write_text("# From MAIN - STATUS\nfyi\n")
+    (root / "ops/loop/control/inbox_ledger.jsonl").write_text(
+        json.dumps({"note": "q-from-MAIN-QUESTION-a.md", "action": "ack"}) + "\n")
+    (inbox / "q-from-MAIN-QUESTION-a.md").write_text("# From MAIN - QUESTION\nq\n")
     ew_loop.tick(deps=d, no_push=True)
-    c = sp.calls[0]
-    assert (c["model"], c["effort"], c["bare"], c["kind"]) == ("sonnet", "low", True, "triage")
-    assert "VERDICT: NOREPLY" in c["prompt"] and not list(outbox.iterdir())
-    (inbox / "q-from-MAIN-QUESTION-b.md").write_text("# From MAIN - QUESTION\nport?\n")
-    ew_loop.tick(deps=d, no_push=True)
-    (reply,) = outbox.iterdir()
-    text = reply.read_text()
-    assert text.splitlines()[:2] == ["# From EW - ANSWER re q", "HOP: 2"]
-    assert "VERDICT" not in text and text.endswith("port 8940\n")
+    assert sp.calls == []
 
 
-def test_batch_note_one_per_destination(tmp_path):
-    root, inbox, outbox = _inbox_root(tmp_path)
-    sp = FakeSpawn([{"rc": 0, "error": None, "result": "# From EW - ANSWER re a\none"},
-                    {"rc": 0, "error": None, "result": "# From EW - ANSWER re b\ntwo"}])
-    d = deps(root, spawn=sp)
-    ew_loop.tick(deps=d, no_push=True)
-    (inbox / "a-from-MAIN-QUESTION-a.md").write_text("q\n")
-    (inbox / "b-from-MAIN-QUESTION-b.md").write_text("q\n")
-    ew_loop.tick(deps=d, no_push=True)
-    (note,) = outbox.iterdir()
-    assert "-from-EW-ANSWER-to-MAIN-batch-" in note.name
-    text = note.read_text()
-    assert text.startswith("# From EW - ANSWER to MAIN (batch of 2)\nHOP: 2\n")
-    assert "## re a-from-MAIN-QUESTION-a.md" in text and "two" in text
-    ew_loop.tick(deps=d, no_push=True)  # ledger: no re-answer
-    assert len(sp.calls) == 2 and len(list(outbox.iterdir())) == 1
+def test_default_cap_reaches_the_kit_outbound_cap(tmp_path):
+    root, _, _ = _inbox_root(tmp_path, local_extra={"max_notes_per_day": 40})
+    assert ew_loop.Tick(deps(root)).cap.cap == 6
 
 
-def test_order_answer_is_exempt_from_cap_and_carries_hop(tmp_path):
-    root, inbox, outbox = _inbox_root(tmp_path, local_extra={"max_notes_per_day": 1})
-    cap = ew_loop.ew_inbox.OutboundCap(root, 1)
-    cap.record("ANSWER", "MAIN", "earlier", 1_790_000_000.0)
-    sp = FakeSpawn([{"rc": 0, "error": None, "result": "# From EW - ANSWER\ndone"}])
-    d = deps(root, spawn=sp)
-    ew_loop.tick(deps=d, no_push=True)
-    name = "o-from-MAIN-ORDER-to-EW-x.md"
-    (inbox / name).write_text("# From MAIN - ORDER\nHOP: 1\ndo\n")
-    ew_loop.tick(deps=d, no_push=True)
-    rec = ew_loop.Items(root).get(ew_loop.order_id(name))
-    rec.update(state="merged", commit="c0ffee", verdict="PASS", rounds=1)
-    ew_loop.Items(root).put(rec)
-    ew_loop.tick(deps=d, no_push=True)
-    (reply,) = outbox.glob("*-re-o-from-MAIN-ORDER-to-EW-x.md")
-    assert reply.read_text().splitlines()[1] == "HOP: 2"
-    assert [c["kind"] for c in sp.calls if c.get("note") == name] == ["inbox"]
-
-
-def test_lane_review_and_fix_spawns_are_kind_build(tmp_path):
+def test_unlabelled_tick_spawns_are_kind_build(tmp_path):
     sp = FakeSpawn()
     t = ew_loop.Tick(deps(make_root(tmp_path), spawn=sp))
     t.spawn("p", note="lane-review-x", writes_code=False)
     assert sp.calls[-1]["kind"] == "build"
+
+
+def test_pending_orders_are_not_delivery_failures_and_handled_notes_stay_handled(tmp_path):
+    # 2026-10-05: loop.json read "inbox: deliver-failed 2 2 pending" - two ORDERs
+    # waiting for their lane items. Pending is by design; the label was wrong,
+    # and every other note of the re-offered batch was processed again each tick.
+    root, inbox, outbox = _inbox_root(tmp_path, roadmap=ROADMAP)
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: ACK"}] * 5)
+    d = deps(root, spawn=sp)
+    ew_loop.tick(deps=d, no_push=True)  # baseline
+    (inbox / "o-from-MAIN-ORDER-to-EW-x.md").write_text("# From MAIN - ORDER\nwork\n")
+    (inbox / "q-from-MAIN-QUESTION-y.md").write_text("# From MAIN - QUESTION\nq\n")
+    doc = ew_loop.tick(deps=d, no_push=True)
+    line = [s for s in doc["log"] if s.startswith("inbox:")][-1]
+    assert "deliver-failed" not in line and "1 order(s) awaiting lane" in line
+    triage = [c for c in sp.calls if c.get("note") == "q-from-MAIN-QUESTION-y.md"]
+    assert len(triage) == 1
+    ew_loop.tick(deps=d, no_push=True)  # the order is still pending
+    triage = [c for c in sp.calls if c.get("note") == "q-from-MAIN-QUESTION-y.md"]
+    assert len(triage) == 1  # never re-triaged
 
 
 def test_priority_rows_dispatch_first(tmp_path):
@@ -438,17 +499,22 @@ def test_dry_run_spawns_and_launches_nothing(tmp_path):
 # ---------------------------------------------------------------- checklist
 
 def test_checklist_lines(tmp_path):
+    # FLEET item 13 d (kit v7/v8): remaining tasks as {id, task, state, eta_s}
     root = make_root(tmp_path)
     d = deps(root)
     doc = ew_loop.tick(deps=d, no_push=True)
     cl = doc["checklist"]
-    assert cl[-1] == "[ ] /done"
-    assert cl[0] == "[ ] 012: Grind spot recommender (dispatched, ~45m)"
-    assert any(line.endswith("(operator-only, skipped)") for line in cl)
-    assert any("(other-tree-only, skipped)" in line for line in cl)
-    for line in cl:
-        line.encode("ascii")
-        assert re.match(r"^\[[ x]\] \S+", line)
+    assert all(set(r) == {"id", "task", "state", "eta_s"} for r in cl)
+    assert cl[0] == {"id": "012", "task": "Grind spot recommender", "state": "dispatched",
+                     "eta_s": 2700}
+    assert any(r["state"] == "operator-only, skipped" for r in cl)
+    assert any(r["state"] == "other-tree-only, skipped" for r in cl)
+    assert len(cl) <= 20 and doc["fire"] == 1
+    assert ew_loop.tick(deps=d, no_push=True)["fire"] == 2
+    block = ew_loop.render_checklist(progress(root))
+    lines = block.splitlines()
+    assert lines[0] == "Session 2 checklist" and lines[-1] == chr(0x2610) + " /done"
+    assert lines[1] == chr(0x2610) + " 012: Grind spot recommender (dispatched, ~45m)"
     raw = (root / "ops/loop/control/progress/loop.json").read_bytes()
     raw.decode("ascii")
     st = json.loads((root / "ops/loop/control/inbox_status.json").read_text())
