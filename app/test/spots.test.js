@@ -17,7 +17,7 @@ test('spotsPath: goal plus optional what-if, blank = Progress character', () => 
     { ok: true, path: '/api/spots?goal=xp&ap=0&dp=999&level=70' });
   assert.deepStrictEqual(C.SPOT_GOALS, ['xp', 'silver']);
   for (const bad of [['fun', {}], ['xp', { ap: '1000' }], ['xp', { dp: '-1' }], ['xp', { level: '0' }],
-    ['xp', { level: '71' }], ['xp', { ap: '2.5' }], ['xp', { ap: 'x' }], [undefined, {}]]) {
+    ['xp', { level: '76' }], ['xp', { ap: '2.5' }], ['xp', { ap: 'x' }], [undefined, {}]]) {
     const r = C.spotsPath(bad[0], bad[1]);
     assert.strictEqual(r.ok, false, JSON.stringify(bad));
     assert.strictEqual(typeof r.error, 'string');

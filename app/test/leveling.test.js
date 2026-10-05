@@ -13,7 +13,7 @@ const read = (p) => fs.readFileSync(path.join(APP, p), 'utf8');
 
 test('validLevelingBody: exact shapes for every op', () => {
   const ok = [
-    { sample: { level: 52, pct: 37.512 } }, { sample: { level: 1, pct: 0 } }, { sample: { level: 70, pct: 100 } },
+    { sample: { level: 52, pct: 37.512 } }, { sample: { level: 1, pct: 0 } }, { sample: { level: 75, pct: 100 } },
     { sample_del: '2026-10-05T12:00:00+00:00' },
     { hot_add: { days: [0, 6], start: '22:00', end: '02:00', label: 'Hot Time', pct: 50 } },
     { hot_add: { days: [3], start: '00:00', end: '23:59', label: 'x', pct: 1000 } },
@@ -23,7 +23,7 @@ test('validLevelingBody: exact shapes for every op', () => {
   const hot = { days: [0], start: '11:00', end: '12:00', label: 'a', pct: 5 };
   const bad = [
     null, [], 'x', {}, { bogus: 1 }, { sample: { level: 52, pct: 1 }, hot_del: 'h1' },
-    { sample: { level: 0, pct: 1 } }, { sample: { level: 71, pct: 1 } }, { sample: { level: 52, pct: 100.5 } },
+    { sample: { level: 0, pct: 1 } }, { sample: { level: 76, pct: 1 } }, { sample: { level: 52, pct: 100.5 } },
     { sample: { level: 52, pct: -1 } }, { sample: { level: 52, pct: 1.2345 } }, { sample: { level: 52.5, pct: 1 } },
     { sample: { level: 52, pct: '1' } }, { sample: { level: 52 } }, { sample: { level: 52, pct: 1, x: 1 } },
     { sample: { level: 52, pct: NaN } }, { sample_del: '' }, { sample_del: 5 },
@@ -33,7 +33,7 @@ test('validLevelingBody: exact shapes for every op', () => {
     { hot_add: Object.assign({}, hot, { end: '11:00' }) }, { hot_add: Object.assign({}, hot, { label: '' }) },
     { hot_add: Object.assign({}, hot, { label: 'x'.repeat(41) }) }, { hot_add: Object.assign({}, hot, { pct: 1001 }) },
     { hot_add: Object.assign({}, hot, { pct: 1.5 }) }, { hot_add: Object.assign({}, hot, { x: 1 }) },
-    { milestones: [0] }, { milestones: [71] }, { milestones: [50, 50] }, { milestones: 'x' },
+    { milestones: [0] }, { milestones: [76] }, { milestones: [50, 50] }, { milestones: 'x' },
     { milestones: Array.from({ length: 21 }, (_, i) => i + 1) }
   ];
   for (const b of bad) assert.strictEqual(C.validLevelingBody(b), false, JSON.stringify(b));
@@ -53,8 +53,8 @@ test('parseSampleForm: "52" + "37.512" -> body; operator errors otherwise', () =
     { ok: true, body: { sample: { level: 52, pct: 37.512 } } });
   assert.deepStrictEqual(C.parseSampleForm({ level: ' 52 ', pct: '37,5%' }),
     { ok: true, body: { sample: { level: 52, pct: 37.5 } } });
-  assert.deepStrictEqual(C.parseSampleForm({ level: '70', pct: '100' }).body, { sample: { level: 70, pct: 100 } });
-  for (const f of [{ level: '', pct: '1' }, { level: '71', pct: '1' }, { level: '52', pct: '' },
+  assert.deepStrictEqual(C.parseSampleForm({ level: '75', pct: '100' }).body, { sample: { level: 75, pct: 100 } });
+  for (const f of [{ level: '', pct: '1' }, { level: '76', pct: '1' }, { level: '52', pct: '' },
     { level: '52', pct: '100.1' }, { level: '52', pct: '1.2345' }, { level: '52', pct: 'abc' }, {}]) {
     const r = C.parseSampleForm(f);
     assert.strictEqual(r.ok, false, JSON.stringify(f));

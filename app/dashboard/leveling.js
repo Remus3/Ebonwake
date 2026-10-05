@@ -114,7 +114,17 @@
       'Lv ' + d.level + '  ' + d.pct + '%';
     ui.rate.textContent = C.fmtRate(d.rate_pct_h);
     ui.eta.textContent = d.eta_next_s === null ? '-' : C.fmtEta(d.eta_next_s - since);
-    ui.mile.textContent = d.next_milestone === null ? '-' : 'Lv ' + d.next_milestone + (d.milestones_seed ? ' (seed, verify)' : '');
+    ui.mile.textContent = d.next_milestone === null ? '-' : 'Lv ' + d.next_milestone +
+      (d.next_milestone_label ? ' ' + d.next_milestone_label : '') + (d.milestones_seed ? ' (seed, verify)' : '');
+    // Plan 018: the XP patch epoch the rate is measured from, and the per-kill
+    // XP cap of the current level band (info only, no prediction).
+    const ep = d.epoch_next || d.epoch;
+    ui.epoch.textContent = d.epoch_error ? 'epoch table: ' + d.epoch_error :
+      (ep ? 'XP patch: ' + C.epochText(Object.assign({}, ep, { starts_in_s: ep.starts_in_s - since })) +
+        (d.epoch ? ' - rate from post-patch samples' : '') : '');
+    ui.epoch.hidden = !ui.epoch.textContent;
+    ui.cap.textContent = d.kill_xp_cap ? 'Lv ' + d.level + ': ' + d.kill_xp_cap : '';
+    ui.cap.hidden = !d.kill_xp_cap;
     const h = C.hotLive(d.hot, d.xp_stack_pct, S.at, now);
     if (h.active.length) {
       const a = h.active[0];
@@ -157,12 +167,32 @@
     });
     if (!ui.mdirty) ui.miles.value = d.milestones.join(', ');
     ui.seed.hidden = !d.milestones_seed;
+    ui.mlabels.textContent = d.milestones.filter(function (m) { return typeof d.milestone_labels[String(m)] === 'string'; })
+      .map(function (m) { return m + ' ' + d.milestone_labels[String(m)]; }).join(', ');
+    ui.epochs.textContent = '';
+    d.epochs.forEach(function (e) {
+      const r = el('div', 'ew-lrow');
+      const t = el('button', 'ew-tx ew-mname', e.label);
+      t.type = 'button';
+      t.title = 'edit: ' + e.id + (e.source ? ' - ' + e.source : '');
+      t.addEventListener('click', function () { fillEpoch(e); });
+      r.appendChild(t);
+      r.appendChild(el('span', 'ew-muted ew-gnum', e.starts_utc.slice(0, 16).replace('T', ' ') + ' UTC'));
+      r.appendChild(el('span', 'ew-muted', e.verified ? 'verified' : 'verify'));
+      const x = el('button', 'ew-tx', 'x');
+      x.type = 'button';
+      x.title = 'delete epoch';
+      x.addEventListener('click', function () { send({ epoch_del: e.id }, 'epoch deleted'); });
+      r.appendChild(x);
+      ui.epochs.appendChild(r);
+    });
     d.samples.forEach(function (s) {
       if (typeof s.ts !== 'string') return;
-      const r = el('div', 'ew-lrow');
+      const r = el('div', 'ew-lrow' + (s.pre_patch === true ? ' ew-stale' : ''));
       r.appendChild(el('span', 'ew-muted ew-gnum', s.ts.slice(5, 16).replace('T', ' ')));
       r.appendChild(el('span', 'ew-mprice ew-gnum', 'Lv ' + s.level));
       r.appendChild(el('span', 'ew-mprice ew-gnum', s.pct + '%'));
+      if (s.pre_patch === true) r.appendChild(el('span', 'ew-muted', 'pre-patch'));
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';
       x.title = 'delete sample';
@@ -170,6 +200,16 @@
       r.appendChild(x);
       ui.samples.appendChild(r);
     });
+  }
+
+  function fillEpoch(e) {
+    const f = S.ui.ep;
+    f.id.value = e.id;
+    f.start.value = e.starts_utc.slice(0, 16).replace('T', ' ');
+    f.label.value = e.label;
+    f.source.value = e.source;
+    f.verified.checked = e.verified;
+    msg('editing epoch ' + e.id + ' - fix the date, tick verified, Save');
   }
 
   function draw() {
@@ -199,7 +239,7 @@
 
   function editor(ui) {
     const det = el('details', 'ew-ldet');
-    det.appendChild(el('summary', 'ew-muted', 'Hot Time windows, milestones, samples'));
+    det.appendChild(el('summary', 'ew-muted', 'Hot Time windows, milestones, XP patch epochs, samples'));
     ui.wins = el('div', 'ew-list');
     det.appendChild(ui.wins);
     // Add window: day toggles + UTC times + label + pct, one compact block.
@@ -248,8 +288,38 @@
       send(r.body, 'milestones saved').then(function (ok) { if (ok) ui.mdirty = false; });
     });
     det.appendChild(mf);
-    ui.seed = el('div', 'ew-muted ew-lnote', 'seed, verify against the current season notice');
+    ui.seed = el('div', 'ew-muted ew-lnote', 'seed, verify against the current patch notes');
     det.appendChild(ui.seed);
+    ui.mlabels = el('div', 'ew-muted ew-lnote', '');
+    det.appendChild(ui.mlabels);
+    // XP patch epochs (plan 018): the rate counts only samples since the newest
+    // started one. Click a row to correct it (same id), x deletes it.
+    det.appendChild(el('div', 'ew-muted ew-lnote', 'XP patch epochs (UTC)'));
+    ui.epochs = el('div', 'ew-list');
+    det.appendChild(ui.epochs);
+    const ef = el('form', 'ew-lform');
+    ui.ep = {
+      id: input('ew-lnum', 40, 'id', 'epoch id (blank = from label; an existing id corrects it)'),
+      start: input('ew-lname', 16, 'YYYY-MM-DD HH:MM', 'live maintenance end, UTC'),
+      label: input('ew-lname', 40, 'label', 'label, e.g. Lv 75 patch'),
+      source: input('ew-lname', 200, 'source', 'where the date comes from (patch notes)')
+    };
+    ['id', 'start', 'label', 'source'].forEach(function (k) { ef.appendChild(ui.ep[k]); });
+    const vlab = el('label', 'ew-lday');
+    ui.ep.verified = el('input');
+    ui.ep.verified.type = 'checkbox';
+    vlab.appendChild(ui.ep.verified);
+    vlab.appendChild(el('span', null, 'verified'));
+    ef.appendChild(vlab);
+    ef.appendChild(button('Save', 'submit'));
+    ef.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      const r = C.parseEpochForm({ id: ui.ep.id.value, start: ui.ep.start.value, label: ui.ep.label.value,
+        source: ui.ep.source.value, verified: ui.ep.verified.checked });
+      if (!r.ok) { msg(r.error); return; }
+      send(r.body, 'epoch saved');
+    });
+    det.appendChild(ef);
     det.appendChild(el('div', 'ew-muted ew-lnote', 'recent samples'));
     ui.samples = el('div', 'ew-list');
     det.appendChild(ui.samples);
@@ -266,7 +336,7 @@
     const ui = { card: c, pill: pill, mdirty: false };
     // Quick entry: level + XP %, Enter submits.
     const q = el('form', 'ew-lform');
-    const lvl = input('ew-lnum', 2, 'Lv', 'level 1-70');
+    const lvl = input('ew-lnum', 2, 'Lv', 'level 1-' + C.LEVEL_MAX);
     lvl.inputMode = 'numeric';
     const pct = input('ew-lnum', 8, 'XP %', 'XP % 0-100, up to 3 decimals');
     pct.inputMode = 'decimal';
@@ -289,6 +359,12 @@
     ui.hot = stat(kv, 'Hot Time');
     ui.stack = stat(kv, 'XP stack');
     body.appendChild(kv);
+    ui.epoch = el('div', 'ew-muted ew-lnote', '');
+    ui.epoch.hidden = true;
+    body.appendChild(ui.epoch);
+    ui.cap = el('div', 'ew-muted ew-lnote', '');
+    ui.cap.hidden = true;
+    body.appendChild(ui.cap);
     ui.msg = el('div', 'ew-muted ew-msg', '');
     body.appendChild(ui.msg);
     body.appendChild(editor(ui));

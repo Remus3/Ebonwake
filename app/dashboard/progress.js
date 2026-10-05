@@ -480,7 +480,7 @@
     gsRow.appendChild(f.gs);
     body.appendChild(gsRow);
     const form = el('form', 'ew-form ew-cform');
-    f.level = field(form, 'level', numInput(70), 'level');
+    f.level = field(form, 'level', numInput(C.LEVEL_MAX), 'level');
     f.ap = field(form, 'AP', numInput(999), 'ap');
     f.aap = field(form, 'AAP', numInput(999), 'aap');
     f.dp = field(form, 'DP', numInput(999), 'dp');

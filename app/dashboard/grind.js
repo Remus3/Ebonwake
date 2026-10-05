@@ -10,7 +10,7 @@
   const POLL_MS = 60000;
   const S = {
     data: null, at: 0, err: null, last: null, timer: null, ui: null, busy: false,
-    spot: null, buffMin: {},
+    spot: null, buffMin: {}, preset: undefined, presetMin: '',
     // Plan 012 "Where next": GET /api/spots, refetched with each grind poll.
     recs: null, recsErr: null, goal: 'xp', whatIf: { ap: '', dp: '', level: '' }
   };
@@ -273,6 +273,12 @@
       xp.title = 'XP bonus % (0-1000, optional; counted in the Leveling XP stack)';
       xp.value = typeof row.xp_pct === 'number' ? String(row.xp_pct) : '';
       r.appendChild(xp);
+      // Plan 018: a preset-named buff still on its pre-patch xp% (never rewritten).
+      if (row.xp_hint) {
+        const h = el('span', 'ew-muted', row.xp_hint);
+        h.title = 'the Lv 75 patch changed this buff; check its XP % in game';
+        r.appendChild(h);
+      }
       const go = el('button', 'ew-btn ew-bbtn', row.left_s === null ? 'arm' : 're-arm');
       go.type = 'button';
       go.addEventListener('click', function () { arm(row, min, xp); });
@@ -287,6 +293,46 @@
       box.appendChild(r);
     });
     ui.buffBody.appendChild(box);
+    drawPresets();
+  }
+
+  // Plan 018 XP buff presets: pick one, set minutes, arm (name + xp% filled).
+  function drawPresets() {
+    const ui = S.ui;
+    const list = C.xpPresets(S.data);
+    if (!list.length) return;
+    const f = el('form', 'ew-brow');
+    const sel = el('select');
+    list.forEach(function (p, i) {
+      const o = el('option', null, p.name + ' +' + p.xp_pct + '%');
+      o.value = String(i);
+      o.title = p.title;
+      sel.appendChild(o);
+    });
+    sel.title = 'XP buff preset (community/patch-note value, verify)';
+    if (S.preset !== undefined && S.preset < list.length) sel.value = String(S.preset);
+    sel.addEventListener('change', function () { S.preset = Number(sel.value); });
+    f.appendChild(sel);
+    const min = el('input');
+    min.type = 'text';
+    min.inputMode = 'numeric';
+    min.maxLength = 5;
+    min.placeholder = 'min';
+    min.title = 'minutes (1-43200)';
+    min.value = S.presetMin || '';
+    min.addEventListener('input', function () { S.presetMin = min.value; });
+    f.appendChild(min);
+    const go = el('button', 'ew-btn ew-bbtn', 'arm preset');
+    go.type = 'submit';
+    f.appendChild(go);
+    f.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      const p = list[Number(sel.value)];
+      const r = C.parseGrindForm('buff', { name: p.name, minutes: min.value, xp_pct: String(p.xp_pct) });
+      if (!r.ok) { msg(r.error); return; }
+      send(r.body, p.name + ' armed');
+    });
+    ui.buffBody.appendChild(f);
   }
 
   function recRow(r, unlock) {
@@ -296,6 +342,14 @@
       ' / lvl ' + r.level_min + (r.notes ? ' - ' + r.notes : '') + (r.source ? ' (' + r.source + ')' : '');
     b.appendChild(el('span', 'ew-mname', r.name));
     b.appendChild(el('span', 'ew-muted ew-gnum', S.goal + ' ' + r.score + '/5'));
+    // Plan 018: level gap vs the spot's monsters, and rows sourced pre-patch.
+    const gap = C.spotGapText(r);
+    if (gap) b.appendChild(el('span', 'ew-muted', gap));
+    if (r.reverify === true) {
+      const badge = el('span', 'ew-pill unknown', 're-verify after patch');
+      badge.title = 'transcribed ' + r.verified + ', before the newest XP patch';
+      b.appendChild(badge);
+    }
     if (unlock) {
       b.appendChild(el('span', 'ew-mprice', C.spotNeedText(r)));
     } else {

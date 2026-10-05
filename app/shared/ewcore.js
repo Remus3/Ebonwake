@@ -380,7 +380,8 @@
   const TRACK_KINDS = ['quest', 'season', 'gear'];
   const ID = /^[a-z0-9-]{1,40}$/;   // server ID_RE
   const STEPS_MAX = 60;              // server MAX_STEPS
-  const LEVEL = [1, 70];
+  const LEVEL_MAX = 75;              // server levels.LEVEL_MAX (plan 018)
+  const LEVEL = [1, LEVEL_MAX];
   const STAT = [0, 999];
 
   function gsTotal(ap, aap, dp) {
@@ -733,14 +734,28 @@
       const left = buffLeft(b, fetchedMs, now);
       rows.push({ id: b.id === undefined ? null : b.id, name: b.name,
         left_s: left !== null && left > 0 ? left : null, minutes: defaultMinutes(b.name),
-        xp_pct: inRange(b.xp_pct, XP_PCT) ? b.xp_pct : null });
+        xp_pct: inRange(b.xp_pct, XP_PCT) ? b.xp_pct : null,
+        xp_hint: typeof b.xp_hint === 'string' ? b.xp_hint : null });
     });
     const armed = rows.filter(function (r) { return r.left_s !== null; })
       .sort(function (a, b) { return a.left_s - b.left_s; });
     const idle = rows.filter(function (r) { return r.left_s === null; });
     const extra = BUFF_DEFAULTS.filter(function (d) { return seen.indexOf(d.name.toLowerCase()) < 0; })
-      .map(function (d) { return { id: null, name: d.name, left_s: null, minutes: d.minutes, xp_pct: null }; });
+      .map(function (d) { return { id: null, name: d.name, left_s: null, minutes: d.minutes, xp_pct: null, xp_hint: null }; });
     return armed.concat(idle, extra);
+  }
+
+  // Plan 018 XP buff presets from GET /api/grind: [{name, xp_pct, title}],
+  // junk rows dropped. The values are community / patch-note figures, verify.
+  function xpPresets(d) {
+    const rows = plainObject(d) && Array.isArray(d.xp_presets) ? d.xp_presets : [];
+    return rows.filter(function (p) {
+      return plainObject(p) && validName(p.name) && inRange(p.xp_pct, XP_PCT);
+    }).map(function (p) {
+      const bits = [typeof p.notes === 'string' ? p.notes : '', typeof p.source === 'string' ? p.source : '',
+        typeof p.verified === 'string' ? 'as of ' + p.verified : ''].filter(function (x) { return x; });
+      return { name: p.name, xp_pct: p.xp_pct, title: bits.join(' - ') };
+    });
   }
 
   // Best silver/h first; spots without an average last.
@@ -849,7 +864,7 @@
 
   const SPOT_GOALS = ['xp', 'silver'];
   const SPOT_STAT = [0, 999];
-  const SPOT_LEVEL = [1, 70];
+  const SPOT_LEVEL = LEVEL;
 
   // goal + what-if strings -> { ok, path } or { ok: false, error }.
   function spotsPath(goal, form) {
@@ -876,6 +891,15 @@
     if (isInt(r.need_dp, 1)) out.push('+' + r.need_dp + ' DP');
     if (isInt(r.need_level, 1)) out.push('+' + r.need_level + ' lvl');
     return out.join(' ');
+  }
+
+  // Plan 018 level-gap note: "Lv +2 vs mob: +6 DR" (out-levelled), "Lv -3 vs
+  // mob" (under), '' without a monster level.
+  function spotGapText(r) {
+    if (!plainObject(r) || !isInt(r.level_gap, -200)) return '';
+    const sign = r.level_gap > 0 ? '+' : '';
+    const dr = isInt(r.outlevel_dr, 1) ? ': +' + r.outlevel_dr + ' DR' : '';
+    return 'Lv ' + sign + r.level_gap + ' vs mob' + dr;
   }
 
   // /api/spots body -> { top, unlocks, missing, error } with junk rows dropped.
@@ -1425,6 +1449,14 @@
       v.filter(function (d, i) { return v.indexOf(d) === i; }).length === v.length;
   }
 
+  // Plan 018 XP epochs: server levels.validate_epoch (printable ASCII source).
+  const EPOCH_ID_RE = /^[a-z0-9-]{1,40}$/;
+  const EPOCH_SOURCE_MAX = 200;
+
+  function validAscii(t, max) {
+    return typeof t === 'string' && t.trim().length > 0 && t.length <= max && /^[\x20-\x7e]*$/.test(t);
+  }
+
   function validMilestones(v) {
     return Array.isArray(v) && v.length <= MILESTONES_MAX && v.every(function (m) { return inRange(m, LEVEL); }) &&
       v.filter(function (m, i) { return v.indexOf(m) === i; }).length === v.length;
@@ -1441,6 +1473,12 @@
     if (k === 'sample_del') return typeof v === 'string' && ISO_TS.test(v);
     if (k === 'hot_del') return validRef(v, HOT_ID_RE);
     if (k === 'milestones') return validMilestones(v);
+    if (k === 'epoch_del') return validRef(v, EPOCH_ID_RE);
+    if (k === 'epoch_add') {
+      return exact(v, ['id', 'starts_utc', 'label', 'source', 'verified']) && validRef(v.id, EPOCH_ID_RE) &&
+        typeof v.starts_utc === 'string' && ISO_TS.test(v.starts_utc) && validAscii(v.label, HOT_LABEL_MAX) &&
+        validAscii(v.source, EPOCH_SOURCE_MAX) && typeof v.verified === 'boolean';
+    }
     if (k === 'hot_add') {
       return exact(v, ['days', 'start', 'end', 'label', 'pct']) && validDays(v.days) &&
         typeof v.start === 'string' && HHMM_RE.test(v.start) && typeof v.end === 'string' &&
@@ -1453,7 +1491,7 @@
   function parseSampleForm(form) {
     const f = form || {};
     const level = wholeIn(f.level, LEVEL);
-    if (level === null) return { ok: false, error: 'level must be a whole number 1-70' };
+    if (level === null) return { ok: false, error: 'level must be a whole number ' + LEVEL[0] + '-' + LEVEL[1] };
     const t = (f.pct === undefined || f.pct === null ? '' : String(f.pct)).trim().replace(/%$/, '').trim().replace(',', '.');
     const pct = PCT_RE.test(t) ? Number(t) : NaN;
     if (!validXpPct(pct)) return { ok: false, error: 'XP % must be 0-100, up to 3 decimals' };
@@ -1490,13 +1528,38 @@
     const out = [];
     for (const p of parts) {
       const n = wholeIn(p, LEVEL);
-      if (n === null) return { ok: false, error: 'milestones: whole levels 1-70' };
+      if (n === null) return { ok: false, error: 'milestones: whole levels ' + LEVEL[0] + '-' + LEVEL[1] };
       if (out.indexOf(n) >= 0) return { ok: false, error: 'milestones: level ' + n + ' twice' };
       out.push(n);
     }
     if (out.length > MILESTONES_MAX) return { ok: false, error: 'at most ' + MILESTONES_MAX + ' milestones' };
     out.sort(function (a, b) { return a - b; });
     return { ok: true, body: { milestones: out } };
+  }
+
+  // Epoch editor (plan 018) -> {epoch_add} body or an error. start is UTC
+  // "YYYY-MM-DD HH:MM"; a blank id is slugged from the label (an existing id
+  // corrects that epoch, e.g. the confirmed live maintenance time).
+  function parseEpochForm(form) {
+    const f = form || {};
+    const label = typeof f.label === 'string' ? f.label.trim() : '';
+    if (!validAscii(label, HOT_LABEL_MAX)) return { ok: false, error: 'label: 1-' + HOT_LABEL_MAX + ' plain ASCII characters' };
+    let id = typeof f.id === 'string' ? f.id.trim() : '';
+    if (!id) id = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
+    if (!EPOCH_ID_RE.test(id)) return { ok: false, error: 'id: lowercase letters, digits and - (1-40)' };
+    const m = /^(\d{4}-\d{2}-\d{2})[ T]([01]\d|2[0-3]):([0-5]\d)$/.exec(typeof f.start === 'string' ? f.start.trim() : '');
+    const starts = m ? m[1] + 'T' + m[2] + ':' + m[3] + ':00Z' : '';
+    if (!m || !isFinite(Date.parse(starts))) return { ok: false, error: 'start must be YYYY-MM-DD HH:MM (UTC)' };
+    const source = typeof f.source === 'string' ? f.source.trim() : '';
+    if (!validAscii(source, EPOCH_SOURCE_MAX)) return { ok: false, error: 'source: 1-' + EPOCH_SOURCE_MAX + ' plain ASCII characters' };
+    return { ok: true, body: { epoch_add: { id: id, starts_utc: starts, label: label, source: source, verified: f.verified === true } } };
+  }
+
+  // "Lv 75 cap ... live 2d03h ago" / "... in 2d03h" for an epoch brief, '' for none.
+  function epochText(e) {
+    if (!plainObject(e) || typeof e.label !== 'string' || !isNum(e.starts_in_s)) return '';
+    const when = e.starts_in_s > 0 ? 'in ' + fmtEta(e.starts_in_s) : 'live ' + fmtEta(-e.starts_in_s) + ' ago';
+    return e.label + ' ' + when + (e.verified === true ? '' : ' (verify date)');
   }
 
   function fmtRate(r) {
@@ -1520,6 +1583,13 @@
     return d.map(function (x) { return DAY_NAMES[x]; }).join(' ');
   }
 
+  function epochBrief(e) {
+    if (!plainObject(e) || typeof e.id !== 'string' || typeof e.label !== 'string' ||
+      typeof e.starts_utc !== 'string' || !isNum(e.starts_in_s)) return null;
+    return { id: e.id, label: e.label, starts_utc: e.starts_utc, starts_in_s: e.starts_in_s,
+      source: typeof e.source === 'string' ? e.source : '', verified: e.verified === true, tracked: e.tracked === true };
+  }
+
   function normalizeLeveling(d) {
     if (!plainObject(d) || !Array.isArray(d.milestones)) return null;
     const hot = plainObject(d.hot) ? d.hot : {};
@@ -1541,11 +1611,19 @@
         }),
         next: plainObject(nx) && isNum(nx.pct) && isNum(nx.starts_in_s) ? nx : null
       },
+      next_milestone_label: typeof d.next_milestone_label === 'string' ? d.next_milestone_label : null,
       milestones: d.milestones.filter(function (m) { return inRange(m, LEVEL); }),
+      milestone_labels: plainObject(d.milestone_labels) ? d.milestone_labels : {},
       milestones_seed: d.milestones_seed === true,
       hot_windows: (Array.isArray(d.hot_windows) ? d.hot_windows : []).filter(function (w) {
         return plainObject(w) && typeof w.id === 'string';
       }),
+      // Plan 018 XP epochs: the rate only counts samples since `epoch`.
+      epoch: epochBrief(d.epoch),
+      epoch_next: epochBrief(d.epoch_next),
+      epochs: (Array.isArray(d.epochs) ? d.epochs : []).map(epochBrief).filter(function (e) { return e !== null; }),
+      epoch_error: typeof d.epoch_error === 'string' ? d.epoch_error : null,
+      kill_xp_cap: typeof d.kill_xp_cap === 'string' ? d.kill_xp_cap : null,
       samples: (Array.isArray(d.samples) ? d.samples : []).filter(plainObject)
     };
   }
@@ -1686,6 +1764,7 @@
     buffsLive: buffsLive,
     soonestBuff: soonestBuff,
     buffRows: buffRows,
+    xpPresets: xpPresets,
     sortSpots: sortSpots,
     spotName: spotName,
     validGrindBody: validGrindBody,
@@ -1693,6 +1772,7 @@
     SPOT_GOALS: SPOT_GOALS,
     spotsPath: spotsPath,
     spotNeedText: spotNeedText,
+    spotGapText: spotGapText,
     spotRecs: spotRecs,
     matchSpot: matchSpot,
     EVENT_KINDS: EVENT_KINDS,
@@ -1717,6 +1797,9 @@
     parseSampleForm: parseSampleForm,
     parseHotForm: parseHotForm,
     parseMilestones: parseMilestones,
+    parseEpochForm: parseEpochForm,
+    epochText: epochText,
+    LEVEL_MAX: LEVEL_MAX,
     fmtRate: fmtRate,
     fmtEta: fmtEta,
     fmtDays: fmtDays,
