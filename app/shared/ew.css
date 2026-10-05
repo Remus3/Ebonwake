@@ -173,6 +173,50 @@ html, body {
 .ew-srctxt { min-width: 0; }
 .ew-srcurl { user-select: all; }
 
+/* Deadeye tab (plan 007): notes card wide, plan card narrow; the editor,
+   preview and plan list scroll inside their card; hidden must beat flex. */
+.ew-deadeye [hidden] { display: none; }
+.ew-panel.active.ew-deadeye { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); grid-auto-rows: minmax(0, 1fr); }
+.ew-dtabs { display: flex; flex-wrap: wrap; gap: 2px; margin-bottom: 4px; }
+.ew-dtab {
+  border: 0; background: none; color: var(--fk-text-muted); cursor: pointer; font: inherit;
+  padding: 2px 8px; border-radius: var(--ew-radius);
+}
+.ew-dtab[aria-selected="true"] { color: var(--fk-text); background: var(--fk-surface); box-shadow: inset 0 -2px 0 var(--fk-accent); }
+.ew-dtab.dirty::after { content: " *"; color: var(--fk-status-warn); }
+.ew-dtools { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.ew-dtools .ew-btn:disabled { opacity: .5; cursor: default; }
+.ew-dupd { flex: 1; text-align: right; }
+.ew-ddirty { color: var(--fk-status-warn); font-size: 12px; }
+.ew-over { color: var(--fk-status-bad); }
+.ew-deditor {
+  flex: 1; min-height: 0; resize: none; box-sizing: border-box; width: 100%;
+  font: 12px/1.45 var(--ew-mono); color: var(--fk-text); background: var(--fk-surface);
+  border: 1px solid var(--fk-border); border-radius: var(--ew-radius); padding: 6px 8px;
+}
+.ew-md { padding: 0 4px; overflow-wrap: anywhere; }
+.ew-md h1, .ew-md h2, .ew-md h3 { margin: 8px 0 4px; color: var(--fk-text); text-transform: none; letter-spacing: 0; }
+.ew-md h1 { font-size: 16px; }
+.ew-md h2 { font-size: 14px; }
+.ew-md h3 { font-size: 13px; }
+.ew-md p { margin: 0 0 6px; white-space: pre-line; }
+.ew-md ul, .ew-md ol { margin: 0 0 6px; padding-left: 20px; }
+.ew-md code { font: 12px var(--ew-mono); background: var(--fk-surface); border-radius: 3px; padding: 0 3px; }
+.ew-md pre { margin: 0 0 6px; padding: 6px 8px; background: var(--fk-surface); border-radius: var(--ew-radius); overflow: auto; }
+.ew-md pre code { padding: 0; background: none; }
+.ew-prow {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto auto; align-items: center;
+  gap: 6px; padding: 2px 4px; border-radius: var(--ew-radius);
+}
+.ew-prow:hover { background: var(--fk-surface); }
+.ew-prow.done .ew-mname { color: var(--fk-text-muted); text-decoration: line-through; }
+.ew-prow .ew-tx:disabled { visibility: hidden; }
+.ew-pnote { grid-column: 1 / -1; padding-left: 22px; overflow: hidden; text-overflow: ellipsis; }
+.ew-dform { gap: 4px; margin-top: 6px; }
+.ew-dline { display: flex; align-items: center; gap: 6px; }
+.ew-dform .ew-dline input[type="text"] { flex: 1; min-width: 0; width: auto; box-sizing: border-box; }
+.ew-dform select { width: 72px; box-sizing: border-box; }
+
 /* Overlay: glanceable, corner-anchored, translucent. */
 html.ew-overlay, html.ew-overlay body { background: transparent; }
 .ew-ov {

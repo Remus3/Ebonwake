@@ -1,6 +1,6 @@
 /* EW dashboard shell: tabs from /api/state, server pill, reset clocks.
    Plan 001 renders placeholders; plans 002+ fill each tab (market.js, today.js,
-   progress.js, grind.js, events.js). */
+   progress.js, grind.js, events.js, deadeye.js). */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -35,6 +35,7 @@
     if (id === 'progress' && window.EWProgress) window.EWProgress.show();
     if (id === 'grind' && window.EWGrind) window.EWGrind.show();
     if (id === 'events' && window.EWEvents) window.EWEvents.show();
+    if (id === 'deadeye' && window.EWDeadeye) window.EWDeadeye.show();
   }
 
   function render(state) {
@@ -64,6 +65,8 @@
         window.EWGrind.mount(p);
       } else if (t.id === 'events' && window.EWEvents) {
         window.EWEvents.mount(p);
+      } else if (t.id === 'deadeye' && window.EWDeadeye) {
+        window.EWDeadeye.mount(p);
       } else if (t.id === 'market' && window.EWMarket) {
         window.EWMarket.mount(p);
       } else if (t.id === 'system') {

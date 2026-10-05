@@ -890,6 +890,147 @@
     return { ok: true, body: { add: add } };
   }
 
+  // ---- Deadeye (plan 007) ----
+  // Operator build notes (markdown, rendered as a safe subset) and an ordered
+  // enhancement plan. Text only: nothing here is executed or sent to the game.
+
+  const DEADEYE_LEVELS = [];
+  for (let i = 0; i <= 15; i++) DEADEYE_LEVELS.push('+' + i);
+  DEADEYE_LEVELS.push('PRI', 'DUO', 'TRI', 'TET', 'PEN');
+  const DEADEYE_SECTIONS = ['addons', 'crystals', 'artifacts', 'lightstones', 'rotation', 'misc'];
+  const NOTE_MAX = 20000;            // server: note text 0-20000 chars after \r\n -> \n
+  const STEP_NOTE_MAX = 200;
+  const STEP_ID_RE = /^d[0-9]{1,9}$/;
+
+  function levelIndex(v) { return typeof v === 'string' ? DEADEYE_LEVELS.indexOf(v) : -1; }
+
+  function escHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  // Inline markup on already-escaped text: `code` spans are left literal,
+  // then **bold**, then *em* (not inside words, not around spaces).
+  function mdInline(s) {
+    return s.split(/(`[^`\n]+`)/).map(function (part, i) {
+      if (i % 2) return '<code>' + part.slice(1, -1) + '</code>';
+      return part.replace(/\*\*(?=\S)([^*]*?\S)\*\*/g, '<strong>$1</strong>')
+        .replace(/(^|[^*\w])\*(?=\S)([^*]*?\S)\*(?![*\w])/g, '$1<em>$2</em>');
+    }).join('');
+  }
+
+  // Markdown -> HTML, safe subset. ALL of & < > " ' are escaped first; the
+  // only markup added afterwards is fixed attribute-less tags (h1-h3, p,
+  // ul/ol/li, strong, em, code, pre). No links, images or raw HTML ever.
+  function renderMarkdown(text) {
+    if (typeof text !== 'string') return '';
+    const lines = escHtml(text.replace(/\r\n?/g, '\n')).split('\n');
+    const out = [];
+    let para = [];
+    let list = null;
+    const flush = function () {
+      if (para.length) out.push('<p>' + mdInline(para.join('\n')) + '</p>');
+      para = [];
+      if (list) out.push('</' + list + '>');
+      list = null;
+    };
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (/^\s*```/.test(line)) {
+        flush();
+        const code = [];
+        for (i++; i < lines.length && !/^\s*```\s*$/.test(lines[i]); i++) code.push(lines[i]);
+        out.push('<pre><code>' + code.join('\n') + '</code></pre>');
+        continue;
+      }
+      if (/^\s*$/.test(line)) { flush(); continue; }
+      const h = /^(#{1,3})[ \t]+(\S.*)$/.exec(line);
+      if (h) {
+        flush();
+        out.push('<h' + h[1].length + '>' + mdInline(h[2].trim()) + '</h' + h[1].length + '>');
+        continue;
+      }
+      const ul = /^\s*[-*][ \t]+(.*)$/.exec(line);
+      const ol = ul ? null : /^\s*\d{1,9}\.[ \t]+(.*)$/.exec(line);
+      if (ul || ol) {
+        const kind = ul ? 'ul' : 'ol';
+        if (para.length || list !== kind) { flush(); out.push('<' + kind + '>'); list = kind; }
+        out.push('<li>' + mdInline((ul || ol)[1].trim()) + '</li>');
+        continue;
+      }
+      if (list) flush();
+      para.push(line.trim());
+    }
+    flush();
+    return out.join('');
+  }
+
+  function plainLine(v, max) {
+    return typeof v === 'string' && v.length <= max && !/[\u0000-\u001f\u007f]/.test(v);
+  }
+
+  function validNoteText(v) {
+    return typeof v === 'string' && v.replace(/\r\n/g, '\n').length <= NOTE_MAX &&
+      !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(v);
+  }
+
+  const STEP_CHECKS = {
+    item: validName, current: function (v) { return levelIndex(v) >= 0; },
+    target: function (v) { return levelIndex(v) >= 0; },
+    note: function (v) { return plainLine(v, STEP_NOTE_MAX); }
+  };
+
+  function stepFieldsOk(o) {
+    for (const k of Object.keys(STEP_CHECKS)) {
+      if (k in o && !STEP_CHECKS[k](o[k])) return false;
+    }
+    return !('current' in o && 'target' in o) || levelIndex(o.target) > levelIndex(o.current);
+  }
+
+  // Exact shape check for POST /api/deadeye bodies (main-process IPC guard).
+  // What the client cannot know (an edit's order against the stored level,
+  // unknown ids, the 100-step cap) is the server's to refuse.
+  function validDeadeyeBody(body) {
+    if (!plainObject(body)) return false;
+    const keys = Object.keys(body);
+    if (keys.length !== 1) return false;
+    const k = keys[0];
+    const v = body[k];
+    if (k === 'note') {
+      return exact(v, ['section', 'text']) && DEADEYE_SECTIONS.indexOf(v.section) >= 0 && validNoteText(v.text);
+    }
+    if (k === 'delete_step') return validRef(v, STEP_ID_RE);
+    if (k === 'step_done') return exact(v, ['id', 'done']) && validRef(v.id, STEP_ID_RE) && typeof v.done === 'boolean';
+    if (k === 'move_step') return exact(v, ['id', 'dir']) && validRef(v.id, STEP_ID_RE) && (v.dir === -1 || v.dir === 1);
+    if (k === 'add_step') {
+      return plainObject(v) && onlyKeys(v, ['item', 'current', 'target', 'note']) &&
+        'item' in v && 'current' in v && 'target' in v && stepFieldsOk(v);
+    }
+    if (k === 'edit_step') {
+      return plainObject(v) && onlyKeys(v, ['id', 'item', 'current', 'target', 'note']) &&
+        validRef(v.id, STEP_ID_RE) && Object.keys(v).length >= 2 && stepFieldsOk(v);
+    }
+    return false;
+  }
+
+  // Add-step form strings -> {add_step} body, or an error for the operator.
+  function parseStepForm(form) {
+    const f = form || {};
+    const s = function (k) { return typeof f[k] === 'string' ? f[k].trim() : ''; };
+    const item = s('item');
+    if (!validName(item)) return { ok: false, error: 'item: 1-' + NAME_MAX + ' plain characters' };
+    const cur = levelIndex(f.current);
+    const tgt = levelIndex(f.target);
+    if (cur < 0 || tgt < 0) return { ok: false, error: 'pick a level for current and target' };
+    if (tgt <= cur) return { ok: false, error: 'target must be above current' };
+    const add = { item: item, current: f.current, target: f.target };
+    if (s('note')) {
+      if (!plainLine(s('note'), STEP_NOTE_MAX)) return { ok: false, error: 'note: up to ' + STEP_NOTE_MAX + ' plain characters' };
+      add.note = s('note');
+    }
+    return { ok: true, body: { add_step: add } };
+  }
+
   // Overlay widgets (spec section 3: each opt-in, default on). Main reads
   // config.overlay.widgets and hands the overlay a query string; only a literal
   // false turns a widget off.
@@ -918,7 +1059,7 @@
   // The only routes the dashboard bridge forwards, each with its body check.
   const POST_VALIDATORS = {
     '/api/market/watch': validWatchBody, '/api/today': validTodayBody, '/api/progress': validProgressBody,
-    '/api/grind': validGrindBody, '/api/events': validEventsBody
+    '/api/grind': validGrindBody, '/api/events': validEventsBody, '/api/deadeye': validDeadeyeBody
   };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
@@ -966,6 +1107,13 @@
     localToUtcIso: localToUtcIso,
     validEventsBody: validEventsBody,
     parseEventForm: parseEventForm,
+    DEADEYE_LEVELS: DEADEYE_LEVELS,
+    DEADEYE_SECTIONS: DEADEYE_SECTIONS,
+    NOTE_MAX: NOTE_MAX,
+    levelIndex: levelIndex,
+    renderMarkdown: renderMarkdown,
+    validDeadeyeBody: validDeadeyeBody,
+    parseStepForm: parseStepForm,
     overlayWidgets: overlayWidgets,
     widgetsQuery: widgetsQuery,
     widgetsFromQuery: widgetsFromQuery,

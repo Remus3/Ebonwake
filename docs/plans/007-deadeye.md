@@ -62,3 +62,32 @@ allowlist route `/api/deadeye`), `app/shared/ew.css`,
   escaping).
 - Dashboard self-test 7/7 tabs fit; Deadeye tab renders with an empty store.
 - Verifier PASS within 3 refute rounds; one push; CI green.
+
+### Slice B deviations (adjudicated in-lane, 2026-10-04)
+
+1. Paragraph lines are joined with `\n` inside one `<p>` and shown as line
+   breaks (`white-space: pre-line`), not folded to spaces. Alternatives:
+   CommonMark soft-wrap to a space; emit `<br>`. Why: build notes are
+   line-oriented (rotation steps) and `pre-line` adds no tag to the safe
+   subset. Reverses if: the operator wants soft-wrapped prose.
+2. `*em*` needs a non-word edge on both sides (`2*3*4` stays literal); a
+   bullet needs a space after `-`/`*`; headings need a space after `#`;
+   `####`+ is a paragraph; links/images stay literal text. Alternatives:
+   full CommonMark emphasis rules. Why: small, linear-time regexes; no
+   ambiguity with multiplication or combos like `S+LMB*2`. Reverses if: a
+   real note renders wrong.
+3. Client guard `validDeadeyeBody` is stricter than the plan text in two
+   places: step `note` must be single-line (no control chars), note text may
+   hold only TAB/LF/CR controls. `edit_step` order (target above current) is
+   checked only when both levels are in the body; the server checks the rest.
+   Alternatives: mirror the plan text only. Why: the inputs are single-line
+   fields / a textarea, so nothing legitimate is refused. Reverses if: slice A
+   needs multi-line step notes.
+4. POST replies are taken as the new GET body only when they carry
+   `sections` and `plan` arrays; any other reply triggers a re-poll.
+   Alternatives: always re-poll. Why: the plan does not fix the POST reply
+   shape; this works with either. Reverses if: never needed.
+5. Unsaved drafts are kept per section across section switches and polls
+   (marked `*` on the section tab); Ctrl+S in the editor saves (a
+   dashboard-window shortcut, never a game input). Alternatives: discard on
+   switch. Why: no lost typing. Reverses if: the operator prefers discard.
