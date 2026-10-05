@@ -42,6 +42,12 @@ Carried forward (not acted on yet):
   server OCR timeout 60 s; normalizeOcr hides buffs found without a time;
   main.js postLocal keeps only the first 64 KiB of a reply (deadeye replies can
   exceed it; the client re-GETs, nothing lost).
+- FLAKY: tests/test_deadeye.py::test_route_cap_is_per_route failed 1 of 4
+  verifier runs with ConnectionAborted (server closes before reading an
+  oversized body). Fix before plan 010 push: drain or tolerate the abort.
+- OCR edge notes: "XP scroll XP scroll 20 min" -> minutes None (empty first
+  span); equal-start names keep the shorter one, contrary to the comment in
+  server/ew/ocr.py _find_names (no SEED_BUFFS overlap today).
 - SS's 2245 ANSWER to MAIN (v6) was misdelivered into EW's inbox; not acted on,
   reported to MAIN in EW's ANSWER note.
 
