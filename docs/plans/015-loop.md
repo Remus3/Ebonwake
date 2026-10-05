@@ -224,6 +224,7 @@ checklist ends in `[ ] /done`; one push.
        same row shape. Lanes still write `progress/lane-<name>.json`, not
        `lane-<i>.json`. Reverses if: MAIN's lane widget needs the index name -
        then `ew_lane.run_lane` writes `fleet_checklist.lane_task(claim index)`.
+       REVERSED by 17.
     d. A triage result with no `VERDICT:` line is ACK (kit `parse_verdict`:
        a triage that cannot decide never generates a note; the note is
        marked seen, so it is handled, not dropped). Reverses 13d. Reverses
@@ -300,6 +301,22 @@ checklist ends in `[ ] /done`; one push.
        row. Real code conflicts (014 vs 012 in `server/ew/app.py`) still
        abort to `merge-conflict` for a session. Reverses if: a ROADMAP row
        is measured lost or duplicated by the resolver.
+
+17. Lane progress file = `progress/lane-<i>.json` (hand-off item Ha1f38b,
+    2026-10-05; reverses 14c). `ew_lane.run_lane` writes
+    `fleet_checklist.lane_task(claim["index"])` under the MAIN checkout
+    (`fleet_lanes.main_tree(root)`), never inside the lane worktree; the
+    step text starts `<lane name>: ` so the widget shows the lane name. No
+    progress file before the index is claimed: a dry run or a refused
+    claim writes none (no live lane to show). The kit claim `run_id` stays
+    `lane-<name>` (exclusive-name check, usage note label, ETA kinds
+    `lane-<name>-code|read` unchanged). Alternatives: keep `lane-<name>`
+    (14c; contradicts the byte-pinned FLEET item 13 d, which the widget
+    reads); write both names (two files per lane, the stale one never
+    cleared); write a pre-claim `lane-<name>` file then switch (same
+    staleness). Why: FLEET item 13 d is the kit rule and one named file per
+    live lane is exactly the lock index. Reverses if: MAIN ships a kit
+    version naming lane progress files otherwise.
 
 ## CLAUDE.md rules - LANDED 2026-10-05 (CLAUDE.md "Loop (plan 015)"; text below is the proposal, CLAUDE.md is authoritative: cap 6, not 12)
 
