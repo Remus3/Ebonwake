@@ -1,6 +1,6 @@
 /* EW Market tab (plan 002 slice B): watchlist, item detail (sparkline + order
    book depth), add/edit, hot list. Reads only the local EW server; writes go
-   through the dashboard preload (window.ewMarket) because the server refuses
+   through the dashboard preload (window.ewApi) because the server refuses
    renderer POSTs. Every node is built with DOM APIs - no HTML from data. */
 (function () {
   'use strict';
@@ -111,13 +111,13 @@
       id: f.id.value, sid: f.sid.value, below: f.below.value, above: f.above.value
     }, action);
     if (!r.ok) { f.msg.textContent = r.error; return; }
-    const bridge = window.ewMarket;
-    if (!bridge || typeof bridge.watch !== 'function') {
+    const bridge = window.ewApi;
+    if (!bridge || typeof bridge.post !== 'function') {
       f.msg.textContent = 'saving needs the Ebonwake app window';
       return;
     }
     f.msg.textContent = action === 'add' ? 'saving...' : 'removing...';
-    bridge.watch(r.body).then(function (res) {
+    bridge.post('/api/market/watch', r.body).then(function (res) {
       if (res && res.ok) {
         f.msg.textContent = action === 'add' ? 'saved' : 'removed';
         if (action === 'remove' && key(r.body.remove) === key(S.sel)) { S.sel = null; S.item = null; }

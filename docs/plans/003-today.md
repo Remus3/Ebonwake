@@ -63,6 +63,25 @@ Files: `app/dashboard/today.js` (new), `app/dashboard/dashboard.js` (mount),
 
 Acceptance: `npm test --prefix app` green; self-test 7/7 fit.
 
+### Slice B implementation notes (decisions)
+
+- Bridge generalised. Decision: `window.ewMarket.watch` is replaced by
+  `window.ewApi.post(route, body)` over one IPC channel `ew:post`; main checks
+  sender = dashboard and `ewcore.validPost(route, body)` (fixed allowlist
+  `/api/market/watch` -> `validWatchBody`, `/api/today` -> `validTodayBody`);
+  market.js migrated. Alternatives: keep `ewMarket` beside a second channel
+  (two surfaces to guard). Why: one guarded channel, one allowlist. Reverses
+  if: a route needs a non-JSON or streamed body.
+- `move.to` is taken as a whole-number index >= 0 (the contract does not type
+  it); the client validator accepts it but the tab has no move control yet.
+  Reverses if: slice A defines `to` differently - update `validTodayBody`.
+- Client-side limits slice A may be looser than: title 1-80 chars, no control
+  characters; the add form requires `until` for `event` and drops it for
+  daily/weekly. Remove is a two-click confirm (3 s window).
+- Overlay shows `daily n/m  weekly n/m`, re-derived locally each second;
+  heartbeat refreshes are throttled to one per 10 s (heartbeat is 15 s today).
+  Offline or 404 -> last value muted (`offline` before any data).
+
 ## Gates
 
 pytest + node --test + leak sweep; verifier per lane, refute rounds capped at

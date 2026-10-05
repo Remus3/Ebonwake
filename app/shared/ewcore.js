@@ -244,8 +244,154 @@
     return lastMs === null || lastMs === undefined || nowMs - lastMs >= intervalMs;
   }
 
+  // ---- Today (plan 003) ----
+  // A tick is a timestamp; done = ticked_at >= last reset of its kind. Same rule
+  // as the server (slice A), so the client re-derives across a reset by itself.
+
+  const DAY_MS = 86400000;
+  const KINDS = ['daily', 'weekly', 'event'];
+  const SLUG = /^[a-z0-9-]{1,40}$/;
+  const TITLE_MAX = 80;
+
+  function lastDailyReset(now) { return nextDailyReset(now) - DAY_MS; }
+
+  function lastWeeklyReset(now) { return nextWeeklyReset(now) - 7 * DAY_MS; }
+
+  function isDone(tickIso, kind, now) {
+    if (typeof tickIso !== 'string' || !tickIso) return false;
+    const t = Date.parse(tickIso);
+    if (!isFinite(t)) return false;
+    if (kind === 'daily' || kind === 'event') return t >= lastDailyReset(now);
+    if (kind === 'weekly') return t >= lastWeeklyReset(now);
+    return false;
+  }
+
+  // 'YYYY-MM-DD' -> epoch ms of its 00:00 UTC, or null (rejects 2026-02-30).
+  function isoDateMs(s) {
+    if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+    const ms = Date.parse(s + 'T00:00:00Z');
+    if (!isFinite(ms) || new Date(ms).toISOString().slice(0, 10) !== s) return null;
+    return ms;
+  }
+
+  // Whole UTC days from today to the until date: 0 = last day, < 0 = expired.
+  function eventDaysLeft(until, now) {
+    const u = isoDateMs(until);
+    return u === null ? null : Math.round((u - lastDailyReset(now)) / DAY_MS);
+  }
+
+  function fmtDaysLeft(d) {
+    if (d === null || d === undefined) return 'no end date';
+    if (d < 0) return 'ended';
+    if (d === 0) return 'ends today';
+    return d + (d === 1 ? ' day left' : ' days left');
+  }
+
+  // /api/today items -> {daily, weekly, event} each {items, done, total}, server
+  // order kept. With `now`, done is re-derived from ticked_at; without, the
+  // server's flag is trusted. Expired events are dropped.
+  function groupItems(items, now) {
+    const out = {};
+    KINDS.forEach(function (k) { out[k] = { items: [], done: 0, total: 0 }; });
+    (Array.isArray(items) ? items : []).forEach(function (it) {
+      if (!plainObject(it) || KINDS.indexOf(it.kind) < 0 || typeof it.id !== 'string') return;
+      const x = Object.assign({}, it);
+      if (now !== undefined) x.done = isDone(it.ticked_at, it.kind, now);
+      else x.done = !!it.done;
+      if (x.kind === 'event') {
+        x.days_left = now === undefined ? null : eventDaysLeft(it.until, now);
+        if (x.days_left !== null && x.days_left < 0) return;
+      }
+      const g = out[x.kind];
+      g.items.push(x);
+      g.total += 1;
+      if (x.done) g.done += 1;
+    });
+    return out;
+  }
+
+  // Optimistic update: a copy of the GET body with one item's tick set (iso) or
+  // cleared (null). The input is never mutated.
+  function withTick(data, id, iso) {
+    if (!plainObject(data) || !Array.isArray(data.items)) return data === undefined ? null : data;
+    const copy = Object.assign({}, data);
+    copy.items = data.items.map(function (it) {
+      if (!it || it.id !== id) return it;
+      return Object.assign({}, it, { ticked_at: iso, done: iso !== null });
+    });
+    return copy;
+  }
+
+  function validTitle(t) {
+    return typeof t === 'string' && t.trim().length > 0 && t.length <= TITLE_MAX &&
+      !/[\u0000-\u001f\u007f]/.test(t);
+  }
+
+  function onlyKeys(o, allowed) {
+    return Object.keys(o).every(function (k) { return allowed.indexOf(k) >= 0; });
+  }
+
+  // Exact shape check for POST /api/today bodies (main-process IPC guard).
+  function validTodayBody(body) {
+    if (!plainObject(body)) return false;
+    const keys = Object.keys(body);
+    if (keys.length !== 1) return false;
+    const k = keys[0];
+    const v = body[k];
+    if (k === 'tick' || k === 'untick' || k === 'remove') return typeof v === 'string' && SLUG.test(v);
+    if (k === 'move') {
+      return plainObject(v) && onlyKeys(v, ['id', 'to']) && typeof v.id === 'string' &&
+        SLUG.test(v.id) && isInt(v.to, 0);
+    }
+    if (k === 'add') {
+      return plainObject(v) && onlyKeys(v, ['title', 'kind', 'until']) && validTitle(v.title) &&
+        KINDS.indexOf(v.kind) >= 0 &&
+        (v.until === undefined || v.until === null || isoDateMs(v.until) !== null);
+    }
+    return false;
+  }
+
+  // Add form strings -> {add: {...}} body, or an error for the operator. An
+  // event needs an end date; daily/weekly drop any until.
+  function parseTodayForm(form) {
+    const f = form || {};
+    const title = typeof f.title === 'string' ? f.title.trim() : '';
+    if (!title) return { ok: false, error: 'title required' };
+    if (title.length > TITLE_MAX || !validTitle(title)) {
+      return { ok: false, error: 'title: up to ' + TITLE_MAX + ' plain characters' };
+    }
+    if (KINDS.indexOf(f.kind) < 0) return { ok: false, error: 'kind must be daily, weekly or event' };
+    const add = { title: title, kind: f.kind };
+    if (f.kind === 'event') {
+      const until = typeof f.until === 'string' ? f.until.trim() : '';
+      if (isoDateMs(until) === null) return { ok: false, error: 'event needs an end date (YYYY-MM-DD)' };
+      add.until = until;
+    }
+    return { ok: true, body: { add: add } };
+  }
+
+  // The only routes the dashboard bridge forwards, each with its body check.
+  const POST_VALIDATORS = { '/api/market/watch': validWatchBody, '/api/today': validTodayBody };
+  const POST_ROUTES = Object.keys(POST_VALIDATORS);
+
+  function validPost(route, body) {
+    return typeof route === 'string' && Object.prototype.hasOwnProperty.call(POST_VALIDATORS, route) &&
+      POST_VALIDATORS[route](body);
+  }
+
   const api = {
     SERVER: SERVER,
+    lastDailyReset: lastDailyReset,
+    lastWeeklyReset: lastWeeklyReset,
+    isDone: isDone,
+    eventDaysLeft: eventDaysLeft,
+    fmtDaysLeft: fmtDaysLeft,
+    groupItems: groupItems,
+    withTick: withTick,
+    validTodayBody: validTodayBody,
+    parseTodayForm: parseTodayForm,
+    validPost: validPost,
+    POST_ROUTES: POST_ROUTES,
     fmtSilver: fmtSilver,
     sparkPath: sparkPath,
     historyStats: historyStats,

@@ -58,9 +58,10 @@ function createOverlay() {
   overlay.on('closed', function () { overlay = null; });
 }
 
-// Market watchlist writes (plan 002): the server answers no CORS preflight, so
-// the dashboard cannot POST itself. Only the dashboard may ask, only the exact
-// add/remove shape passes, and only the local EW server is ever contacted.
+// Dashboard writes (plans 002, 003): the server answers no CORS preflight, so
+// the dashboard cannot POST itself. Only the dashboard may ask, only allowlisted
+// routes with an exact body shape pass (core.validPost), and only the local EW
+// server is ever contacted.
 function postLocal(route, body) {
   const base = new URL(core.SERVER);
   const data = Buffer.from(JSON.stringify(body), 'utf8');
@@ -87,10 +88,10 @@ function postLocal(route, body) {
   });
 }
 
-ipcMain.handle('ew:market-watch', function (event, body) {
+ipcMain.handle('ew:post', function (event, route, body) {
   if (!dashboard || event.sender !== dashboard.webContents) return { ok: false, error: 'not allowed' };
-  if (!core.validWatchBody(body)) return { ok: false, error: 'invalid request' };
-  return postLocal('/api/market/watch', body);
+  if (!core.validPost(route, body)) return { ok: false, error: 'invalid request' };
+  return postLocal(route, body);
 });
 
 function toggleOverlay() {

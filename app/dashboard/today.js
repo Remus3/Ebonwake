@@ -1,0 +1,271 @@
+/* EW Today tab (plan 003 slice B): daily + weekly checklists with reset
+   countdowns, events with days left, add item. Reads GET /api/today; writes go
+   through the dashboard preload (window.ewApi) because the server refuses
+   renderer POSTs. Ticks are optimistic and reverted on error. Done-state is
+   re-derived locally from ticked_at, so a reset flips the lists without a
+   reload. Every node is built with DOM APIs - no HTML from data. */
+(function () {
+  'use strict';
+  const C = window.EWCore;
+  const POLL_MS = 60000;
+  const S = { data: null, err: null, last: null, timer: null, ui: null, pending: {}, resetKey: null };
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function getJSON(path) {
+    return fetch(C.SERVER + path).then(function (r) {
+      if (!r.ok) {
+        return r.json().catch(function () { return null; }).then(function (b) {
+          throw new Error(b && typeof b.error === 'string' ? b.error : 'HTTP ' + r.status);
+        });
+      }
+      return r.json();
+    }).catch(function (e) {
+      throw new Error(e instanceof TypeError ? 'server offline' : String(e.message || e));
+    });
+  }
+
+  function bridge() {
+    const b = window.ewApi;
+    return b && typeof b.post === 'function' ? b : null;
+  }
+
+  // Re-apply in-flight optimistic ticks over fresh server data.
+  function withPending(data) {
+    let d = data;
+    Object.keys(S.pending).forEach(function (id) { d = C.withTick(d, id, S.pending[id]); });
+    return d;
+  }
+
+  function accept(data) {
+    if (data && Array.isArray(data.items)) {
+      S.data = withPending(data);
+      S.err = null;
+    }
+  }
+
+  // ---- data ----
+
+  function poll(force) {
+    const now = Date.now();
+    if (!force && !C.pollDue(S.last, now, POLL_MS)) { draw(); return; }
+    S.last = now;
+    clearTimeout(S.timer);
+    S.timer = setTimeout(function () { poll(true); }, POLL_MS);
+    getJSON('/api/today').then(accept, function (e) { S.err = e.message; }).then(draw);
+  }
+
+  function msg(text) { if (S.ui) S.ui.form.msg.textContent = text; }
+
+  function toggle(it) {
+    if (it.id in S.pending) return;
+    const b = bridge();
+    if (!b) { msg('ticking needs the Ebonwake app window'); return; }
+    const raw = (S.data.items || []).filter(function (x) { return x && x.id === it.id; })[0];
+    const prev = raw ? (raw.ticked_at === undefined ? null : raw.ticked_at) : null;
+    const next = it.done ? null : new Date().toISOString();
+    S.pending[it.id] = next;
+    S.data = C.withTick(S.data, it.id, next);
+    draw();
+    const body = it.done ? { untick: it.id } : { tick: it.id };
+    const done = function (res) {
+      delete S.pending[it.id];
+      if (res && res.ok) {
+        accept(res.data);
+      } else {
+        S.data = C.withTick(S.data, it.id, prev);
+        msg('tick failed: ' + ((res && res.error) || 'unknown error'));
+      }
+      draw();
+    };
+    b.post('/api/today', body).then(done, function (e) {
+      done({ ok: false, error: String(e && e.message || e) });
+    });
+  }
+
+  function send(body, okText) {
+    const b = bridge();
+    if (!b) { msg('saving needs the Ebonwake app window'); return Promise.resolve(false); }
+    msg('saving...');
+    return b.post('/api/today', body).then(function (res) {
+      if (res && res.ok) {
+        accept(res.data);
+        msg(okText);
+        draw();
+        return true;
+      }
+      msg('failed: ' + ((res && res.error) || 'unknown error'));
+      return false;
+    }, function (e) { msg('failed: ' + (e && e.message || e)); return false; });
+  }
+
+  function remove(it, btn) {
+    // Two clicks within 3 s: a stray click never deletes an item.
+    if (btn.dataset.armed !== '1') {
+      btn.dataset.armed = '1';
+      btn.textContent = 'sure?';
+      setTimeout(function () { btn.dataset.armed = ''; btn.textContent = 'x'; }, 3000);
+      return;
+    }
+    send({ remove: it.id }, 'removed');
+  }
+
+  function add() {
+    const f = S.ui.form;
+    const r = C.parseTodayForm({ title: f.title.value, kind: f.kind.value, until: f.until.value });
+    if (!r.ok) { msg(r.error); return; }
+    send(r.body, 'added').then(function (ok) { if (ok) f.title.value = ''; });
+  }
+
+  // ---- render ----
+
+  function row(it, extra) {
+    const r = el('div', 'ew-trow' + (it.done ? ' done' : ''));
+    const lab = el('label', 'ew-tlabel');
+    const cb = el('input');
+    cb.type = 'checkbox';
+    cb.checked = !!it.done;
+    cb.disabled = it.id in S.pending;
+    cb.addEventListener('change', function () { toggle(it); });
+    lab.appendChild(cb);
+    lab.appendChild(el('span', 'ew-mname', String(it.title || it.id)));
+    r.appendChild(lab);
+    if (extra) r.appendChild(extra);
+    const x = el('button', 'ew-tx', 'x');
+    x.type = 'button';
+    x.title = 'remove (click twice)';
+    x.addEventListener('click', function () { remove(it, x); });
+    r.appendChild(x);
+    return r;
+  }
+
+  function drawList(ui, group, kind) {
+    const body = ui.body;
+    body.textContent = '';
+    ui.count.textContent = S.data ? group.done + '/' + group.total + ' done' : '-';
+    ui.count.className = 'ew-pill ' + (S.data && group.total && group.done === group.total ? 'ok' : 'unknown');
+    if (S.err) body.appendChild(el('div', 'ew-err', (S.data ? 'last data - ' : '') + S.err));
+    if (!S.data) { if (!S.err) body.appendChild(el('div', 'ew-muted', 'loading...')); return; }
+    if (!group.items.length) {
+      body.appendChild(el('div', 'ew-muted', kind === 'event' ? 'No active events.' : 'Nothing here - add an item.'));
+      return;
+    }
+    const list = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
+    group.items.forEach(function (it) {
+      const extra = kind === 'event' ? el('span', 'ew-muted ew-tdays', C.fmtDaysLeft(it.days_left)) : null;
+      list.appendChild(row(it, extra));
+    });
+    body.appendChild(list);
+  }
+
+  function draw() {
+    const ui = S.ui;
+    if (!ui || !ui.daily.body.isConnected) return;
+    const now = Date.now();
+    S.resetKey = C.lastDailyReset(now) + ':' + C.lastWeeklyReset(now);
+    const g = C.groupItems(S.data ? S.data.items : [], now);
+    drawList(ui.daily, g.daily, 'daily');
+    drawList(ui.weekly, g.weekly, 'weekly');
+    drawList(ui.event, g.event, 'event');
+    clock(now);
+  }
+
+  function clock(now) {
+    const ui = S.ui;
+    if (!ui) return;
+    ui.daily.clock.textContent = 'reset ' + C.fmtDuration(C.nextDailyReset(now) - now);
+    ui.weekly.clock.textContent = 'reset ' + C.fmtDuration(C.nextWeeklyReset(now) - now);
+  }
+
+  // Every second: countdowns; when a reset passes, re-derive done-state.
+  function tick() {
+    const now = Date.now();
+    const key = C.lastDailyReset(now) + ':' + C.lastWeeklyReset(now);
+    if (S.ui && key !== S.resetKey) draw();
+    else clock(now);
+  }
+
+  // ---- mount ----
+
+  function listCard(title, withClock) {
+    const c = el('section', 'ew-card ew-mcard');
+    const h = el('h2', null, title);
+    const meta = el('span', 'ew-tmeta');
+    const count = el('span', 'ew-pill unknown', '');
+    meta.appendChild(count);
+    const clk = el('span', 'ew-tclock', '');
+    if (withClock) meta.appendChild(clk);
+    h.appendChild(meta);
+    c.appendChild(h);
+    const b = el('div', 'ew-cbody');
+    c.appendChild(b);
+    return { card: c, body: b, count: count, clock: clk };
+  }
+
+  function formCard() {
+    const c = el('section', 'ew-card ew-mcard');
+    c.appendChild(el('h2', null, 'Add item'));
+    const body = el('div', 'ew-cbody');
+    const form = el('form', 'ew-form');
+    const f = {};
+    const field = function (name, text, input) {
+      const lab = el('label', null);
+      lab.appendChild(el('span', 'ew-muted', text));
+      input.name = name;
+      lab.appendChild(input);
+      form.appendChild(lab);
+      f[name] = input;
+    };
+    const title = el('input');
+    title.type = 'text';
+    title.maxLength = 80;
+    title.autocomplete = 'off';
+    field('title', 'title', title);
+    const kind = el('select');
+    ['daily', 'weekly', 'event'].forEach(function (k) {
+      const o = el('option', null, k);
+      o.value = k;
+      kind.appendChild(o);
+    });
+    field('kind', 'kind', kind);
+    const until = el('input');
+    until.type = 'date';
+    field('until', 'until (event)', until);
+    const btns = el('div', 'ew-btns');
+    const save = el('button', 'ew-btn', 'Add');
+    save.type = 'submit';
+    btns.appendChild(save);
+    form.appendChild(btns);
+    f.msg = el('div', 'ew-muted ew-msg', '');
+    form.appendChild(f.msg);
+    form.addEventListener('submit', function (ev) { ev.preventDefault(); add(); });
+    body.appendChild(form);
+    c.appendChild(body);
+    return { card: c, form: f };
+  }
+
+  function mount(panel) {
+    panel.classList.add('ew-today');
+    const d = listCard('Daily', true);
+    const w = listCard('Weekly', true);
+    const e = listCard('Events', false);
+    const fm = formCard();
+    [d, w, e, fm].forEach(function (c) { panel.appendChild(c.card); });
+    S.ui = { daily: d, weekly: w, event: e, form: fm.form };
+    if (!S.timer) {
+      setInterval(tick, 1000);
+      poll(false);
+    } else {
+      draw();
+    }
+  }
+
+  function show() { poll(false); }
+
+  window.EWToday = { mount: mount, show: show };
+})();

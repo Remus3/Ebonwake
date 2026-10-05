@@ -165,11 +165,17 @@ test('validWatchBody accepts exactly add/remove with int fields', () => {
 
 test('market POST goes through the dashboard preload only (overlay has none)', () => {
   const pre = read('preload.js');
-  assert.match(pre, /contextBridge\.exposeInMainWorld\('ewMarket'/);
-  assert.match(pre, /ipcRenderer\.invoke\('ew:market-watch'/);
+  // Plan 003 generalised the plan 002 bridge: window.ewApi.post(route, body).
+  assert.match(pre, /contextBridge\.exposeInMainWorld\('ewApi'/);
+  assert.match(pre, /ipcRenderer\.invoke\('ew:post'/);
   const m = read('main.js');
-  assert.match(m, /ipcMain\.handle\('ew:market-watch'/);
-  assert.match(m, /validWatchBody\(/);
+  assert.match(m, /ipcMain\.handle\('ew:post'/);
+  assert.match(m, /core\.validPost\(/);
+  assert.strictEqual(C.validPost('/api/market/watch', { add: { id: 1, sid: 0 } }), true);
+  const mk = read('dashboard/market.js');
+  assert.match(mk, /window\.ewApi/);
+  assert.match(mk, /\.post\('\/api\/market\/watch'/);
+  assert.doesNotMatch(mk, /ewMarket/);
   assert.equal((m.match(/preload:/g) || []).length, 1, 'exactly one window has a preload');
   const ov = m.slice(m.indexOf('function createOverlay'), m.indexOf('function toggleOverlay'));
   assert.doesNotMatch(ov, /preload/);
