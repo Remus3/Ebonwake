@@ -33,6 +33,8 @@ SOURCES = [
     {"name": "Black Desert NA/EU news", "url": "https://www.naeu.playblackdesert.com/en-US/News"},
     {"name": "Black Desert NA/EU events",
      "url": "https://www.naeu.playblackdesert.com/en-US/News/Notice?boardType=3"},
+    {"name": "Black Desert NA/EU official coupon list",
+     "url": "https://www.naeu.playblackdesert.com/en-US/News/Detail?groupContentNo=5676"},
     {"name": "Twitch drops campaigns", "url": "https://www.twitch.tv/drops/campaigns"},
 ]
 

@@ -1,6 +1,6 @@
 # Plan 006 - Events tab
 
-Status: in progress (2026-10-04). Lanes: `build` (slice A), `data` (slice B).
+Status: done (2026-10-04); refute rounds 1/3 PASS. Lanes: `build` (slice A), `data` (slice B).
 
 ## Goal
 
