@@ -202,3 +202,20 @@ test('dashboard mounts the market tab and loads market.js; CSP unchanged', () =>
   assert.ok(iCore >= 0 && iMarket > iCore && iDash > iMarket, 'script order ewcore, market, dashboard');
   assert.match(read('dashboard/dashboard.js'), /EWMarket\.mount\(/);
 });
+
+test('itemFreshness flattens the nested /api/market/item shape', () => {
+  const ok = { fetched_at: '2026-10-04T00:00:00+00:00', age_s: 60, ttl_s: 300, stale: false, error: null };
+  const f = C.itemFreshness({ sub: ok, history: ok, orders: Object.assign({}, ok, { stale: true, error: 'arsha code 103' }) });
+  assert.strictEqual(f.age_s, 60);
+  assert.strictEqual(f.stale, true);
+  assert.strictEqual(f.error, 'arsha code 103');
+  const g = C.itemFreshness({ sub: ok, history: ok, orders: ok });
+  assert.strictEqual(g.stale, false);
+  assert.strictEqual(C.marketPill(g).stale, false);
+  assert.strictEqual(C.itemFreshness(ok), ok);
+});
+
+test('fmtSilver never prints -0', () => {
+  assert.strictEqual(C.fmtSilver(-0.4), '0');
+  assert.strictEqual(C.fmtSilver(-1500), '-1.5K');
+});

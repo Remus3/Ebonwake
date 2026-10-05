@@ -85,8 +85,8 @@
   // Silver amounts to 3 significant digits: 1.23B, 45.6M, 789K, 950.
   function fmtSilver(n) {
     if (!isNum(n)) return '-';
-    const sign = n < 0 ? '-' : '';
     const a = Math.abs(n);
+    const sign = n < 0 && Math.round(a) !== 0 ? '-' : '';
     if (Math.round(a) < 1000) return sign + Math.round(a);
     const units = [['K', 1e3], ['M', 1e6], ['B', 1e9], ['T', 1e12]];
     let i = 0;
@@ -168,6 +168,19 @@
 
   // Freshness pill from slice A's {fetched_at, age_s, ttl_s, stale, error}.
   // Stale data is never shown as ok.
+  // /api/market/item nests freshness per source {sub, history, orders}; flatten
+  // to the sub's freshness, stale if any source is stale, first error wins.
+  function itemFreshness(fr) {
+    if (!fr || typeof fr !== 'object' || !('sub' in fr)) return fr;
+    const parts = ['sub', 'history', 'orders'].map(function (k) { return fr[k]; })
+      .filter(function (x) { return x && typeof x === 'object'; });
+    const base = Object.assign({}, fr.sub || {});
+    base.stale = parts.some(function (x) { return x.stale; }) || !fr.sub;
+    const err = parts.map(function (x) { return x.error; }).filter(Boolean)[0];
+    base.error = err || null;
+    return base;
+  }
+
   function marketPill(fr) {
     const error = (fr && fr.error) || null;
     if (!fr || !fr.fetched_at || !isNum(fr.age_s)) {
@@ -240,6 +253,7 @@
     depthBars: depthBars,
     fmtAge: fmtAge,
     marketPill: marketPill,
+    itemFreshness: itemFreshness,
     validWatchBody: validWatchBody,
     parseWatchForm: parseWatchForm,
     pollDue: pollDue,

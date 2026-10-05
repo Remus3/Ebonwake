@@ -23,7 +23,11 @@
 
   function getJSON(path) {
     return fetch(C.SERVER + path).then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!r.ok) {
+        return r.json().catch(function () { return null; }).then(function (b) {
+          throw new Error(b && typeof b.error === 'string' ? b.error : 'HTTP ' + r.status);
+        });
+      }
       return r.json();
     }).catch(function (e) {
       throw new Error(e instanceof TypeError ? 'server offline' : String(e.message || e));
@@ -190,11 +194,12 @@
     if (S.itemErr) note(body, 'ew-err', (d ? 'last data - ' : '') + S.itemErr);
     if (!d) { if (!S.itemErr) note(body, 'ew-muted', 'loading...'); return; }
     const sub = Array.isArray(d.sub) ? d.sub[0] : d.sub;
-    const p = C.marketPill(d.freshness);
+    const fr = C.itemFreshness(d.freshness);
+    const p = C.marketPill(fr);
     const wrap = el('div', 'ew-detail' + (p.stale || S.itemErr ? ' ew-stale' : ''));
     const head = el('div', 'ew-mrow');
     head.appendChild(el('span', 'ew-mname', label(sub || S.sel)));
-    head.appendChild(pillEl(d.freshness));
+    head.appendChild(pillEl(fr));
     wrap.appendChild(head);
     const st = C.historyStats(d.history);
     if (st.last === null) wrap.appendChild(el('div', 'ew-muted', 'no 90-day history'));

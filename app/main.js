@@ -33,6 +33,9 @@ function createDashboard() {
     }
   });
   dashboard.removeMenu();
+  // The dashboard (and its preload bridge) never leaves its own file page.
+  dashboard.webContents.on('will-navigate', function (e) { e.preventDefault(); });
+  dashboard.webContents.setWindowOpenHandler(function () { return { action: 'deny' }; });
   dashboard.loadFile(path.join(__dirname, 'dashboard', 'index.html'));
   dashboard.on('closed', function () { dashboard = null; });
 }
