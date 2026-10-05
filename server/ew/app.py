@@ -4,7 +4,7 @@ Routes: /api/health, /api/version (fleet P0-5), /api/state, /events (SSE),
 / and /app/* (static dashboard + overlay assets, browser fallback),
 /api/market/{watch,item,hot} (plan 002), /api/today (plan 003),
 /api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006),
-/api/deadeye (plan 007), and POST /api/market/watch + /api/today + /api/progress +
+/api/deadeye (plan 007), /api/game (plan 008), and POST /api/market/watch + /api/today + /api/progress +
 /api/grind + /api/events + /api/deadeye behind one shared guard.
 """
 
@@ -22,7 +22,7 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import __version__, deadeye, events, grind, market, ports, progress, today
+from . import __version__, deadeye, events, gamewatch, grind, market, ports, progress, today
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -90,7 +90,7 @@ class EWServer(ThreadingHTTPServer):
     def __init__(self, addr, store_root=None, commit=None, sse_interval=15.0,
                  market_client=None, market_seed=None, today_clock=None,
                  profile_client=None, profile_cfg=None, grind_clock=None, events_clock=None,
-                 deadeye_clock=None):
+                 deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False):
         super().__init__(addr, Handler)
         self.started = _now_iso()
         self.commit = commit
@@ -110,6 +110,16 @@ class EWServer(ThreadingHTTPServer):
         self.grind = grind.GrindService(self.store, clock=grind_clock or time.time)
         self.events = events.EventsService(self.store, clock=events_clock or time.time)
         self.deadeye = deadeye.DeadeyeService(self.store, clock=deadeye_clock or time.time)
+        if game_watch is None:
+            cfg = gamewatch.config_bdo(REPO_ROOT) if game_cfg is None else game_cfg
+            game_watch = gamewatch.GameWatch.from_config(cfg)
+        self.game = game_watch
+        if game_poll:  # off by default so tests never probe processes; main() turns it on
+            self.game.start()
+
+    def server_close(self):
+        self.game.stop()
+        super().server_close()
 
     def version(self):
         return {"commit": self.commit, "started": self.started, "pid": os.getpid(),
@@ -119,7 +129,8 @@ class EWServer(ThreadingHTTPServer):
         return {"app": "ebonwake", "version": __version__, "tabs": TABS,
                 "sources": {"market": self.market.source(), "today": self.today.source(),
                             "profile": self.progress.source(), "grind": self.grind.source(),
-                            "events": self.events.source(), "deadeye": self.deadeye.source()},
+                            "events": self.events.source(), "deadeye": self.deadeye.source(),
+                            "game": self.game.source()},
                 "now": _now_iso()}
 
 
@@ -183,6 +194,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.events.view())
         if path == "/api/deadeye":
             return self._send(200, self.server.deadeye.view())
+        if path == "/api/game":
+            return self._send(200, self.server.game.view())
         if path == "/events":
             return self._sse()
         if path == "/":
@@ -307,12 +320,20 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
+        game = self.server.game
+        seq = game.seq
         try:
+            beat = True
             while True:
-                msg = json.dumps({"type": "heartbeat", "now": _now_iso()})
-                self.wfile.write(f"data: {msg}\n\n".encode("utf-8"))
+                if beat:
+                    msg = json.dumps({"type": "heartbeat", "now": _now_iso()})
+                    self.wfile.write(f"data: {msg}\n\n".encode("utf-8"))
+                else:  # named event: onmessage (heartbeat) consumers stay untouched
+                    body = json.dumps(game.view())
+                    self.wfile.write(f"event: game\ndata: {body}\n\n".encode("utf-8"))
                 self.wfile.flush()
-                time.sleep(self.server.sse_interval)
+                new = game.wait_change(seq, self.server.sse_interval)
+                beat, seq = new == seq, new
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
             return
 
@@ -320,17 +341,18 @@ class Handler(BaseHTTPRequestHandler):
 def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15.0,
                 market_client=None, market_seed=None, today_clock=None,
                 profile_client=None, profile_cfg=None, grind_clock=None, events_clock=None,
-                deadeye_clock=None):
+                deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False):
     return EWServer(("127.0.0.1", port), store_root=store_root, commit=commit,
                     sse_interval=sse_interval, market_client=market_client,
                     market_seed=market_seed, today_clock=today_clock,
                     profile_client=profile_client, profile_cfg=profile_cfg,
                     grind_clock=grind_clock, events_clock=events_clock,
-                    deadeye_clock=deadeye_clock)
+                    deadeye_clock=deadeye_clock, game_watch=game_watch,
+                    game_cfg=game_cfg, game_poll=game_poll)
 
 
 def main(argv=None):
-    srv = make_server(commit=read_commit())
+    srv = make_server(commit=read_commit(), game_poll=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
