@@ -9,7 +9,10 @@
    GET /api/events (title + time left), same cadence, countdown local.
    Game (plan 008): header dot from GET /api/game (grey not running, amber
    running, green logged in, red disconnected), same cadence plus a re-GET on
-   each SSE `game` event. Always shown; offline keeps the last state, muted. */
+   each SSE `game` event. Always shown; offline keeps the last state, muted.
+   Leveling (plan 011): opt-in (default off) one line from GET /api/leveling,
+   same cadence plus each SSE `leveling` event; ETA and Hot Time count down
+   locally. */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -29,6 +32,9 @@
   let eventsStale = false;
   let game = null;
   let gameStale = false;
+  let lev = null;
+  let levAt = 0;
+  let levStale = false;
 
   function drawToday(now) {
     const t = document.getElementById('ov-today');
@@ -83,6 +89,13 @@
     v.className = gameStale ? 'ew-stale' : '';
   }
 
+  function drawLeveling(now) {
+    const v = document.getElementById('ov-leveling');
+    v.textContent = lev ? C.levelingLine(lev, levAt, now) : (levStale ? 'Leveling offline' : 'Leveling -');
+    v.title = v.textContent;
+    v.className = 'ew-mname' + (levStale ? ' ew-stale' : '');
+  }
+
   function tick() {
     const now = Date.now();
     document.getElementById('ov-daily').textContent = C.fmtDuration(C.nextDailyReset(now) - now);
@@ -90,6 +103,7 @@
     drawToday(now);
     if (GRIND_ON) drawGrind(now);
     if (W.eventsSoon) drawEvents(now);
+    if (W.leveling) drawLeveling(now);
   }
 
   function getJSON(path) {
@@ -121,6 +135,17 @@
     }).then(function () { drawEvents(Date.now()); });
   }
 
+  function loadLeveling() {
+    getJSON('/api/leveling').then(function (d) {
+      if (!C.normalizeLeveling(d)) throw new Error('bad body');
+      lev = d;
+      levAt = Date.now();
+      levStale = false;
+    }).catch(function () {
+      levStale = true;
+    }).then(function () { drawLeveling(Date.now()); });
+  }
+
   function loadGame() {
     getJSON('/api/game').then(function (d) {
       const g = C.normalizeGame(d);
@@ -145,6 +170,7 @@
     }).then(function () { drawToday(Date.now()); });
     if (GRIND_ON) loadGrind();
     if (W.eventsSoon) loadEvents();
+    if (W.leveling) loadLeveling();
     loadGame();
   }
 
@@ -156,6 +182,7 @@
       loadToday(false);
     };
     src.addEventListener('game', function () { loadGame(); });
+    src.addEventListener('leveling', function () { if (W.leveling) loadLeveling(); });
     src.onerror = function () {
       document.getElementById('ov-server').textContent = 'offline';
       todayStale = true;
@@ -164,6 +191,8 @@
       if (GRIND_ON) drawGrind(Date.now());
       eventsStale = true;
       if (W.eventsSoon) drawEvents(Date.now());
+      levStale = true;
+      if (W.leveling) drawLeveling(Date.now());
       gameStale = true;
       drawGame();
       src.close();
@@ -174,6 +203,7 @@
   document.getElementById('ov-grind-row').hidden = !W.grindSession;
   document.getElementById('ov-buff-row').hidden = !W.grindBuff;
   document.getElementById('ov-events-row').hidden = !W.eventsSoon;
+  document.getElementById('ov-leveling-row').hidden = !W.leveling;
   tick();
   setInterval(tick, 1000);
   setInterval(function () { loadToday(true); }, TODAY_MS);

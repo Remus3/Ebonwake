@@ -133,8 +133,9 @@
     return false;
   }
 
-  function arm(row, input) {
-    const r = C.parseGrindForm('buff', { name: row.name, minutes: input.value });
+  // xp: optional XP % (plan 011); blank keeps the stored value on re-arm.
+  function arm(row, input, xp) {
+    const r = C.parseGrindForm('buff', { name: row.name, minutes: input.value, xp_pct: xp.value });
     if (!r.ok) { msg(r.error); return; }
     S.buffMin[row.name.toLowerCase()] = input.value;
     send(r.body, row.name + ' armed');
@@ -237,9 +238,17 @@
       min.value = S.buffMin[row.name.toLowerCase()] || String(row.minutes);
       min.addEventListener('input', function () { S.buffMin[row.name.toLowerCase()] = min.value; });
       r.appendChild(min);
+      const xp = el('input');
+      xp.type = 'text';
+      xp.inputMode = 'numeric';
+      xp.maxLength = 4;
+      xp.placeholder = 'xp%';
+      xp.title = 'XP bonus % (0-1000, optional; counted in the Leveling XP stack)';
+      xp.value = typeof row.xp_pct === 'number' ? String(row.xp_pct) : '';
+      r.appendChild(xp);
       const go = el('button', 'ew-btn ew-bbtn', row.left_s === null ? 'arm' : 're-arm');
       go.type = 'button';
-      go.addEventListener('click', function () { arm(row, min); });
+      go.addEventListener('click', function () { arm(row, min, xp); });
       r.appendChild(go);
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';
