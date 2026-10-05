@@ -6,7 +6,9 @@
    commit (a read-only launch argument) and a restart of EW's own server (the
    tray "Restart server" path; it never touches the game). Plan 026 adds an
    OS notification ({title, body}; main validates and rate-limits) and the
-   enabled notify rule names (a read-only launch argument).
+   enabled notify rule names (a read-only launch argument). Plan 030 adds
+   /api/settings and two payload-free reloads after a settings save: the
+   overlay window, and the hotkeys + dashboard zoom (main re-reads the config).
    The overlay window has its own one-way preload (overlay/preload.js). */
 'use strict';
 
@@ -26,5 +28,7 @@ contextBridge.exposeInMainWorld('ewApi', {
   appCommit: function () { return APP_COMMIT; },
   restartServer: function () { return ipcRenderer.invoke('ew:restart-server'); },
   notify: function (n) { return ipcRenderer.invoke('ew:notify', n); },
-  notifyPrefs: function () { return NOTIFY_ARG; }
+  notifyPrefs: function () { return NOTIFY_ARG; },
+  reloadOverlay: function () { return ipcRenderer.invoke('ew:reload-overlay'); },
+  reloadShell: function () { return ipcRenderer.invoke('ew:reload-shell'); }
 });

@@ -57,6 +57,10 @@ function createDashboard() {
   // The dashboard (and its preload bridge) never leaves its own file page.
   dashboard.webContents.on('will-navigate', function (e) { e.preventDefault(); });
   dashboard.webContents.setWindowOpenHandler(function () { return { action: 'deny' }; });
+  // Plan 030: settings ui.scale is the dashboard zoom (0.9-1.3).
+  dashboard.webContents.on('did-finish-load', function () {
+    if (dashboard) dashboard.webContents.setZoomFactor(core.uiScale(readConfig()));
+  });
   dashboard.loadFile(path.join(__dirname, 'dashboard', 'index.html'));
   dashboard.on('closed', function () { dashboard = null; });
 }
@@ -101,7 +105,18 @@ function createOverlay() {
   // Opt-in widgets (spec section 3) and scale / opacity ride in the query.
   const query = Object.assign(core.widgetsQuery(core.overlayWidgets(cfg)), core.overlayStyleQuery(overlayCfg));
   overlay.loadFile(path.join(__dirname, 'overlay', 'index.html'), { query: query });
-  overlay.on('closed', function () { overlay = null; });
+  const win = overlay;
+  overlay.on('closed', function () { if (overlay === win) overlay = null; });
+}
+
+// Plan 030: a settings save recreates the overlay from the new config (same
+// visibility) - no app restart. No payload: main re-reads config/local.json.
+function reloadOverlay() {
+  const wasVisible = !!overlay && overlay.isVisible();
+  if (overlay) overlay.destroy();
+  overlay = null;
+  createOverlay();
+  if (wasVisible) overlay.showInactive();
 }
 
 // One-way, number only, from the overlay page alone: clamp 60-600 px and
@@ -164,6 +179,42 @@ function showDashboard() {
   dashboard.show();
   dashboard.focus();
 }
+
+// Hotkeys (globalShortcut only). A settings save re-registers the changed
+// ones; a combination another app holds is reported and the old one kept.
+let keys = core.hotkeys({});
+const HOTKEY_ACTIONS = { toggleOverlay: toggleOverlay, showDashboard: showDashboard };
+
+function reloadHotkeys() {
+  const next = core.hotkeys(readConfig());
+  const names = Object.keys(HOTKEY_ACTIONS).filter(function (n) { return next[n] !== keys[n]; });
+  names.forEach(function (n) { globalShortcut.unregister(keys[n]); });
+  const conflicts = [];
+  names.forEach(function (n) {
+    let ok = false;
+    try { ok = globalShortcut.register(next[n], HOTKEY_ACTIONS[n]); } catch (e) { ok = false; }
+    if (ok) {
+      keys[n] = next[n];
+    } else {
+      conflicts.push(next[n]);
+      try { globalShortcut.register(keys[n], HOTKEY_ACTIONS[n]); } catch (e) { /* stays unbound */ }
+    }
+  });
+  return conflicts;
+}
+
+ipcMain.handle('ew:reload-overlay', function (event) {
+  if (!dashboard || event.sender !== dashboard.webContents) return { ok: false, error: 'not allowed' };
+  reloadOverlay();
+  return { ok: true };
+});
+
+ipcMain.handle('ew:reload-shell', function (event) {
+  if (!dashboard || event.sender !== dashboard.webContents) return { ok: false, error: 'not allowed' };
+  const conflicts = reloadHotkeys();
+  dashboard.webContents.setZoomFactor(core.uiScale(readConfig()));
+  return { ok: conflicts.length === 0, conflicts: conflicts };
+});
 
 // GET a local EW server route: resolves { status, server, doc } or null.
 function getLocal(route) {
@@ -256,7 +307,7 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', showDashboard);
   app.whenReady().then(function () {
-    const keys = core.hotkeys(readConfig());
+    keys = core.hotkeys(readConfig());
     createDashboard();
     createOverlay();
     createTray();

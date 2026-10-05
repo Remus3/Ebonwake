@@ -7,9 +7,9 @@ assets, browser fallback),
 /api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006; plan 014
 adds its `suggested` coupon block),
 /api/deadeye (plan 007), /api/game (plan 008), /api/leveling (plan 011),
-/api/spots (plan 012, GET only), /api/bosses (plan 031), and POST
+/api/spots (plan 012, GET only), /api/bosses (plan 031), /api/settings (plan 030), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
-/api/ocr (plan 009) + /api/leveling + /api/bosses behind one shared guard.
+/api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings behind one shared guard.
 """
 
 import datetime as _dt
@@ -27,13 +27,14 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 from . import (__version__, bosses, coupons, deadeye, events, gamewatch, grind, itemnames, leveling,
-               market, ocr, ports, progress, single, spots, today)
+               market, ocr, ports, progress, settings, single, spots, today)
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 APP_DIR = REPO_ROOT / "app"
 KIT_TOKENS = REPO_ROOT / "ops" / "fleet_kit" / "tokens.css"
 RUNTIME = REPO_ROOT / "ops" / "runtime"
+CONFIG_PATH = REPO_ROOT / "config" / "local.json"
 DASHBOARD_PAGE = "/app/dashboard/index.html"
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 MAX_POST_BYTES = 4096
@@ -57,6 +58,7 @@ TABS = [
     {"id": "events", "title": "Events", "plan": "006"},
     {"id": "deadeye", "title": "Deadeye", "plan": "007"},
     {"id": "system", "title": "System", "plan": "001"},
+    {"id": "settings", "title": "Settings", "plan": "030"},
 ]
 
 
@@ -113,12 +115,15 @@ class EWServer(ThreadingHTTPServer):
                  profile_client=None, profile_cfg=None, grind_clock=None, events_clock=None,
                  deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
                  ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
-                 coupon_client=None, coupon_spawn=None, bosses_clock=None):
+                 coupon_client=None, coupon_spawn=None, bosses_clock=None,
+                 config_path=None):
         super().__init__(addr, Handler)
         self.started = _now_iso()
         self.commit = commit
         self.cfg_hash = config_hash()
         self.store = Store(store_root or RUNTIME / "store")
+        # Plan 030: the only writer of config/local.json (allowlisted keys only).
+        self.settings = settings.Settings(config_path or CONFIG_PATH)
         self.sse_interval = sse_interval
         seed = config_market_watch() if market_seed is None else market_seed
         self.market = market.MarketService(market_client or market.ArshaClient(),
@@ -279,6 +284,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, self.server.spots.view(parse_qs(query)))
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
+        if path == "/api/settings":
+            return self._send(200, self.server.settings.view())
         if path == "/events":
             return self._sse()
         if path == "/":  # plan 020: redirect so relative asset paths resolve
@@ -339,6 +346,14 @@ class Handler(BaseHTTPRequestHandler):
         (op, arg), = body.items()
         return getattr(self.server.deadeye, op)(arg)
 
+    def _post_settings(self, body):
+        out = self.server.settings.apply(body)
+        if any(k.startswith("market.") for k in out["changed"]):  # net proceeds apply live
+            s = out["settings"]
+            self.server.market.settings = market.settings_from(
+                {"market": {"vp": s["market.vp"], "fame_pct": s["market.fame_pct"]}})
+        return out
+
     def _post_ocr(self, body):
         return self.server.ocr.read(body)
 
@@ -364,7 +379,7 @@ class Handler(BaseHTTPRequestHandler):
                    "/api/progress": _post_progress, "/api/grind": _post_grind,
                    "/api/events": _post_events, "/api/deadeye": _post_deadeye,
                    "/api/ocr": _post_ocr, "/api/leveling": _post_leveling,
-                   "/api/bosses": _post_bosses}
+                   "/api/bosses": _post_bosses, "/api/settings": _post_settings}
 
     def do_POST(self):  # noqa: N802
         """Shared guard for every POST route: loopback Host + application/json +
@@ -475,7 +490,8 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                 profile_client=None, profile_cfg=None, grind_clock=None, events_clock=None,
                 deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
                 ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
-                coupon_client=None, coupon_spawn=None, bosses_clock=None):
+                coupon_client=None, coupon_spawn=None, bosses_clock=None,
+                config_path=None):
     return EWServer(("127.0.0.1", port), store_root=store_root, commit=commit,
                     sse_interval=sse_interval, market_client=market_client,
                     market_seed=market_seed, today_clock=today_clock,
@@ -485,16 +501,18 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                     game_cfg=game_cfg, game_poll=game_poll, ocr_runner=ocr_runner,
                     ocr_cache_dir=ocr_cache_dir, leveling_clock=leveling_clock,
                     coupon_client=coupon_client, coupon_spawn=coupon_spawn,
-                    bosses_clock=bosses_clock)
+                    bosses_clock=bosses_clock, config_path=config_path)
 
 
 def main(argv=None, probe=None):
     # Single instance (plan 010): an EW server already on the port wins.
     if (probe or single.probe)() == "ew":
         return 0
+    # Plan 030: settings coupons.check = false keeps coupon suggestions off.
+    check = settings.Settings(CONFIG_PATH).view()["settings"]["coupons.check"]
     srv = make_server(commit=read_commit(), game_poll=True,
                       game_cfg=gamewatch.config_bdo(REPO_ROOT),
-                      coupon_client=coupons.CouponClient())
+                      coupon_client=coupons.CouponClient() if check else None)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
