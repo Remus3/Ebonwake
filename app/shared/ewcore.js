@@ -423,6 +423,67 @@
     return { label: 'pre-order', cls: 'preorder', title: PREORDER_WHY[state] + ' - ' + PREORDER_NOTE };
   }
 
+  // ---- plan 029: overlay market ticker ----
+  // GET /api/market/watch rows -> at most `max` (default 5) ticker rows: alert
+  // hits first, then operator (watchlist) order. `base` maps "id:sid" to the
+  // previous different price (tickerTrack) for the arrow. A row is stale when
+  // its source age at nowMs passes its TTL, or the server already says stale.
+
+  function tickerKey(it) { return it.id + ':' + (isNum(it.sid) ? it.sid : 0); }
+
+  function tickerStale(fr, nowMs) {
+    if (!plainObject(fr) || fr.stale === true) return true;
+    const ttl = isNum(fr.ttl_s) && fr.ttl_s > 0 ? fr.ttl_s : 300;
+    const at = typeof fr.fetched_at === 'string' ? Date.parse(fr.fetched_at) : NaN;
+    if (isNum(at) && isNum(nowMs)) return (nowMs - at) / 1000 > ttl;
+    return isNum(fr.age_s) ? fr.age_s > ttl : true;
+  }
+
+  const TICKER_ARROW = { up: String.fromCharCode(0x25b2), down: String.fromCharCode(0x25bc) };
+
+  function tickerRows(watchRows, nowMs, max, base) {
+    const n = isInt(max, 1) ? max : 5;
+    const b = plainObject(base) ? base : {};
+    const rows = (Array.isArray(watchRows) ? watchRows : []).filter(function (it) {
+      return plainObject(it) && isInt(it.id, 1);
+    }).map(function (it, i) {
+      const key = tickerKey(it);
+      const alert = it.alert === 'below' || it.alert === 'above' ? it.alert : alertFor(it.price, it.below, it.above);
+      const prev = Object.prototype.hasOwnProperty.call(b, key) ? b[key] : null;
+      let arrow = null;
+      if (isNum(it.price) && isNum(prev) && it.price !== prev) arrow = it.price > prev ? 'up' : 'down';
+      const stale = tickerStale(it.freshness, nowMs);
+      return {
+        key: key, id: it.id, order: i,
+        name: typeof it.name === 'string' && it.name ? it.name : '#' + it.id,
+        price: fmtSilver(it.price), arrow: arrow, arrowText: arrow ? TICKER_ARROW[arrow] : '',
+        net: isInt(it.net, 0) ? fmtSilver(it.net) : null,
+        badge: preorderBadge(preorderState(it)), alert: alert, stale: stale,
+        cls: 'ew-ov-val' + (alert ? ' ew-tick-hit' : '') + (stale ? ' ew-stale' : ''),
+      };
+    });
+    rows.sort(function (a, b2) { return (a.alert ? 0 : 1) - (b2.alert ? 0 : 1) || a.order - b2.order; });
+    return rows.slice(0, n);
+  }
+
+  // Poll-to-poll price memory: `last` = this poll's prices, `base` = the price
+  // before the most recent change (kept across unchanged polls). Items no
+  // longer watched (or without a price) drop out.
+  function tickerTrack(state, watchRows) {
+    const s = plainObject(state) ? state : {};
+    const last0 = plainObject(s.last) ? s.last : {};
+    const base0 = plainObject(s.base) ? s.base : {};
+    const out = { last: {}, base: {} };
+    (Array.isArray(watchRows) ? watchRows : []).forEach(function (it) {
+      if (!plainObject(it) || !isInt(it.id, 1) || !isNum(it.price)) return;
+      const k = tickerKey(it);
+      if (isNum(last0[k]) && last0[k] !== it.price) out.base[k] = last0[k];
+      else if (isNum(base0[k])) out.base[k] = base0[k];
+      out.last[k] = it.price;
+    });
+    return out;
+  }
+
   function pollDue(lastMs, nowMs, intervalMs) {
     return lastMs === null || lastMs === undefined || nowMs - lastMs >= intervalMs;
   }
@@ -2213,9 +2274,9 @@
   // Overlay widgets (spec section 3). Main reads config.overlay.widgets and
   // hands the overlay a query string. Default on (only a literal false turns
   // one off), except the WIDGETS_OPT_IN ones: default off, only a literal true
-  // turns them on (plan 011 leveling, plan 013 season).
-  const WIDGETS = ['grindSession', 'grindBuff', 'eventsSoon', 'leveling', 'season'];
-  const WIDGETS_OPT_IN = ['leveling', 'season'];
+  // turns them on (plan 011 leveling, plan 013 season, plan 029 marketTicker).
+  const WIDGETS = ['grindSession', 'grindBuff', 'eventsSoon', 'leveling', 'season', 'marketTicker'];
+  const WIDGETS_OPT_IN = ['leveling', 'season', 'marketTicker'];
 
   function optIn(k) { return WIDGETS_OPT_IN.indexOf(k) >= 0; }
 
@@ -2792,6 +2853,8 @@
     pairProfit: pairProfit,
     preorderState: preorderState,
     preorderBadge: preorderBadge,
+    tickerRows: tickerRows,
+    tickerTrack: tickerTrack,
     nextDailyReset: nextDailyReset,
     nextWeeklyReset: nextWeeklyReset,
     fmtDuration: fmtDuration,

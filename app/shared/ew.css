@@ -301,6 +301,17 @@ html.ew-overlay, html.ew-overlay body { background: transparent; height: auto; o
 .ew-ov-row .ew-stale { color: var(--fk-text-muted); }
 .ew-ov-row .ew-mname { min-width: 0; }
 .ew-ov-head { margin-bottom: 2px; }
+/* Plan 029: market ticker - up to 5 watched prices, alert hits first. */
+.ew-ov-tick { margin-top: 2px; }
+.ew-ov-tick-head .ew-ov-val { font-weight: 400; color: var(--fk-text-muted); }
+.ew-ov-tick .ew-ov-lab.ew-mname { flex: 1 1 auto; }
+.ew-ov-val.ew-tick-hit { color: var(--fk-status-ok); }
+.ew-tick-up { color: var(--fk-status-ok); }
+.ew-tick-down { color: var(--fk-status-bad); }
+/* Stale never reads as fresh: mute the hit colour and the arrows too. */
+.ew-ov-row .ew-ov-val.ew-stale, .ew-ov-row .ew-stale .ew-tick-up, .ew-ov-row .ew-stale .ew-tick-down { color: var(--fk-text-muted); }
+.ew-tick-net { font-weight: 400; color: var(--fk-text-muted); margin-left: .4em; }
+.ew-ov-tick .ew-badge { margin-left: .4em; font-weight: 400; }
 
 /* Game state (plan 008): dot grey not running, amber running, green logged in,
    red disconnected; unknown / unconfigured / offline use the unknown tone. */

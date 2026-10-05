@@ -19,7 +19,13 @@
    Plan 022: scale / opacity from the query set two CSS variables; rows with
    nothing to say (C.ovQuiet) are hidden; the server row (and a red header
    dot) shows only when the server is not ok; after each layout change the
-   content height goes one-way to main (window.ewOverlay.reportSize). */
+   content height goes one-way to main (window.ewOverlay.reportSize).
+   Market ticker (plan 029): opt-in (default off) up to 5 watched prices from
+   GET /api/market/watch every 60 s (no heartbeat re-GET), alert hits first,
+   arrow vs the previous different price (C.tickerTrack, overlay memory only),
+   net after tax and a pre-order badge when present; a row mutes once its
+   source age passes the TTL. Offline keeps the last rows under a muted
+   `offline` header; each row mutes once its own data passes the TTL. */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -44,6 +50,11 @@
   let levStale = false;
   let season = null;
   let seasonStale = false;
+  const TICKER_MS = 60000;
+  let ticker = null;
+  let tickerStale = false;
+  let tickerMem = null;
+  let tickerSig = null;
 
   // Plan 022: a row shows only when its widget is on and it has something to say.
   function showRow(id, enabled, text) {
@@ -147,6 +158,56 @@
     showRow('ov-season-row', true, v.textContent);
   }
 
+  function tickerLine(r) {
+    const row = document.createElement('div');
+    row.className = 'ew-ov-row';
+    const lab = document.createElement('span');
+    lab.className = 'ew-ov-lab ew-mname' + (r.stale ? ' ew-stale' : '');
+    lab.textContent = r.name;
+    lab.title = r.name;
+    const val = document.createElement('span');
+    val.className = r.cls;
+    if (r.arrow) {
+      const a = document.createElement('span');
+      a.className = 'ew-tick-' + r.arrow;
+      a.textContent = r.arrowText + ' ';
+      val.appendChild(a);
+    }
+    val.appendChild(document.createTextNode(r.price));
+    if (r.net) {
+      const n = document.createElement('span');
+      n.className = 'ew-tick-net';
+      n.textContent = 'net ' + r.net;
+      val.appendChild(n);
+    }
+    if (r.badge) {
+      const b = document.createElement('span');
+      b.className = 'ew-badge ' + r.badge.cls;
+      b.textContent = r.badge.label;
+      b.title = r.badge.title;
+      val.appendChild(b);
+    }
+    row.appendChild(lab);
+    row.appendChild(val);
+    return row;
+  }
+
+  // Rebuilt only when what it shows changed (staleness moves with the clock).
+  function drawTicker(now) {
+    const rows = ticker ? C.tickerRows(ticker.items, now, 5, tickerMem && tickerMem.base) : [];
+    const state = tickerStale ? 'offline' : '';
+    const sig = JSON.stringify([state, rows]);
+    if (sig === tickerSig) return;
+    tickerSig = sig;
+    const st = document.getElementById('ov-ticker-state');
+    st.textContent = state;
+    st.className = 'ew-ov-val' + (tickerStale ? ' ew-stale' : '');
+    const box = document.getElementById('ov-ticker');
+    while (box.firstChild) box.removeChild(box.firstChild);
+    rows.forEach(function (r) { box.appendChild(tickerLine(r)); });
+    document.getElementById('ov-ticker-row').hidden = !rows.length && !tickerStale;
+  }
+
   function tick() {
     const now = Date.now();
     document.getElementById('ov-daily').textContent = C.fmtDuration(C.nextDailyReset(now) - now);
@@ -155,6 +216,7 @@
     if (GRIND_ON) drawGrind(now);
     if (W.eventsSoon) drawEvents(now);
     if (W.leveling) drawLeveling(now);
+    if (W.marketTicker) drawTicker(now);
   }
 
   function getJSON(path) {
@@ -205,6 +267,17 @@
     }).catch(function () {
       seasonStale = true;
     }).then(drawSeason);
+  }
+
+  function loadTicker() {
+    getJSON('/api/market/watch').then(function (d) {
+      if (!d || typeof d !== 'object' || !Array.isArray(d.items)) throw new Error('bad body');
+      ticker = d;
+      tickerMem = C.tickerTrack(tickerMem, d.items);
+      tickerStale = false;
+    }).catch(function () {
+      tickerStale = true;
+    }).then(function () { drawTicker(Date.now()); });
   }
 
   function loadGame() {
@@ -260,6 +333,8 @@
       if (W.leveling) drawLeveling(Date.now());
       seasonStale = true;
       if (W.season) drawSeason();
+      tickerStale = true;
+      if (W.marketTicker) drawTicker(Date.now());
       gameStale = true;
       drawGame();
       src.close();
@@ -279,5 +354,9 @@
   setInterval(tick, 1000);
   setInterval(function () { loadToday(true); }, TODAY_MS);
   loadToday(true);
+  if (W.marketTicker) {
+    setInterval(loadTicker, TICKER_MS);
+    loadTicker();
+  }
   connect();
 })();
