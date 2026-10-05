@@ -195,6 +195,13 @@ def test_view_shape(tmp_path):
     rem = v["today"]["remaining"]
     assert [r["bosses"] for r in rem][0] == ["Garmoth"] and rem[0]["up"] is True
     assert all(not r["up"] for r in rem[1:])
+    # Plan 032: every slot of the PT day, so a despawned boss can still be ticked.
+    slots = v["today"]["slots"]
+    assert [s["bosses"] for s in slots][:3] == [["Golden Pig King", "Kzarka"],
+                                                ["Uturi", "Nouver"], ["Garmoth"]]
+    assert [(s["up"], s["past"]) for s in slots[:4]] == [
+        (False, True), (False, True), (True, False), (False, False)]
+    assert len(slots) == 7 and [s["at_utc"] for s in slots] == sorted(s["at_utc"] for s in slots)
     assert v["garmoth"] == {"looted": 0, "cap": 3,
                             "week_reset": "2026-10-08T00:00:00+00:00"}
     assert v["looted"] == {}

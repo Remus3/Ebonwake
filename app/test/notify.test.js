@@ -57,9 +57,9 @@ test('postToast: every POST result -> one toast (ok / 404 warn / bad)', () => {
 
 test('NOTIFY_RULES: stable names, marketAlert + buffEnding on by default', () => {
   assert.deepStrictEqual(C.NOTIFY_RULES.map((r) => r.name),
-    ['marketAlert', 'buffEnding', 'hotTime', 'resetPassed', 'newCoupon', 'gameExit']);
+    ['marketAlert', 'buffEnding', 'hotTime', 'resetPassed', 'newCoupon', 'gameExit', 'bossSoon']);
   assert.deepStrictEqual(C.notifyPrefs({}), { marketAlert: true, buffEnding: true, hotTime: false,
-    resetPassed: false, newCoupon: false, gameExit: false });
+    resetPassed: false, newCoupon: false, gameExit: false, bossSoon: false });
   const p = C.notifyPrefs({ notify: { gameExit: true, buffEnding: false, hotTime: 'yes', bogus: true } });
   assert.strictEqual(p.gameExit, true);
   assert.strictEqual(p.buffEnding, false);
@@ -186,6 +186,22 @@ test('gameExit: running -> not running while a grind session is open', () => {
   assert.deepStrictEqual(C.notifyRules(run, snap({ game: { state: 'not_running' }, grind: { active: null } }), T0, ALL_ON), []);
   assert.deepStrictEqual(C.notifyRules(off, off, T0, ALL_ON), []);
   assert.deepStrictEqual(C.notifyRules(null, off, T0, ALL_ON), []);
+});
+
+test('bossSoon (plan 032): 15 then 5 min before a spawn, through the ledger once each', () => {
+  const at = T0 + 20 * 60000;
+  const bosses = { next: [{ bosses: ['Kzarka'], at_utc: new Date(at).toISOString().replace('.000Z', '+00:00'), day: '2026-10-05' }],
+    looted: {} };
+  const on = Object.assign({ bossSoon: true }, ALL_ON);
+  const L = C.notifyLedger();
+  const fired = [];
+  for (let t = T0; t < at + 60000; t += 60000) {
+    L.take(C.notifyRules(null, snap({ at: t, bosses: bosses }), t, on), t).forEach((h) => fired.push([h.rule, h.title]));
+  }
+  assert.deepStrictEqual(fired, [['bossSoon', 'World boss in 15m: Kzarka'], ['bossSoon', 'World boss in 5m: Kzarka']]);
+  const h = C.notifyRules(null, snap({ bosses: bosses }), at - 60000, on)[0];
+  assert.ok(C.validNotify({ title: h.title, body: h.body }));
+  assert.strictEqual(h.body, 'Kzarka spawns in 1m 00s');
 });
 
 test('notify text is ASCII-printable and within the OS-notification limits', () => {

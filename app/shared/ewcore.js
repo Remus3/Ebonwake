@@ -2121,6 +2121,108 @@
     return parts.join(' | ');
   }
 
+  // ---- World bosses (plan 032) ----
+  // Formatters over the GET /api/bosses body (plan 031): {next: [{bosses,
+  // at_utc, day, despawn_min}], today: {day, remaining, slots}, looted:
+  // {<PT day>: [names]}, garmoth: {looted, cap}}. Countdowns run from at_utc,
+  // so they stay right between polls; nothing comes from the game client.
+
+  const BOSS_GARMOTH = 'Garmoth';
+  const BOSS_NAME_MAX = 40;
+  const BOSS_SOON_MIN = [5, 15];
+
+  function bossGarmoth(view) {
+    const g = plainObject(view) && plainObject(view.garmoth) ? view.garmoth : null;
+    return g && isNum(g.looted) && isNum(g.cap) ? g : null;
+  }
+
+  function bossLooted(view, day, name) {
+    const l = plainObject(view) && plainObject(view.looted) ? view.looted[day] : null;
+    return Array.isArray(l) && l.indexOf(name) >= 0;
+  }
+
+  // One spawn -> {key, day, at_ms, left_s, left, names: [{name, label, looted}],
+  // text, done}; null for junk. Greyed (looted) = ticked on the spawn's PT day,
+  // or Garmoth at its weekly cap; done = every name greyed.
+  function fmtBossRow(spawn, view, now) {
+    if (!plainObject(spawn) || !Array.isArray(spawn.bosses) || !spawn.bosses.length ||
+      !spawn.bosses.every(function (b) { return typeof b === 'string' && b; }) ||
+      typeof spawn.at_utc !== 'string' || !ISO_TS.test(spawn.at_utc)) return null;
+    const at = Date.parse(spawn.at_utc);
+    if (!isFinite(at)) return null;
+    const day = typeof spawn.day === 'string' ? spawn.day : '';
+    const g = bossGarmoth(view);
+    const names = spawn.bosses.map(function (b) {
+      const gar = b === BOSS_GARMOTH && g;
+      return { name: b, label: gar ? b + ' ' + g.looted + '/' + g.cap : b,
+        looted: bossLooted(view, day, b) || !!(gar && g.looted >= g.cap) };
+    });
+    const leftMs = at - now;
+    return { key: spawn.at_utc, day: day, at_ms: at, left_s: Math.floor(leftMs / 1000), left: fmtDuration(leftMs),
+      names: names, text: names.map(function (n) { return n.label; }).join(' + '),
+      done: names.every(function (n) { return n.looted; }) };
+  }
+
+  // The next n spawns still ahead of `now`: once one passes, the following one
+  // leads (the server list refreshes on the next poll).
+  function bossRows(view, now, n) {
+    const next = plainObject(view) && Array.isArray(view.next) ? view.next : [];
+    return next.map(function (s) { return fmtBossRow(s, view, now); })
+      .filter(function (r) { return r && r.at_ms > now; })
+      .sort(function (a, b) { return a.at_ms - b.at_ms; })
+      .slice(0, n);
+  }
+
+  // Tick targets: each boss that has already spawned today (PT), once, in
+  // spawn order. today.slots (plan 032) keeps despawned ones; an older server
+  // only has `remaining`, of which the `up` rows count.
+  function bossTicks(view, now) {
+    const t = plainObject(view) && plainObject(view.today) ? view.today : null;
+    if (!t) return [];
+    const src = Array.isArray(t.slots) ? t.slots : (Array.isArray(t.remaining) ? t.remaining : []);
+    const seen = {};
+    const out = [];
+    src.forEach(function (s) {
+      const at = plainObject(s) && typeof s.at_utc === 'string' ? Date.parse(s.at_utc) : NaN;
+      const spawned = Array.isArray(t.slots) ? isFinite(at) && at <= now : s && s.up === true;
+      if (!spawned || !Array.isArray(s.bosses) || typeof s.day !== 'string') return;
+      s.bosses.forEach(function (b) {
+        if (!validAscii(b, BOSS_NAME_MAX) || seen[b]) return;
+        seen[b] = true;
+        out.push({ name: b, day: s.day, looted: bossLooted(view, s.day, b) });
+      });
+    });
+    return out;
+  }
+
+  function bossGarmothText(view) {
+    const g = bossGarmoth(view);
+    return g ? BOSS_GARMOTH + ' ' + g.looted + '/' + g.cap + ' this week' : '';
+  }
+
+  // POST /api/bosses body: exactly {tick|untick: {boss, day}}.
+  function validBossesBody(body) {
+    if (!plainObject(body)) return false;
+    const keys = Object.keys(body);
+    if (keys.length !== 1 || (keys[0] !== 'tick' && keys[0] !== 'untick')) return false;
+    const v = body[keys[0]];
+    if (!exact(v, ['boss', 'day']) || !validAscii(v.boss, BOSS_NAME_MAX)) return false;
+    const m = typeof v.day === 'string' ? ISO_DAY.exec(v.day) : null;
+    return !!m && realDate(m[1], m[2], m[3]);
+  }
+
+  // Notify rule bossSoon: one hit at 15 min and one at 5 min before each
+  // spawn that is not already all looted. A state rule (fires on a baseline);
+  // the key carries the threshold so the ledger lets each fire once.
+  function bossHits(prev, next, now) {
+    return bossRows(next.bosses, now, 3).filter(function (r) { return !r.done; }).map(function (r) {
+      const mins = BOSS_SOON_MIN.filter(function (m) { return r.at_ms - now <= m * 60000; })[0];
+      if (mins === undefined) return null;
+      return hit('bossSoon:' + r.key + ':' + mins, 'World boss in ' + mins + 'm: ' + r.text,
+        r.text + ' spawns in ' + r.left);
+    }).filter(Boolean);
+  }
+
   // ---- Home / Now (plan 025) ----
   // One glance screen composed from the existing GET payloads. snapshots:
   // {today, grind, leveling, progress, events, market (GET /api/market/watch),
@@ -2241,6 +2343,16 @@
     return nowCard('coupons', 'New coupons', 'events', rows, 'no new coupons');
   }
 
+  // Plan 032: next 3 world bosses, read-only here (ticks live on Today).
+  function nowBosses(view, now) {
+    const rows = bossRows(view, now, 3).map(function (r) {
+      return nowRow(r.text, r.left, '', r.done ? 'ew-stale' : '');
+    });
+    const c = nowCard('bosses', 'World bosses', 'today', rows, 'no spawns listed');
+    c.meta = bossGarmothText(view);
+    return c;
+  }
+
   function composeNow(snapshots, nowMs) {
     const s = plainObject(snapshots) ? snapshots : {};
     const at = function (k) { return plainObject(s.at) && isNum(s.at[k]) ? s.at[k] : nowMs; };
@@ -2259,6 +2371,7 @@
       cards.push(nowEnding(s.events, at('events'), nowMs));
       if (plainObject(s.events.suggested)) cards.push(nowCoupons(s.events));
     }
+    if (has('bosses', 'next')) cards.push(nowBosses(s.bosses, nowMs));
     return cards;
   }
 
@@ -2274,9 +2387,10 @@
   // Overlay widgets (spec section 3). Main reads config.overlay.widgets and
   // hands the overlay a query string. Default on (only a literal false turns
   // one off), except the WIDGETS_OPT_IN ones: default off, only a literal true
-  // turns them on (plan 011 leveling, plan 013 season, plan 029 marketTicker).
-  const WIDGETS = ['grindSession', 'grindBuff', 'eventsSoon', 'leveling', 'season', 'marketTicker'];
-  const WIDGETS_OPT_IN = ['leveling', 'season', 'marketTicker'];
+  // turns them on (plan 011 leveling, plan 013 season, plan 029 marketTicker,
+  // plan 032 worldBoss).
+  const WIDGETS = ['grindSession', 'grindBuff', 'eventsSoon', 'leveling', 'season', 'marketTicker', 'worldBoss'];
+  const WIDGETS_OPT_IN = ['leveling', 'season', 'marketTicker', 'worldBoss'];
 
   function optIn(k) { return WIDGETS_OPT_IN.indexOf(k) >= 0; }
 
@@ -2426,7 +2540,7 @@
   const POST_VALIDATORS = {
     '/api/market/watch': validWatchBody, '/api/today': validTodayBody, '/api/progress': validProgressBody,
     '/api/grind': validGrindBody, '/api/events': validEventsBody, '/api/deadeye': validDeadeyeBody,
-    '/api/ocr': validOcrBody, '/api/leveling': validLevelingBody
+    '/api/ocr': validOcrBody, '/api/leveling': validLevelingBody, '/api/bosses': validBossesBody
   };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
@@ -2439,7 +2553,7 @@
   // toastQueue: the dashboard's toast region model (max 4, newest last, a key
   // pushed again replaces its toast). notifyRules: pure rule engine over two
   // snapshots of the payloads the dashboard already polls:
-  //   {at, market, grind, grindAt, leveling, levelingAt, events, today, game}
+  //   {at, market, grind, grindAt, leveling, levelingAt, events, today, game, bosses}
   // (raw GET bodies; *At = fetch time ms). A missing prev is a baseline: only
   // state rules (buffEnding) fire on it, transition rules wait for a second look.
 
@@ -2478,7 +2592,7 @@
   const POST_LABELS = {
     '/api/market/watch': 'Market watch', '/api/today': 'Today', '/api/progress': 'Progress',
     '/api/grind': 'Grind', '/api/events': 'Events', '/api/deadeye': 'Deadeye', '/api/ocr': 'OCR',
-    '/api/leveling': 'Leveling'
+    '/api/leveling': 'Leveling', '/api/bosses': 'World bosses'
   };
 
   // One POST result (the ew:post bridge reply) -> one toast.
@@ -2599,7 +2713,8 @@
     { name: 'hotTime', defaultOn: false, fire: hotHits },
     { name: 'resetPassed', defaultOn: false, fire: resetHits },
     { name: 'newCoupon', defaultOn: false, fire: couponHits },
-    { name: 'gameExit', defaultOn: false, fire: gameHits }
+    { name: 'gameExit', defaultOn: false, fire: gameHits },
+    { name: 'bossSoon', defaultOn: false, fire: bossHits }
   ];
 
   // config/local.json `notify` block -> {rule: bool}; non-booleans keep the default.
@@ -2703,6 +2818,11 @@
     notifyArg: notifyArg,
     notifyPrefsFromArg: notifyPrefsFromArg,
     notifyRules: notifyRules,
+    fmtBossRow: fmtBossRow,
+    bossRows: bossRows,
+    bossTicks: bossTicks,
+    bossGarmothText: bossGarmothText,
+    validBossesBody: validBossesBody,
     notifyLedger: notifyLedger,
     validNotify: validNotify,
     rateLimiter: rateLimiter,
