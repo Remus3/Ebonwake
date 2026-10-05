@@ -10,7 +10,7 @@
 (function () {
   'use strict';
   const C = window.EWCore;
-  const POLL_MS = 10000;
+  const POLL_MS = 2000; // exit must show within 5 s (operator QA 2026-10-05)
   const SHOTS_SHOWN = 10;
   const S = {
     data: null, err: null, last: null, timer: null, ui: null,
