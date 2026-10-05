@@ -1,13 +1,14 @@
 EW NEXT SESSION
 ---------------
-SESSION: 3
+SESSION: 4
 
-Next action: collect the loop's idle deep-dive DD-20261005 (lane build,
-state "ran" at 04:51; ops/loop/control/loop_items/DD-20261005.json) - the
-next LaneLoop tick verifies/merges it and adds <= 2 new plans + ROADMAP rows;
-check its state and any new plan rows, adjudicate anything in state
-adjudicate / merge-conflict. The loop is armed and self-continuing; a session
-adds work via ROADMAP rows, it does not run lanes by hand.
+Next action: nothing open for the loop. DD-20261005 merged; plan 018 merged
+(refute 0/3); no ROADMAP row open; nothing in adjudicate / merge-conflict.
+The LaneLoop stays armed: tomorrow's idle deep-dive adds plans by itself.
+"continue" = read progress/loop.json and loop_items/, adjudicate anything
+stuck, otherwise work the OPERATOR QA list below when the operator reports.
+Plan 018 matters at the 2026-10-08 maintenance (level cap 75): after it,
+check the Leveling card accepts level 71+.
 
 Carried forward (not acted on yet):
 - Scorecard BEFORE/AFTER (MAIN order 0300 section 4): needs the OpenSSF
@@ -61,28 +62,25 @@ Carried forward (not acted on yet):
   acted on, reported to MAIN in EW's v6 ANSWER; marked seen in the loop watch.
 
 Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew (read back this
-session: Enabled, repeat 15 min, MultipleInstances IgnoreNew). State:
-ops/loop/control/loop_items/*.json, progress/loop.json, lane-*.json.
-Loop now: kit v8 fleet_inbox triage, kind labels, cap 6 notes/day, pre-merge
-gates = every ci.yml check step (ruff.toml rule set pinned), lanes no longer
-edit ROADMAP.md (loop flips rows at merge; ROADMAP-only conflicts auto-
-resolved row by row; plan 015 deviation 16).
+session via tools/loop_task.py status: enabled, Ready, last_result 0, last
+run 10:30). State: ops/loop/control/loop_items/*.json, progress/loop.json
+(fire 25, idle, "deep-dive already done today"), lanes 0-2 FREE.
+Deep dive 2026-10-05 = docs/research/0002; proposed 019 (patch-notes
+watcher) dropped as a duplicate of 007 (refute 2/3).
 
-Acceptance: DD-20261005 merged (or adjudicated) and its new plans built by
-the loop with ci green; no item left in merge-conflict / adjudicate.
+Acceptance: no loop item in adjudicate / merge-conflict; any new plan rows
+from the next deep-dive built by the loop with ci green.
 
-Do NOT redo: LaneLoop arm (read back), CLAUDE.md loop rules (ec4eba7), kit
-v8 vendored + conformance (4e327cc) + loop on fleet_inbox (593a2e0) + v8
-ANSWER 04:11, Nfa7953 supply-chain (f5d51af, ruff.toml 0b6867a, ANSWER
-04:15), plan 016 (ce5081f), N715c44 (8069937), plan 012 (f5f8857 + ci fix
-218215d), 013 (63db64c), 014 (e1e946b), loop ci-parity gates + ROADMAP
-conflict fix (cf0bc60, d147475), Hc7103f loop minors (merged by loop),
-inbox "deliver-failed" mislabel + re-triage bug (593a2e0).
+Do NOT redo: DD-20261005 + plan 018 (ed68a4b, merged 5c26d67), hand-off
+items He6bbd0 / Ha1f38b (merged by loop), plus everything in the previous
+list: LaneLoop arm, CLAUDE.md loop rules (ec4eba7), kit v8 (4e327cc,
+593a2e0), Nfa7953 (f5d51af, 0b6867a), plans 012-016, loop ci-parity gates.
 
-In flight: DD-20261005 deep-dive (lane build, ran; next tick verifies).
+In flight: none (lanes 0-2 FREE).
 
-Status: main 08147df pushed; ci 37293162212 success, codeql 37293162204
-success. Gates this /done: pytest 0 failed (~1086 tests), node 172 pass /
-0 fail, leak sweep ARMED (19). Session jsonl 0.7 MB.
+Status: main 5c26d67 = origin/main, nothing new committed this session
+before this hand-off. ci + codeql success on 5c26d67. Gates this /done:
+pytest exit 0, node 180 pass / 0 fail, leak sweep ARMED (19). Session
+jsonl 0.5 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
