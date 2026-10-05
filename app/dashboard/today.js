@@ -9,14 +9,17 @@
    lists Events-tab items ending before the weekly reset (read-only, GET
    /api/events), and the add form no longer offers `event` - events are added
    once, on the Events tab. Plan 032: the World bosses card (bosses.js,
-   window.EWBosses) mounts between Events and Add item. Every node is built
+   window.EWBosses) mounts between Events and Add item. Plan 033: a "This
+   week" card lists GET /api/today weekly_plan (eligible first, locked rows
+   with their level / AP / DP gap) and counts clears with POST
+   {weekly_tick|weekly_untick: id}. Every node is built
    with DOM APIs - no HTML from data. */
 (function () {
   'use strict';
   const C = window.EWCore;
   const POLL_MS = 60000;
   const S = { data: null, err: null, last: null, timer: null, ui: null, pending: {}, resetKey: null,
-    resetEls: [], presets: [], ev: null, evAt: 0, evEls: [], rowErr: {} };
+    resetEls: [], presets: [], ev: null, evAt: 0, evEls: [], rowErr: {}, weekBusy: false };
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -198,6 +201,50 @@
     body.appendChild(list);
   }
 
+  // Plan 033: "This week" - weekly content gated by level and gear. Eligible
+  // rows (then unknown) carry n/per_week with +/- ticks; locked rows show the gap.
+  function weekTick(r, delta) {
+    if (S.weekBusy) return;
+    S.weekBusy = true;
+    const body = delta > 0 ? { weekly_tick: r.id } : { weekly_untick: r.id };
+    send(body, r.name + (delta > 0 ? ' ticked' : ' unticked')).then(function () {
+      S.weekBusy = false;
+      draw();
+    });
+  }
+
+  function drawWeek(ui, now) {
+    const body = ui.body;
+    body.textContent = '';
+    const plan = C.weeklyPlan(S.data, now);
+    ui.count.textContent = S.data ? plan.eligible + '/' + plan.total + ' eligible' : '-';
+    ui.count.className = 'ew-pill ' + (plan.eligible ? 'ok' : 'unknown');
+    if (plan.error) body.appendChild(el('div', 'ew-err', 'weekly content: ' + plan.error));
+    if (!S.data) { body.appendChild(el('div', 'ew-muted', S.err ? S.err : 'loading...')); return; }
+    if (!plan.rows.length) { body.appendChild(el('div', 'ew-muted', 'No weekly content data.')); return; }
+    const list = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
+    plan.rows.forEach(function (r) {
+      const row = el('div', 'ew-trow ew-wrow ' + r.state + (r.full ? ' done' : ''));
+      row.title = r.title;
+      row.appendChild(el('span', 'ew-mname', r.name));
+      if (r.state !== 'locked') {
+        row.appendChild(el('span', 'ew-pill ' + (r.full ? 'ok' : 'unknown'), r.ticks));
+        [[-1, '-', r.done === 0], [1, '+', r.full]].forEach(function (b) {
+          const btn = el('button', 'ew-tx', b[1]);
+          btn.type = 'button';
+          btn.disabled = b[2] || !!S.weekBusy;
+          btn.title = b[0] > 0 ? 'count one done this period' : 'undo one';
+          btn.addEventListener('click', function () { weekTick(r, b[0]); });
+          row.appendChild(btn);
+        });
+      }
+      if (r.gap) row.appendChild(el('div', 'ew-muted ew-tdays', r.gap));
+      if (r.reset !== null) row.appendChild(el('span', 'ew-muted ew-tdays', 'resets in ' + C.fmtDuration(r.reset - now)));
+      list.appendChild(row);
+    });
+    body.appendChild(list);
+  }
+
   function draw() {
     const ui = S.ui;
     if (!ui || !ui.daily.body.isConnected) return;
@@ -210,6 +257,7 @@
     const g = C.groupItems(items, now);
     drawList(ui.daily, g.daily, 'daily');
     drawList(ui.weekly, g.weekly, 'weekly');
+    drawWeek(ui.week, now);
     drawList(ui.event, g.event, 'event');
     clock(now);
   }
@@ -334,12 +382,13 @@
     panel.classList.add('ew-today');
     const d = listCard('Daily', true);
     const w = listCard('Weekly', true);
+    const wk = listCard('This week', false);
     const e = listCard('Events', false);
     const fm = formCard();
-    [d, w, e].forEach(function (c) { panel.appendChild(c.card); });
+    [d, w, wk, e].forEach(function (c) { panel.appendChild(c.card); });
     if (window.EWBosses) window.EWBosses.mount(panel); // plan 032: World bosses card
     panel.appendChild(fm.card);
-    S.ui = { daily: d, weekly: w, event: e, form: fm.form };
+    S.ui = { daily: d, weekly: w, week: wk, event: e, form: fm.form };
     if (!S.timer) {
       setInterval(tick, 1000);
       poll(false);
