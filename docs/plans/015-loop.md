@@ -81,8 +81,11 @@ checklist ends in `[ ] /done`; one push.
    claims.
 3. Refute round = one verifier FAIL or one red gate, answered by one producer
    fix run (`writes_code`, acceptEdits, governor queued) in the same
-   worktree. After round 3: green gates -> merged with verdict
-   `accepted after 3/3`; red gates -> WIP unmerged. The lane commit is made
+   worktree. After round 3 (3 verifies, 3 fixes, never a
+   4th verify): state `adjudicate`, WIP committed in the lane worktree and NOT
+   merged - the next session's adjudicator rules (refute r1 blocking 1-2:
+   the loop never self-accepts, deep-dive cap/dedupe findings block merge).
+   Red gates -> WIP unmerged. The lane commit is made
    after review (its body carries the final `refute-rounds: N/3`, the
    verdict and the loop item id), so the count is never amended. The ROADMAP
    row is flipped inside the lane commit (`[x] done <date> (loop; refute N/3

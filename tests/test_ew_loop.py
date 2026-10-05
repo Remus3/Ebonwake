@@ -357,7 +357,7 @@ def test_finished_lane_is_verified_committed_merged_and_flipped(tmp_path):
     assert (root / "feature.txt").exists()
 
 
-def test_refute_rounds_cap_at_three_then_accept(tmp_path):
+def test_refute_rounds_cap_at_three_then_adjudicate_unmerged(tmp_path):
     root, wt = git_world(tmp_path)
     fail = {"rc": 0, "error": None, "result": "VERDICT: FAIL\n1. nit"}
     sp = FakeSpawn([fail, {"rc": 0}, fail, {"rc": 0}, fail, {"rc": 0}, fail])
@@ -366,11 +366,12 @@ def test_refute_rounds_cap_at_three_then_accept(tmp_path):
                                  for i, n in enumerate(("build", "data", "review"))])
     ew_loop.tick(deps=d, no_push=True)
     rec = ew_loop.Items(root).get("012")
-    assert rec["state"] == "merged" and rec["rounds"] == 3
-    assert rec["verdict"] == "accepted after 3/3"
+    assert rec["state"] == "adjudicate" and rec["rounds"] == 3
+    assert rec["verdict"] == "adjudicate"
     fixes = [c for c in sp.calls if c["writes_code"]]
     assert len(fixes) == 3 and all("1. nit" in c["prompt"] for c in fixes)
-    assert len([c for c in sp.calls if not c["writes_code"]]) == 4  # no round 4 fix
+    assert len([c for c in sp.calls if not c["writes_code"]]) == 3  # no round 4 verify
+    assert not (root / "feature.txt").exists()  # never merged into main
     assert "refute-rounds: 3/3" in git(root, "log", "-1", "--format=%B", rec["commit"])
 
 

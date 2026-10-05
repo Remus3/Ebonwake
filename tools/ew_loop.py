@@ -570,7 +570,7 @@ class Tick:
             ok, detail = self.d.gates(wt)
             findings = [] if ok else ["gates failed: " + detail]
             findings += self.extra_checks(rec, wt)
-            if not findings:
+            if not findings and rounds < MAX_ROUNDS:  # never a round 4 (rule 7)
                 if self.blocked():
                     return  # retry next tick
                 line = self.spawn(verify_prompt(rec, rounds + 1), note=f"lane-review-{rec['id']}",
@@ -585,7 +585,9 @@ class Tick:
                     break
                 findings = [(line.get("result") or "no verdict line")[-6000:]]
             if rounds >= MAX_ROUNDS:
-                rec["verdict"] = f"accepted after {MAX_ROUNDS}/{MAX_ROUNDS}" if ok else "FAIL"
+                # after round 3 the adjudicator rules (CLAUDE.md rule 7): the
+                # loop never self-accepts; the item waits unmerged for a session
+                rec["verdict"] = "adjudicate"
                 break
             if self.blocked():
                 return
@@ -621,13 +623,19 @@ class Tick:
     def commit(self, rec, wt, gates_ok):
         date = _dt.datetime.fromtimestamp(self.d.clock()).strftime("%Y-%m-%d")
         rounds = rec.get("rounds", 0)
-        if gates_ok and rec.get("kind") == "plan":
+        passed = rec.get("verdict") == "PASS"
+        if gates_ok and passed and rec.get("kind") == "plan":
             rm = wt / "docs" / "plans" / "ROADMAP.md"
             text = rm.read_text(encoding="utf-8")
             atomic_write(rm, flip_roadmap(text, rec["id"],
                                           f"done {date} (loop; refute {rounds}/{MAX_ROUNDS} "
                                           f"{rec.get('verdict', 'PASS')})"))
-        head = rec["label"] if gates_ok else f"WIP (gates failed, not merged): {rec['label']}"
+        if not gates_ok:
+            head = f"WIP (gates failed, not merged): {rec['label']}"
+        elif not passed:
+            head = f"WIP (no verifier PASS after {MAX_ROUNDS}/{MAX_ROUNDS}, adjudicate): {rec['label']}"
+        else:
+            head = rec["label"]
         msg = (f"{head}\n\nrefute-rounds: {rounds}/{MAX_ROUNDS}\n"
                f"verifier: {rec.get('verdict', 'none')}\nloop item: {rec['id']}\n")
         if self.d.git(["add", "-A"], wt).returncode != 0 or \
@@ -637,10 +645,10 @@ class Tick:
             self.step(f"{rec['id']}: commit refused, worktree left dirty")
             return
         rec["commit"] = self.d.git(["rev-parse", "HEAD"], wt).stdout.strip()
-        if not gates_ok:
-            rec["state"] = "failed"
+        if not gates_ok or not passed:
+            rec["state"] = "failed" if not gates_ok else "adjudicate"
             self.items.put(rec)
-            self.step(f"{rec['id']}: gates failed after {rounds} rounds, WIP kept unmerged")
+            self.step(f"{rec['id']}: {rec['state']} after {rounds} rounds, WIP kept unmerged")
             return
         rec["state"] = "committed"
         self.items.put(rec)
