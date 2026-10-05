@@ -18,7 +18,7 @@
     "display": null,
     "scale": 1.0,
     "opacity": 0.85,
-    "widgets": {"grindSession": true, "grindBuff": true, "eventsSoon": true, "leveling": false, "season": false}
+    "widgets": {"grindSession": true, "grindBuff": true, "eventsSoon": true, "leveling": false, "season": false, "marketTicker": false}
   },
   "ocr": {
     "_doc": "engine: auto (Tesseract if found, else Windows OCR) | tesseract | windows. tesseract: optional path to tesseract.exe when not on PATH or in the default install dir.",
