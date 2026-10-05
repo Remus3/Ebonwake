@@ -35,7 +35,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 028 | Market item-name search (local name index) + exact silver in detail | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 029 | Overlay market ticker: up to 5 watched prices, alert hits first | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 030 | Settings tab + allowlisted POST /api/settings (overlay, hotkeys, profile, theme, scale, notifications) | [ ] open |
-| 031 | World boss schedule: NA table as sourced data, DST-correct next-spawn API | [ ] open |
+| 031 | World boss schedule: NA table as sourced data, DST-correct next-spawn API | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 032 | World boss overlay widget + Today card + 5/15-min notification | [ ] open |
 | 033 | Weekly content planner gated by level and gear (Black Shrine, Atoraxxion, Jetina, LoML, Garmoth, Edania) | [ ] open |
 | 034 | Post-graduation gear roadmap track + graduation readiness + adventure-log seeds | [ ] open |
