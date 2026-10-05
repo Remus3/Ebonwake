@@ -9,7 +9,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 002 | Market tab: arsha.io v2 client with disk cache + TTL + backoff, watchlist, sparkline, order book, alert thresholds | [x] done 2026-10-04 (live arsha data on the desktop, self-test 7/7) |
 | 003 | Today tab: daily/weekly checklist with NA reset clocks, login events, dice; overlay reset countdown | [x] done 2026-10-04 (refute 2/3 PASS; self-test 7/7) |
 | 004 | Progress tab: quest / season-pass / gear tracker, BDO-REST-API profile card | [x] done 2026-10-04 (refute 2/3 PASS; profile API base verified vs upstream openapi) |
-| 005 | Grind tab: grind session log, silver/h, buff timers (overlay widget) | [ ] |
+| 005 | Grind tab: grind session log, silver/h, buff timers (overlay widget) | [x] done 2026-10-04 (refute 2/3 PASS; self-test 7/7) |
 | 006 | Events tab: coupon + event + Twitch-drop tracker with expiries (seed from official pages) | [ ] |
 | 007 | Deadeye tab: build notes (markdown), enhancement plan | [ ] |
 | 008 | Session-log tail (game running / logged in) + ScreenShot watcher | [ ] |
