@@ -118,7 +118,7 @@
       return;
     }
     f.msg.textContent = action === 'add' ? 'saving...' : 'removing...';
-    bridge.post('/api/market/watch', r.body).then(function (res) {
+    window.EWToast.via(bridge).post('/api/market/watch', r.body).then(function (res) {
       if (res && res.ok) {
         f.msg.textContent = action === 'add' ? 'saved' : 'removed';
         if (action === 'remove' && key(r.body.remove) === key(S.sel)) { S.sel = null; S.item = null; }

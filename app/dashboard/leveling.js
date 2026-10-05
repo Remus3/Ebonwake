@@ -82,7 +82,7 @@
     const b = bridge();
     if (!b) { msg('saving needs the Ebonwake app window'); return Promise.resolve(false); }
     msg('saving...');
-    return b.post('/api/leveling', body).then(function (res) {
+    return window.EWToast.via(b).post('/api/leveling', body).then(function (res) {
       if (res && res.ok) {
         if (!accept(res.data)) poll(true);
         msg(okText);

@@ -138,7 +138,7 @@
     o.file = name; o.res = null; o.err = null; o.busy = true; o.msg = '';
     drawOcr();
     draw();
-    b.post('/api/ocr', body).then(function (res) {
+    window.EWToast.via(b).post('/api/ocr', body).then(function (res) {
       if (res && res.ok) {
         const r = C.normalizeOcr(res.data);
         if (r) o.res = r;
@@ -173,7 +173,7 @@
     if (!body) { ocrMsg('cannot arm ' + b.name); return; }
     if (!api) { ocrMsg('arming needs the Ebonwake app window'); return; }
     ocrMsg('arming ' + b.name + '...');
-    api.post('/api/grind', body).then(function (res) {
+    window.EWToast.via(api).post('/api/grind', body).then(function (res) {
       if (res && res.ok) {
         ocrMsg(b.name + ' armed for ' + b.minutes + 'm');
         if (window.EWGrind && typeof window.EWGrind.refresh === 'function') window.EWGrind.refresh();

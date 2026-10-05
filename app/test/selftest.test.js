@@ -35,6 +35,10 @@ function fakes(log, opts) {
           log.push('painted');
           return true;
         }
+        if (src.indexOf('EWToast.selfTest()') >= 0) {
+          log.push('notify-selftest');
+          return { hits: 1, toasts: 1, notify: { ok: true } };
+        }
         const m = /data-tab="([a-z]+)"/.exec(src);
         if (m && src.indexOf('.click()') >= 0) { active = m[1]; log.push('click:' + active); return null; }
         return { scrollH: 700, clientH: 800, scrollW: 1200, clientW: 1280, active: active,
@@ -62,6 +66,7 @@ async function runFake(opts) {
   await selftest.run({
     app: { quit() {} }, dashboard: f.dash, overlay: f.ov, keys: { a: 'F9' },
     globalShortcut: { isRegistered: () => true }, toggleOverlay: f.toggle, out: out,
+    notifyShown: (() => { let n = 0; return () => n++; })(),
     wait: () => Promise.resolve(), paintTimeoutMs: 20,
     overlayPlace: Object.assign({ workArea: { x: 0, y: 0, width: 1920, height: 1040 }, defaultAnchor: true },
       (opts || {}).place)
@@ -123,4 +128,11 @@ test('selftest switches keep Chromium from treating an occluded window as hidden
   assert.ok(sw.some((s) => s[0] === 'disable-features' && /CalculateNativeWinOcclusion/.test(s[1])));
   const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   assert.match(m, /selftest\.switches\(\)/);
+});
+
+test('plan 026: the self-test fires one synthetic alert -> toast + OS notification (reported)', async () => {
+  const { log, res } = await runFake();
+  assert.ok(log.indexOf('notify-selftest') > log.lastIndexOf('capture:system'), 'after the tab captures');
+  assert.deepStrictEqual(res.notify, { hits: 1, toasts: 1, bridge: { ok: true }, osShown: 1, ok: true });
+  assert.ok(res.ok, 'report-only: never fails the run');
 });

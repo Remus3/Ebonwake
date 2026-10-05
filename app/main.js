@@ -3,7 +3,7 @@
    hooks, injects into or sends input to the game. Hotkeys use globalShortcut only. */
 'use strict';
 
-const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, screen } = require('electron');
+const { app, BrowserWindow, Menu, Notification, Tray, globalShortcut, ipcMain, nativeImage, screen } = require('electron');
 const selftest = require('./selftest');
 const childProcess = require('child_process');
 const fs = require('fs');
@@ -38,15 +38,19 @@ const APP_COMMIT = readAppCommit();
 
 let dashboard = null;
 let overlay = null;
+let NOTIFY_SILENT = true;
+let notifyShown = 0;
 
 function createDashboard() {
+  const cfg = readConfig();
+  NOTIFY_SILENT = core.notifySilent(cfg);
   dashboard = new BrowserWindow({
     width: 1280, height: 800, minWidth: 960, minHeight: 600,
     title: 'Ebonwake', backgroundColor: '#0f1216', show: true,
     webPreferences: {
       contextIsolation: true, nodeIntegration: false, sandbox: true,
       preload: path.join(__dirname, 'preload.js'),
-      additionalArguments: ['--ew-app-commit=' + APP_COMMIT]
+      additionalArguments: ['--ew-app-commit=' + APP_COMMIT, '--ew-notify=' + core.notifyArg(core.notifyPrefs(cfg))]
     }
   });
   dashboard.removeMenu();
@@ -227,6 +231,22 @@ ipcMain.handle('ew:restart-server', async function (event) {
   return { ok: true };
 });
 
+// Plan 026: an OS notification for a dashboard rule hit. Only the dashboard may
+// ask, exactly {title, body} (ASCII-printable, 64 / 200 chars), at most 6 a
+// minute; no actions, a click only brings the dashboard forward.
+const notifyLimit = core.rateLimiter(core.NOTIFY_RATE.max, core.NOTIFY_RATE.windowMs);
+ipcMain.handle('ew:notify', function (event, n) {
+  if (!dashboard || event.sender !== dashboard.webContents) return { ok: false, error: 'not allowed' };
+  if (!core.validNotify(n)) return { ok: false, error: 'invalid request' };
+  if (!Notification.isSupported()) return { ok: false, error: 'notifications not supported' };
+  if (!notifyLimit.allow(Date.now())) return { ok: false, error: 'rate limited' };
+  const note = new Notification({ title: n.title, body: n.body, silent: NOTIFY_SILENT });
+  note.on('click', showDashboard);
+  note.show();
+  notifyShown++;
+  return { ok: true };
+});
+
 if (process.env.EW_SELFTEST) {
   selftest.switches().forEach(function (s) { app.commandLine.appendSwitch.apply(app.commandLine, s); });
 }
@@ -247,6 +267,7 @@ if (!app.requestSingleInstanceLock()) {
         app: app, dashboard: dashboard, overlay: overlay, keys: keys,
         globalShortcut: globalShortcut, toggleOverlay: toggleOverlay,
         out: process.env.EW_SELFTEST,
+        notifyShown: function () { return notifyShown; },
         overlayPlace: { workArea: overlayWorkArea(), defaultAnchor: overlayCfg.anchor === core.overlayConfig({}).anchor }
       });
     }

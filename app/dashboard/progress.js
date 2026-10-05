@@ -81,7 +81,7 @@
     const b = bridge();
     if (!b) { msg(where, 'saving needs the Ebonwake app window'); return Promise.resolve(false); }
     msg(where, 'saving...');
-    return b.post('/api/progress', body).then(function (res) {
+    return window.EWToast.via(b).post('/api/progress', body).then(function (res) {
       if (res && res.ok) {
         if (!accept(res.data)) poll(true);
         msg(where, okText);
@@ -114,7 +114,7 @@
       }
       draw();
     };
-    b.post('/api/progress', { step: { track: track.id, step: step.id, done: !prev } }).then(finish, function (e) {
+    window.EWToast.via(b).post('/api/progress', { step: { track: track.id, step: step.id, done: !prev } }).then(finish, function (e) {
       finish({ ok: false, error: String(e && e.message || e) });
     });
   }

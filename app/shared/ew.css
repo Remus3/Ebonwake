@@ -309,3 +309,18 @@ html.ew-overlay, html.ew-overlay body { background: transparent; height: auto; o
 }
 .ew-game .ew-bbtn:disabled { opacity: .5; cursor: default; }
 .ew-card h2 .ew-pill { text-transform: none; letter-spacing: 0; font-weight: 400; }
+
+/* Plan 026: toast region (dashboard only), bottom-right, max 4. */
+.ew-toasts {
+  position: fixed; right: 12px; bottom: 12px; z-index: 50; display: flex; flex-direction: column;
+  gap: 6px; max-width: 360px; pointer-events: none;
+}
+.ew-toast {
+  pointer-events: auto; cursor: pointer; background: var(--fk-surface-2); color: var(--fk-text);
+  border: 1px solid var(--fk-border); border-left: 3px solid var(--fk-status-unknown);
+  border-radius: var(--ew-radius); padding: 6px 10px; font-size: 12px; box-shadow: 0 2px 8px rgba(0, 0, 0, .35);
+}
+.ew-toast.ok { border-left-color: var(--fk-status-ok); }
+.ew-toast.warn { border-left-color: var(--fk-status-warn); }
+.ew-toast.bad { border-left-color: var(--fk-status-bad); }
+.ew-terr { grid-column: 1 / -1; font-size: 11px; margin: 0 0 2px 22px; }
