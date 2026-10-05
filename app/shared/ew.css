@@ -1,0 +1,63 @@
+/* EW layout layer. Colours come ONLY from the fleet kit tokens (--fk-*),
+   imported first; this file adds layout variables and components. */
+:root {
+  --ew-gap: 10px;
+  --ew-radius: 6px;
+  --ew-font: "Segoe UI", system-ui, sans-serif;
+  --ew-mono: "Cascadia Mono", Consolas, monospace;
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--fk-surface);
+  color: var(--fk-text);
+  font: 13px/1.4 var(--ew-font);
+}
+
+.ew-shell { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+.ew-top {
+  display: flex; align-items: center; gap: var(--ew-gap);
+  padding: 6px 12px; border-bottom: 1px solid var(--fk-border);
+  background: var(--fk-surface-2);
+}
+.ew-brand { font-weight: 600; letter-spacing: .04em; }
+.ew-tabs { display: flex; gap: 2px; flex: 1; }
+.ew-tab {
+  border: 0; background: none; color: var(--fk-text-muted);
+  padding: 6px 12px; border-radius: var(--ew-radius); cursor: pointer; font: inherit;
+}
+.ew-tab[aria-selected="true"] { color: var(--fk-text); background: var(--fk-surface); box-shadow: inset 0 -2px 0 var(--fk-accent); }
+
+.ew-pill { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--fk-border); font-size: 12px; }
+.ew-pill.ok { color: var(--fk-status-ok); }
+.ew-pill.warn { color: var(--fk-status-warn); }
+.ew-pill.bad { color: var(--fk-status-bad); }
+.ew-pill.unknown { color: var(--fk-status-unknown); }
+
+.ew-main { flex: 1; min-height: 0; display: flex; }
+
+/* A tab is a grid of compact cards that fits the window; lists scroll inside cards. */
+.ew-panel { flex: 1; min-height: 0; padding: var(--ew-gap); display: none; }
+.ew-panel.active {
+  display: grid; gap: var(--ew-gap);
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-auto-rows: minmax(120px, 1fr);
+}
+.ew-card {
+  min-height: 0; overflow: auto; background: var(--fk-surface-2);
+  border: 1px solid var(--fk-border); border-radius: var(--ew-radius); padding: 10px;
+}
+.ew-card h2 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; color: var(--fk-text-muted); letter-spacing: .06em; }
+.ew-num { font: 600 20px var(--ew-mono); }
+.ew-muted { color: var(--fk-text-muted); }
+
+/* Overlay: glanceable, corner-anchored, translucent. */
+.ew-overlay body, body.ew-overlay { background: transparent; }
+.ew-ov {
+  margin: 0; padding: 8px 10px; border-radius: var(--ew-radius);
+  background: color-mix(in srgb, var(--fk-surface) 72%, transparent);
+  border: 1px solid var(--fk-border); font-size: 12px;
+}
+.ew-ov-row { display: flex; justify-content: space-between; gap: 12px; }

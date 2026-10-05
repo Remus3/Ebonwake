@@ -1,0 +1,36 @@
+EW NEXT SESSION
+---------------
+Next action: finish plan 001 on the desktop - `npm install --prefix app`, then
+`python -m server.ew` and `npm start --prefix app`; confirm the tabbed dashboard
+fits 1280x800 with no page scroll and Ctrl+Alt+E toggles a click-through overlay
+(mouse passes through to the window below). Then flip plan 001 to done in
+docs/plans/ROADMAP.md and start plan 002 (Market tab, arsha.io v2 `na`, disk
+cache + TTL + backoff) via /ship-plan.
+
+Carried forward (not acted on yet):
+- Add a Desktop shortcut EW-NEXT-SESSION.lnk pointing at this file (FLEET item 5).
+- Write gitignored config/leak_needles.json on any new host before pushing
+  (sibling names, account ids, user names); without it the sweep is DEGRADED.
+- MAIN to record EW's port block 8940-8959 in the machine-wide registry (not
+  this tree's file to edit) and add EW to the fleet roster / lane widget.
+- Overlay safety check: run BDO borderless/windowed, overlay shown, on an alt
+  account first, watch for XIGNCODE3 complaints (ADR 0001 reversal condition).
+- Optional: a scheduled task that starts the server on logon (plan 010).
+
+Context: CLAUDE.md (standing orders + ToS floor), docs/design/0001-ebonwake-spec.md,
+docs/plans/001-skeleton.md, docs/research/0001-bdo-data-and-tos.md,
+tools/ew_lane.py (lanes build/data/review, slots max 3), tools/eta.py
+(ops/loop/control/timings.jsonl), server http://127.0.0.1:8940/api/health.
+
+Acceptance: plan 001 acceptance list in docs/plans/001-skeleton.md all true;
+CI green on main.
+
+Do NOT redo: repo scaffold, fleet kit v5 vendoring (conformance test green),
+slots.py vendoring (sha pinned), port choice, spec, research fold-in, CI.
+
+In flight: none.
+
+Status: initial commit set pushed to the public GitHub repo; local gates green
+(pytest, node --test, leak sweep ARMED clean). Session size small.
+
+Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
