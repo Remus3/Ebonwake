@@ -21,6 +21,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 014 | Coupon auto-check vs the official news page (robots.txt-gated, suggest only) | [ ] open |
 | 015 | EW loop tick: inbox answers, lane dispatch, review + merge + push, idle deep-dive, 15-min scheduled task | [>] built in lane 2026-10-05 (install + read-back pending) |
 | 016 | OCR comma-drop regression: a vanished comma must not cut a digit group (old bench 141 -> 142/144) | [ ] open (priority) |
+| 017 | Supply-chain hardening (MAIN order Nfa7953): dependabot, SHA pins, hashed CI pip, CodeQL, read-only token, ruff gate, fuzzing ruled out | [>] built in lane 2026-10-05 (Scorecard before/after blocked) |
 
 Ranking 011-014 (adjudicated 2026-10-05, value to a new Season Deadeye who is
 leveling now): 011 helps every leveling hour with zero external risk; 012
@@ -31,3 +32,7 @@ extensions (low value while leveling).
 
 Rules: refute rounds capped at 3 per item; every plan lands via a lane worktree
 and one push; ETA log updated by every run.
+
+## Order Nfa7953 - blocked items
+
+- Section 4 Scorecard before/after: BLOCKED - needs the scorecard v5.5.0 Linux binary downloaded into WSL (operator-approved download).

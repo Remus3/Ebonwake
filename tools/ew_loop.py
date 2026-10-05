@@ -31,7 +31,6 @@ remote and never call schtasks. Paths are resolved at run time.
 """
 
 import argparse
-import contextlib
 import datetime as _dt
 import hashlib
 import json

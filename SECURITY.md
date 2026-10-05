@@ -46,6 +46,23 @@ project, so that is a realistic figure rather than a service level.
   [What it never does](README.md#what-it-never-does).
 - Findings from automated scanners with no demonstrated impact on this code.
 
+## Supply chain
+
+- Every third-party GitHub Action is pinned to a full commit SHA with its tag as
+  a comment; CI Python deps install from the hash-pinned
+  `ci/requirements-ci.txt` with `--require-hashes`; workflows default to a
+  read-only token. Dependabot (`.github/dependabot.yml`) keeps actions, the CI
+  pip file and the app's npm lockfile current, one grouped PR per ecosystem a
+  week, merged once `ci` is green on it (never auto-merged). CodeQL scans
+  Python, JavaScript and the workflows on push, pull request and weekly.
+- **Fuzzing: ruled out (2026-10-05).** Low value for this app: it is a
+  single-user local tool whose parsers read the operator's own files and
+  pinned upstream data, not untrusted network input, so a fuzzer would buy
+  Scorecard points rather than risk reduction, at hours of setup plus recurring
+  CI minutes. Reverses when the project starts parsing untrusted input (a
+  network-facing service, third-party user-supplied files, a published parser
+  library) or the maintainer orders it.
+
 ## If you are reporting a leak, do not include the leaked value
 
 Describe where it comes out and how you triggered it. A path to reproduce is
