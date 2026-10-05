@@ -45,6 +45,9 @@ TESS_PASSES = ((3.0, 6), (3.0, 11), (1.0, 6))
 PREP_MAX_DIM = 8000
 CACHE_VERSION = "2"  # bump when the engine chain changes; old reads re-OCR once
 ENGINES = ("auto", "tesseract", "windows")
+# A word gap wider than this many word heights starts a new line (a space or a
+# comma read as a space is ~0.4 h; separate UI numbers on one row sit further).
+GAP_SPLIT = 0.8
 OCR_TIMEOUT_S = 60
 MAX_TEXT = 20000
 MAX_LINE_TEXT = 500
@@ -196,9 +199,22 @@ def parse_tsv(stdout, scale=1.0):
             groups[key] = []
             order.append(key)
         groups[key].append((word, x, y, w, h))
-    lines = []
+    segs = []
+    # Split a Tesseract line at wide gaps: psm 6 joins a whole screen row into one
+    # line, and "1,234,567 ... 100" must not read 1234567100 (009 follow-up r1).
     for key in order:
-        ws = groups[key]
+        ws = sorted(groups[key], key=lambda w: w[1])
+        seg = [ws[0]]
+        for w in ws[1:]:
+            prev = seg[-1]
+            if w[1] - (prev[1] + prev[3]) > GAP_SPLIT * max(prev[4], w[4], 1):
+                segs.append(seg)
+                seg = [w]
+            else:
+                seg.append(w)
+        segs.append(seg)
+    lines = []
+    for ws in segs:
         x0 = min(w[1] for w in ws)
         y0 = min(w[2] for w in ws)
         x1 = max(w[1] + w[3] for w in ws)

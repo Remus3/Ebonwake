@@ -482,7 +482,7 @@ def _tsv_row(line, word, x, y, w, h, text, conf="91.5"):
 def test_parse_tsv_groups_words_and_unscales():
     out = TSV_HEAD + "1\t1\t0\t0\t0\t0\t0\t0\t600\t300\t-1\t\n" \
         + _tsv_row(1, 1, 30, 60, 90, 30, "Silver") \
-        + _tsv_row(1, 2, 150, 60, 210, 36, "1,234,567") \
+        + _tsv_row(1, 2, 130, 60, 230, 36, "1,234,567") \
         + _tsv_row(2, 1, 30, 150, 60, 30, "XP") \
         + _tsv_row(2, 2, 99, 150, 9, 30, " ", conf="-1")
     doc = ocr.parse_tsv(out, scale=3)
@@ -626,3 +626,20 @@ def test_bench_cases_and_scoring():
     assert not ocr_bench.score(c, {"lines": [L("Silver 1")]})
     b = next(c for c in cs if c["kind"] == "bare")
     assert ocr_bench.score(b, {"lines": [L(b["text"])]})
+
+
+def test_parse_tsv_splits_wide_gaps_so_row_numbers_never_merge():
+    # verifier round 1: psm 6 put "100" on the silver line -> 1234567100
+    out = TSV_HEAD + _tsv_row(1, 1, 0, 0, 60, 15, "Silver") \
+        + _tsv_row(1, 2, 66, 0, 70, 15, "1,234,567") \
+        + _tsv_row(1, 3, 160, 0, 25, 15, "100")
+    doc = ocr.parse_tsv(out)
+    assert [ln["text"] for ln in doc["lines"]] == ["Silver 1,234,567", "100"]
+    assert ocr.extract_silver(doc["lines"]) == 1234567
+
+
+def test_parse_tsv_keeps_comma_read_as_space_together():
+    out = TSV_HEAD + _tsv_row(1, 1, 0, 0, 60, 15, "Silver") \
+        + _tsv_row(1, 2, 66, 0, 38, 15, "1,234") \
+        + _tsv_row(1, 3, 109, 0, 25, 15, "567")
+    assert ocr.extract_silver(ocr.parse_tsv(out)["lines"]) == 1234567
