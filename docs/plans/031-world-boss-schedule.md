@@ -40,3 +40,26 @@ ToS check: sourced static data from an official robots-allowed page,
 operator ticks; nothing reads the in-game boss notification.
 
 Depends on: none.
+
+## As-built deviations
+
+1. Garmoth n/3 counts Garmoth ticks whose `ticked_at` is at or after the last
+   Thursday 00:00 UTC reset (`today.last_weekly_reset`), not by spawn day.
+   Alternatives: count by the spawn slot's UTC time (a day has 2-3 Garmoth
+   slots, so the tick would have to name the slot). Why: the weekly loot cap
+   is about when the operator looted, and a `{boss, day}` tick cannot pick
+   between slots. Reverses if: ticks gain a slot time.
+2. A tick's `day` is the PT table day and must be today (PT) or up to 7 days
+   back, and the boss must spawn on that weekday; ticks older than 7 days are
+   pruned on write. Alternatives: no window (store grows forever) or today
+   only (a midnight-PT loot could not be ticked). Why: bounded store, typo
+   guard. Reverses if: a history view is planned.
+3. Spawn rows carry extra `day` and `despawn_min` (the slot's longest boss
+   window); today's remaining rows also carry `up` (spawned, not yet
+   despawned). `next` is strictly spawns at or after now; a boss already up
+   shows in `today.remaining` only. Why: the UI needs both without a second
+   call. Reverses if: never (additive fields).
+4. The repeated 01:xx PT hour in November and the skipped 02:xx hour in March
+   both resolve to PDT; no table slot falls in either hour.
+5. No dashboard UI in this plan (the plan lists none); the API is ready for a
+   later tab card.

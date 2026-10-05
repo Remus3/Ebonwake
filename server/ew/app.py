@@ -7,9 +7,9 @@ assets, browser fallback),
 /api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006; plan 014
 adds its `suggested` coupon block),
 /api/deadeye (plan 007), /api/game (plan 008), /api/leveling (plan 011),
-/api/spots (plan 012, GET only), and POST
+/api/spots (plan 012, GET only), /api/bosses (plan 031), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
-/api/ocr (plan 009) + /api/leveling behind one shared guard.
+/api/ocr (plan 009) + /api/leveling + /api/bosses behind one shared guard.
 """
 
 import datetime as _dt
@@ -26,7 +26,7 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import (__version__, coupons, deadeye, events, gamewatch, grind, itemnames, leveling,
+from . import (__version__, bosses, coupons, deadeye, events, gamewatch, grind, itemnames, leveling,
                market, ocr, ports, progress, single, spots, today)
 from .store import Store
 
@@ -113,7 +113,7 @@ class EWServer(ThreadingHTTPServer):
                  profile_client=None, profile_cfg=None, grind_clock=None, events_clock=None,
                  deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
                  ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
-                 coupon_client=None, coupon_spawn=None):
+                 coupon_client=None, coupon_spawn=None, bosses_clock=None):
         super().__init__(addr, Handler)
         self.started = _now_iso()
         self.commit = commit
@@ -161,6 +161,8 @@ class EWServer(ThreadingHTTPServer):
         # Coupon suggestions (plan 014): off unless a client is passed; only main()
         # passes the live one, so no test ever reaches the network.
         self.coupons = coupons.CouponService(coupon_client, self.events, spawn=coupon_spawn)
+        # Plan 031: NA world boss table + operator loot ticks.
+        self.bosses = bosses.BossService(self.store, clock=bosses_clock or time.time)
         self.deadeye = deadeye.DeadeyeService(self.store, clock=deadeye_clock or time.time)
         if game_watch is None:
             # Only main() passes the real config; a bare make_server (every test)
@@ -270,6 +272,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.game.view())
         if path == "/api/leveling":
             return self._send(200, self.server.leveling.view())
+        if path == "/api/bosses":
+            return self._send(200, self.server.bosses.view())
         if path == "/api/spots":
             try:
                 return self._send(200, self.server.spots.view(parse_qs(query)))
@@ -349,10 +353,18 @@ class Handler(BaseHTTPRequestHandler):
         (op, arg), = body.items()
         return getattr(self.server.leveling, ops[op])(arg)
 
+    def _post_bosses(self, body):
+        ops = {"tick", "untick"}
+        if len(body) != 1 or not (ops & set(body)):
+            raise ValueError("body must be one of {tick|untick: {boss, day}}")
+        (op, arg), = body.items()
+        return getattr(self.server.bosses, op)(arg)
+
     POST_ROUTES = {"/api/market/watch": _post_market_watch, "/api/today": _post_today,
                    "/api/progress": _post_progress, "/api/grind": _post_grind,
                    "/api/events": _post_events, "/api/deadeye": _post_deadeye,
-                   "/api/ocr": _post_ocr, "/api/leveling": _post_leveling}
+                   "/api/ocr": _post_ocr, "/api/leveling": _post_leveling,
+                   "/api/bosses": _post_bosses}
 
     def do_POST(self):  # noqa: N802
         """Shared guard for every POST route: loopback Host + application/json +
@@ -463,7 +475,7 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                 profile_client=None, profile_cfg=None, grind_clock=None, events_clock=None,
                 deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
                 ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
-                coupon_client=None, coupon_spawn=None):
+                coupon_client=None, coupon_spawn=None, bosses_clock=None):
     return EWServer(("127.0.0.1", port), store_root=store_root, commit=commit,
                     sse_interval=sse_interval, market_client=market_client,
                     market_seed=market_seed, today_clock=today_clock,
@@ -472,7 +484,8 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                     deadeye_clock=deadeye_clock, game_watch=game_watch,
                     game_cfg=game_cfg, game_poll=game_poll, ocr_runner=ocr_runner,
                     ocr_cache_dir=ocr_cache_dir, leveling_clock=leveling_clock,
-                    coupon_client=coupon_client, coupon_spawn=coupon_spawn)
+                    coupon_client=coupon_client, coupon_spawn=coupon_spawn,
+                    bosses_clock=bosses_clock)
 
 
 def main(argv=None, probe=None):
