@@ -42,6 +42,24 @@ Files: `server/ew/today.py` (new), `server/ew/app.py` (routes), `tests/test_toda
 Acceptance: pytest green: reset boundaries, derived done-state across a reset,
 event expiry, add/remove/move/validation, POST guards.
 
+### Slice A as built (decisions where the contract was silent)
+
+- Store doc gains `"updated": "<iso>"` (last write) so `sources.today.updated`
+  is the time of the last change, not a guess. Alternatives: max tick time
+  (misses add/remove/move), server start time (meaningless). Reverses if: a
+  second writer of the domain appears that cannot maintain it.
+- `until` is optional on every kind; expiry is `UTC date > until` (the until
+  day itself is still shown). An event without `until` never expires.
+  Reverses if: slice B needs `until` mandatory for events.
+- `move.to` is a 0-based index into the full list, clamped to the end;
+  negative / non-int is 400. Orders are renumbered 0..n-1 on every write.
+- Limits: title 1..80 chars after strip, no control chars; at most 200 items;
+  unknown fields in `add` are 400. Seeded once (only when `items` is absent),
+  so an emptied list stays empty.
+- Corrupt store doc degrades (bad items / ticks dropped on read), never 500.
+- POST guard is shared: `Handler.POST_ROUTES` maps path -> handler taking the
+  parsed JSON object; ValueError -> 400. Market and today both use it.
+
 ## Slice B - dashboard + overlay (lane `data`)
 
 Files: `app/dashboard/today.js` (new), `app/dashboard/dashboard.js` (mount),

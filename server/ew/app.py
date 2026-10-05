@@ -2,7 +2,8 @@
 
 Routes: /api/health, /api/version (fleet P0-5), /api/state, /events (SSE),
 / and /app/* (static dashboard + overlay assets, browser fallback),
-/api/market/{watch,item,hot} (plan 002) and POST /api/market/watch.
+/api/market/{watch,item,hot} (plan 002), /api/today (plan 003), and
+POST /api/market/watch + POST /api/today behind one shared guard.
 """
 
 import datetime as _dt
@@ -19,7 +20,7 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import __version__, market, ports
+from . import __version__, market, ports, today
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -81,7 +82,7 @@ class EWServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, addr, store_root=None, commit=None, sse_interval=15.0,
-                 market_client=None, market_seed=None):
+                 market_client=None, market_seed=None, today_clock=None):
         super().__init__(addr, Handler)
         self.started = _now_iso()
         self.commit = commit
@@ -91,6 +92,7 @@ class EWServer(ThreadingHTTPServer):
         seed = config_market_watch() if market_seed is None else market_seed
         self.market = market.MarketService(market_client or market.ArshaClient(),
                                            market.Watchlist(self.store, seed=seed))
+        self.today = today.TodayService(self.store, clock=today_clock or time.time)
 
     def version(self):
         return {"commit": self.commit, "started": self.started, "pid": os.getpid(),
@@ -98,7 +100,8 @@ class EWServer(ThreadingHTTPServer):
 
     def state(self):
         return {"app": "ebonwake", "version": __version__, "tabs": TABS,
-                "sources": {"market": self.market.source()}, "now": _now_iso()}
+                "sources": {"market": self.market.source(), "today": self.today.source()},
+                "now": _now_iso()}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -151,6 +154,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._market_item(query)
         if path == "/api/market/hot":
             return self._send(200, self.server.market.hot())
+        if path == "/api/today":
+            return self._send(200, self.server.today.view())
         if path == "/events":
             return self._sse()
         if path == "/":
@@ -163,9 +168,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self._file(target)
         return self._send(404, {"error": "not found"})
 
+    def _post_market_watch(self, body):
+        if len(body) != 1 or not ({"add", "remove"} & set(body)):
+            raise ValueError("body must be {\"add\": {...}} or {\"remove\": {...}}")
+        wl = self.server.market.watchlist
+        return {"watch": wl.add(body["add"]) if "add" in body else wl.remove(body["remove"])}
+
+    def _post_today(self, body):
+        ops = {"tick", "untick", "add", "remove", "move"}
+        if len(body) != 1 or not (ops & set(body)):
+            raise ValueError("body must be one of {tick|untick|add|remove|move: ...}")
+        (op, arg), = body.items()
+        return getattr(self.server.today, op)(arg)
+
+    POST_ROUTES = {"/api/market/watch": _post_market_watch, "/api/today": _post_today}
+
     def do_POST(self):  # noqa: N802
-        """Loopback Host + application/json + <= 4 KiB. No CORS header is sent and
-        OPTIONS is never answered, so browser pages cannot make this request."""
+        """Shared guard for every POST route: loopback Host + application/json +
+        <= 4 KiB + a JSON object body. No CORS header is sent and OPTIONS is never
+        answered, so browser pages cannot make this request. A route handler gets
+        the parsed dict and returns the 200 body or raises ValueError (-> 400)."""
         unread = [True]
 
         def reply(code, body):
@@ -181,7 +203,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if not self._host_ok():
             return reply(403, {"error": "host"})
-        if self.path.split("?", 1)[0] != "/api/market/watch":
+        route = self.POST_ROUTES.get(self.path.split("?", 1)[0])
+        if route is None:
             return reply(404, {"error": "not found"})
         ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
         if ctype != "application/json":
@@ -198,14 +221,13 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
             return reply(400, {"error": "bad json"})
-        if not isinstance(body, dict) or len(body) != 1 or not ({"add", "remove"} & set(body)):
-            return reply(400, {"error": "body must be {\"add\": {...}} or {\"remove\": {...}}"})
-        wl = self.server.market.watchlist
+        if not isinstance(body, dict):
+            return reply(400, {"error": "body must be a JSON object"})
         try:
-            watch = wl.add(body["add"]) if "add" in body else wl.remove(body["remove"])
+            out = route(self, body)
         except ValueError as e:
             return reply(400, {"error": str(e)})
-        return reply(200, {"watch": watch})
+        return reply(200, out)
 
     def _file(self, target):
         try:
@@ -234,10 +256,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15.0,
-                market_client=None, market_seed=None):
+                market_client=None, market_seed=None, today_clock=None):
     return EWServer(("127.0.0.1", port), store_root=store_root, commit=commit,
                     sse_interval=sse_interval, market_client=market_client,
-                    market_seed=market_seed)
+                    market_seed=market_seed, today_clock=today_clock)
 
 
 def main(argv=None):
