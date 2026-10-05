@@ -129,6 +129,31 @@ html, body {
   border: 1px solid var(--fk-border); border-radius: var(--ew-radius); padding: 3px 6px;
 }
 
+/* Grind tab (plan 005): rows scroll inside their card; hidden must beat flex. */
+.ew-grind [hidden], .ew-ov-row[hidden] { display: none; }
+.ew-gsess { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.ew-grow {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; align-items: center;
+  gap: 6px; padding: 2px 4px; border-radius: var(--ew-radius);
+}
+.ew-srow {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center;
+  gap: 6px; padding: 2px 4px; border-radius: var(--ew-radius);
+}
+.ew-brow {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto 44px auto auto; align-items: center;
+  gap: 6px; padding: 2px 4px; border-radius: var(--ew-radius);
+}
+.ew-grow:hover, .ew-srow:hover, .ew-brow:hover { background: var(--fk-surface); }
+.ew-brow.on .ew-mname { color: var(--fk-status-ok); }
+.ew-brow input {
+  width: 44px; box-sizing: border-box; font: inherit; color: var(--fk-text); background: var(--fk-surface);
+  border: 1px solid var(--fk-border); border-radius: var(--ew-radius); padding: 1px 4px;
+}
+.ew-bbtn { padding: 1px 8px; }
+.ew-gnum { font-size: 12px; white-space: nowrap; }
+.ew-grind .ew-form { gap: 4px; }
+
 /* Overlay: glanceable, corner-anchored, translucent. */
 html.ew-overlay, html.ew-overlay body { background: transparent; }
 .ew-ov {
