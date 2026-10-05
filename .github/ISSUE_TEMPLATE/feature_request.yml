@@ -1,0 +1,21 @@
+name: Idea or feature request
+description: Suggest something Ebonwake could track or show.
+title: "[idea] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What would it do, and why?
+    validations:
+      required: true
+  - type: textarea
+    id: source
+    attributes:
+      label: Where would the data come from?
+      description: >-
+        Allowed sources are public read-only web APIs, the client's session
+        log, screenshots you take, and what you type. Nothing that reads the
+        game's memory or sends it input.
+    validations:
+      required: true

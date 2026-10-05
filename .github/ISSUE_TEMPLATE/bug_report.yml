@@ -1,0 +1,52 @@
+name: Bug report
+description: Something in the dashboard, overlay or server does not behave as documented.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste your family name, character names, account ids, email
+        or full local paths.** Replace them with `REDACTED`. A public issue
+        cannot be unpublished by closing it.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Dashboard (say which tab below)
+        - Overlay
+        - Server / API
+        - Game-state watch (session log)
+        - Screenshot OCR
+        - Install / startup
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit
+      description: Output of `git rev-parse --short HEAD`, or the `/api/version` reply.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Before submitting
+      options:
+        - label: This report contains no family or character name, account id, email or full local path.
+          required: true
+        - label: I am not asking for a feature that reads game memory, injects into the client or sends input to the game.
+          required: true
