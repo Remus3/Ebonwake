@@ -27,7 +27,7 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 from . import (__version__, bosses, coupons, deadeye, events, gamewatch, grind, itemnames, leveling,
-               market, ocr, ports, progress, settings, single, spots, today)
+               market, ocr, ports, progress, settings, single, spots, today, weekly)
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -160,6 +160,10 @@ class EWServer(ThreadingHTTPServer):
         self.spots = spots.SpotsService.from_file(
             character=lambda: self.progress.view(refresh=False)["character"],
             grind=self.grind.view, epoch=self.leveling.active_epoch)
+        # Plan 033: weekly content gated by plan 004's level + gs and plan 023's brackets.
+        self.weekly = weekly.WeeklyService(
+            self.store, clock=today_clock or time.time, character=self._weekly_character,
+            brackets=lambda: self.progress.view(refresh=False)["brackets"])
         # Plan 024: level-gated deadlines show read-only in "Ending soon".
         self.events = events.EventsService(self.store, clock=events_clock or time.time,
                                            deadlines=self.leveling.deadline_rows)
@@ -180,6 +184,15 @@ class EWServer(ThreadingHTTPServer):
         self.ocr = ocr.OcrService(self.game, ocr_cache_dir, runner=ocr_runner)
         if game_poll:  # off by default so tests never probe processes; main() turns it on
             self.game.start()
+
+    def _weekly_character(self):
+        ch = self.progress.view(refresh=False)["character"]
+        return dict(ch, level=self.progress._level(ch))
+
+    def today_view(self, body=None):
+        """GET /api/today: plan 003 checklist + plan 033 `weekly_plan`."""
+        return dict(self.today.view() if body is None else body,
+                    weekly_plan=self.weekly.view())
 
     def server_close(self):
         self.game.stop()
@@ -263,7 +276,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(e)})
             return self._send(200, {"items": rows})
         if path == "/api/today":
-            return self._send(200, self.server.today.view())
+            return self._send(200, self.server.today_view())
         if path == "/api/progress":
             return self._send(200, self.server.progress.view())
         if path == "/api/grind":
@@ -305,11 +318,15 @@ class Handler(BaseHTTPRequestHandler):
         return {"watch": wl.add(body["add"]) if "add" in body else wl.remove(body["remove"])}
 
     def _post_today(self, body):
-        ops = {"tick", "untick", "add", "remove", "move"}
+        ops = {"tick", "untick", "add", "remove", "move", "weekly_tick", "weekly_untick"}
         if len(body) != 1 or not (ops & set(body)):
-            raise ValueError("body must be one of {tick|untick|add|remove|move: ...}")
+            raise ValueError("body must be one of "
+                             "{tick|untick|add|remove|move|weekly_tick|weekly_untick: ...}")
         (op, arg), = body.items()
-        return getattr(self.server.today, op)(arg)
+        if op.startswith("weekly_"):  # plan 033
+            getattr(self.server.weekly, op[len("weekly_"):])(arg)
+            return self.server.today_view()
+        return self.server.today_view(getattr(self.server.today, op)(arg))
 
     def _post_progress(self, body):
         ops = {"character": "set_character", "step": "step", "add_track": "add_track",

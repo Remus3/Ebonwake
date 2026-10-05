@@ -32,4 +32,45 @@ ToS check: sourced static data plus operator-typed level and gear.
 
 Depends on: 021, 023.
 
+## As-built deviations
+
+1. Unsourced gates are `null`, not guessed. Decision: `min_level` / `ap` / `dp`
+   = 0 means "no gate", `null` means "gate not sourced" and the row gates as
+   `unknown` (shown between eligible and locked, with "gate not sourced" or
+   "set X on Progress"). Jetina AP/DP, LoML and Garmoth level/AP/DP and Edania
+   level are null: research 0003 gives no number. Alternatives: invent
+   community "recommended AP" numbers; drop the rows. Why: the brackets
+   precedent (plan 023: null = not transcribed, never a guess); the
+   acceptance fixture (Lv 58 / 240 AP) still shows only Black Shrine
+   eligible. Reverses if: a sourced gate is found - fill the number and
+   `verified` date.
+2. `verified` is a `YYYY-MM-DD` source date (plan 023 style), not the plan 021
+   bool; the URL lives in `source`. Why: the plan asks for URLs and dates.
+   Reverses if: a shared schema for sourced rows is adopted.
+3. `POST /api/today {"weekly_untick": id}` added beside `weekly_tick` (undo a
+   mis-click; removes the newest tick of the period). A tick at the cap or an
+   untick at 0 is a 400. Ticks live in their own store domain `weekly` (the
+   `today` domain's save rewrites the doc and would drop extra keys); only the
+   current period is kept on write. Every `/api/today` answer (GET and every
+   POST op) carries `weekly_plan`. Reverses if: undo is moved elsewhere.
+4. Gate state is `eligible | unknown | locked` with `needs` (positive gaps),
+   `unknown` (stats) and `bracket` ({ap, to_next, next_gain} from the plan 023
+   summary, only when AP is a gap). `ap_kind` `kutum` reads sheet AP (gs.ap,
+   with the Kutum sub equipped); `aap` reads gs.aap. LoML `per_week` = 4 (one
+   kill of each of the four boss types). Level is the higher of the plan 004
+   character level and the plan 011 sample (same rule as Progress).
+5. Merge onto main after plan 030: `server/ew/app.py` import list conflicted
+   (main added `settings`, this lane `weekly`). Decision: union, both kept.
+   Alternatives: none viable (dropping either breaks a feature). Why: the
+   two plans touch disjoint routes. Reverses if: never (mechanical).
+6. Merge onto main after plan 032: `app/dashboard/today.js` conflicted in the
+   header comment and the card mount order (main mounts the World bosses card
+   via `window.EWBosses.mount(panel)` after Events, this lane added the "This
+   week" card). Decision: union; order is Daily, Weekly, This week, Events,
+   World bosses, Add item, and `S.ui` keeps `week`. Alternatives: This week
+   after World bosses (splits the checklist cards apart); This week as its
+   own tab (out of scope). Why: keeps checklist cards together and plan
+   032's "between Events and Add item" placement intact. Reverses if: the
+   operator asks for a different card order.
+
 Dependency guard: before writing code the lane checks that `last_reset` exists in `server/ew/today.py` (plan 021); `server/ew/brackets.py` exists (plan 023). If any is missing, the lane changes nothing, writes `"status": "blocked", "needs": ["021", "023"]` into its progress JSON (`ops/loop/control/progress/p033-build.json`) and exits 0. Plan 019's tick turns that clean, marked run into item state `blocked` (not `no-change`) and re-dispatches the row once every Depends-on row is `[x]`; plan 019's work-list gate normally keeps the row from being dispatched that early. If this row ran before plan 019 landed and was recorded `no-change`, 019's re-arm step makes it dispatchable again.
