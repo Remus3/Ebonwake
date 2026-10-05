@@ -72,3 +72,11 @@ def test_dry_run_spawns_nothing(tmp_path):
     seen, f = _fakes()
     out = ew_lane.run_lane("review", "x", dry_run=True, root=tmp_path, **f)
     assert out["dry_run"] and seen["spawn"] == [] and seen["hold"] == []
+
+
+def test_code_lane_runs_accept_edits_read_lane_does_not(tmp_path):
+    seen, f = _fakes()
+    ew_lane.run_lane("build", "do x", writes_code=True, root=tmp_path, **f)
+    ew_lane.run_lane("review", "look", root=tmp_path, **f)
+    assert seen["spawn"][0][1]["extra"] == ("--permission-mode", "acceptEdits")
+    assert seen["spawn"][1][1]["extra"] == ()

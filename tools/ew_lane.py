@@ -29,6 +29,10 @@ ROOT = Path(__file__).resolve().parent.parent
 LANES = ("build", "data", "review")
 MAX_SLOTS = 3
 CODE = "EW"
+# Headless -p has no prompt to approve edits; code lanes run in acceptEdits so
+# file edits land in the lane worktree. Bash stays on the project allow list
+# (tests, eta, leak sweep); commits and merges are done by the main session.
+CODE_EXTRA = ("--permission-mode", "acceptEdits")
 sys.path.insert(0, str(ROOT / "tools"))
 import eta  # noqa: E402
 
@@ -94,7 +98,8 @@ def run_lane(lane, prompt, writes_code=False, timeout=3600, dry_run=False, root=
         with hold(MAX_SLOTS, repo=CODE, run_id=task, timeout=timeout):
             progress(root, task, 20, "running headless", eta_s, "running")
             line = spawn(root, CODE, prompt, note=task, writes_code=writes_code,
-                         timeout=timeout, cwd=wt, stdin=True)
+                         timeout=timeout, cwd=wt, stdin=True,
+                         extra=CODE_EXTRA if writes_code else ())
         ok = line.get("rc") == 0 and not line.get("error")
         return line
     finally:
