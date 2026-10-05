@@ -10,7 +10,9 @@
   const POLL_MS = 60000;
   const S = {
     data: null, at: 0, err: null, last: null, timer: null, ui: null, busy: false,
-    spot: null, buffMin: {}
+    spot: null, buffMin: {},
+    // Plan 012 "Where next": GET /api/spots, refetched with each grind poll.
+    recs: null, recsErr: null, goal: 'xp', whatIf: { ap: '', dp: '', level: '' }
   };
 
   function el(tag, cls, text) {
@@ -60,6 +62,14 @@
     clearTimeout(S.timer);
     S.timer = setTimeout(function () { poll(true); }, POLL_MS);
     getJSON('/api/grind').then(accept, function (e) { S.err = e.message; }).then(draw);
+    loadRecs();
+  }
+
+  function loadRecs() {
+    const p = C.spotsPath(S.goal, S.whatIf);
+    if (!p.ok) { S.recsErr = p.error; drawRecs(); return; }
+    getJSON(p.path).then(function (d) { S.recs = C.spotRecs(d); S.recsErr = null; },
+      function (e) { S.recsErr = e.message; }).then(drawRecs);
   }
 
   function msg(text) { if (S.ui) S.ui.msg.textContent = text; }
@@ -122,6 +132,23 @@
     const r = C.parseGrindForm('spot', { name: f.newSpot.value });
     if (!r.ok) { msg(r.error); return; }
     send(r.body, 'spot added').then(function (ok) { if (ok) f.newSpot.value = ''; });
+  }
+
+  // A recommended spot click: select it when already logged, else put its name
+  // in the "new spot" field. Nothing is posted.
+  function pickRec(name) {
+    const f = S.ui.form;
+    const id = C.matchSpot(spots(), name);
+    if (id !== null && !active()) {
+      f.spot.value = id;
+      S.spot = id;
+      msg(name + ' selected');
+    } else if (id === null) {
+      f.newSpot.value = name;
+      msg('not logged yet - press Add spot');
+    } else {
+      msg('a session is running; stop it first');
+    }
   }
 
   // Two clicks within 3 s: a stray click never deletes a session.
@@ -262,9 +289,51 @@
     ui.buffBody.appendChild(box);
   }
 
+  function recRow(r, unlock) {
+    const b = el('button', 'ew-grow ew-rrow');
+    b.type = 'button';
+    b.title = (r.region ? r.region + ' - ' : '') + 'AP ' + r.ap_min + ' / DP ' + r.dp_min +
+      ' / lvl ' + r.level_min + (r.notes ? ' - ' + r.notes : '') + (r.source ? ' (' + r.source + ')' : '');
+    b.appendChild(el('span', 'ew-mname', r.name));
+    b.appendChild(el('span', 'ew-muted ew-gnum', S.goal + ' ' + r.score + '/5'));
+    if (unlock) {
+      b.appendChild(el('span', 'ew-mprice', C.spotNeedText(r)));
+    } else {
+      const logged = r.logged_silver_per_h;
+      b.appendChild(el('span', 'ew-mprice', typeof logged === 'number' ? 'you: ' + C.fmtSilver(logged) + '/h' : '-'));
+    }
+    b.addEventListener('click', function () { pickRec(r.name); });
+    return b;
+  }
+
+  function drawRecs() {
+    const ui = S.ui;
+    if (!ui || !ui.recBody.isConnected) return;
+    const body = ui.recBody;
+    body.textContent = '';
+    const R = S.recs;
+    ui.recPill.textContent = 'community, verify';
+    if (S.recsErr) body.appendChild(el('div', 'ew-err', S.recsErr));
+    if (!R) { if (!S.recsErr) body.appendChild(el('div', 'ew-muted', 'loading...')); return; }
+    if (R.error) body.appendChild(el('div', 'ew-err', 'spot table: ' + R.error));
+    if (R.missing.length) {
+      body.appendChild(el('div', 'ew-muted', 'set ' + R.missing.join(', ') + ' in Progress, or type a what-if above'));
+      return;
+    }
+    const box = el('div', 'ew-list' + (S.recsErr ? ' ew-stale' : ''));
+    if (!R.top.length) box.appendChild(el('div', 'ew-muted', 'no spot fits yet'));
+    R.top.forEach(function (r) { box.appendChild(recRow(r, false)); });
+    if (R.unlocks.length) {
+      box.appendChild(el('div', 'ew-muted', 'next unlocks'));
+      R.unlocks.forEach(function (r) { box.appendChild(recRow(r, true)); });
+    }
+    body.appendChild(box);
+  }
+
   function draw() {
     const ui = S.ui;
     if (!ui || !ui.logBody.isConnected) return;
+    drawRecs();
     drawSession();
     drawLog();
     drawSpots();
@@ -369,18 +438,50 @@
     return { card: c.card, pill: c.pill, form: f, msg: m, clock: clk, activeSpot: spotLabel, err: err };
   }
 
+  // Goal toggle + what-if AP / DP / level (blank = the Progress character).
+  function recCard() {
+    const c = card('Where next');
+    const form = el('form', 'ew-form ew-rform');
+    const goal = el('select');
+    C.SPOT_GOALS.forEach(function (g) { const o = el('option', null, g); o.value = g; goal.appendChild(o); });
+    goal.value = S.goal;
+    goal.addEventListener('change', function () { S.goal = goal.value; loadRecs(); });
+    form.appendChild(goal);
+    ['ap', 'dp', 'level'].forEach(function (k) {
+      const i = el('input');
+      i.type = 'text';
+      i.inputMode = 'numeric';
+      i.maxLength = 3;
+      i.placeholder = k;
+      i.title = k + ' what-if (blank = Progress)';
+      i.value = S.whatIf[k];
+      i.addEventListener('input', function () { S.whatIf[k] = i.value; });
+      form.appendChild(i);
+    });
+    const go = el('button', 'ew-btn', 'rank');
+    go.type = 'button';
+    go.addEventListener('click', loadRecs);
+    form.appendChild(go);
+    form.addEventListener('submit', function (ev) { ev.preventDefault(); loadRecs(); });
+    c.body.appendChild(form);
+    const list = el('div', null);
+    c.body.appendChild(list);
+    return { card: c.card, pill: c.pill, body: list };
+  }
+
   function mount(panel) {
     panel.classList.add('ew-grind');
     const s = sessionCard();
+    const w = recCard();
     const l = card('Log');
     const p = card('Spots');
     p.pill.textContent = 'avg silver/h';
     const b = card('Buffs');
     b.pill.textContent = 'tap to arm';
-    [s, l, p, b].forEach(function (x) { panel.appendChild(x.card); });
+    [s, w, l, p, b].forEach(function (x) { panel.appendChild(x.card); });
     S.ui = {
       form: s.form, msg: s.msg, clock: s.clock, activeSpot: s.activeSpot, sessionErr: s.err,
-      sessionPill: s.pill,
+      sessionPill: s.pill, recBody: w.body, recPill: w.pill,
       logBody: l.body, logPill: l.pill, spotBody: p.body, buffBody: b.body, buffClocks: []
     };
     if (!S.timer) {

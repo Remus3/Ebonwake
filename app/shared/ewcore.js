@@ -725,6 +725,67 @@
     return { ok: false, error: 'unknown action' };
   }
 
+  // ---- Grind spot recommender (plan 012) ----
+  // GET /api/spots; the server ranks. Blank what-if fields fall back to the
+  // Progress character server-side.
+
+  const SPOT_GOALS = ['xp', 'silver'];
+  const SPOT_STAT = [0, 999];
+  const SPOT_LEVEL = [1, 70];
+
+  // goal + what-if strings -> { ok, path } or { ok: false, error }.
+  function spotsPath(goal, form) {
+    const f = form || {};
+    if (SPOT_GOALS.indexOf(goal) < 0) return { ok: false, error: 'goal must be xp or silver' };
+    let path = '/api/spots?goal=' + goal;
+    const fields = [['ap', SPOT_STAT], ['dp', SPOT_STAT], ['level', SPOT_LEVEL]];
+    for (let i = 0; i < fields.length; i++) {
+      const k = fields[i][0];
+      const r = fields[i][1];
+      if (f[k] === undefined || f[k] === null || String(f[k]).trim() === '') continue;
+      const v = wholeIn(f[k], r);
+      if (v === null) return { ok: false, error: k + ' must be a whole number ' + r[0] + '-' + r[1] + ' (blank = Progress)' };
+      path += '&' + k + '=' + v;
+    }
+    return { ok: true, path: path };
+  }
+
+  // "+50 AP +40 DP +2 lvl" for an unlock row; '' when nothing is missing.
+  function spotNeedText(r) {
+    if (!plainObject(r)) return '';
+    const out = [];
+    if (isInt(r.need_ap, 1)) out.push('+' + r.need_ap + ' AP');
+    if (isInt(r.need_dp, 1)) out.push('+' + r.need_dp + ' DP');
+    if (isInt(r.need_level, 1)) out.push('+' + r.need_level + ' lvl');
+    return out.join(' ');
+  }
+
+  // /api/spots body -> { top, unlocks, missing, error } with junk rows dropped.
+  function spotRecs(d) {
+    const rows = function (v) {
+      return (Array.isArray(v) ? v : []).filter(function (r) {
+        return plainObject(r) && typeof r.name === 'string' && r.name.length > 0;
+      });
+    };
+    if (!plainObject(d)) return { top: [], unlocks: [], missing: [], error: null };
+    return {
+      top: rows(d.top),
+      unlocks: rows(d.unlocks),
+      missing: Array.isArray(d.missing) ? d.missing.filter(function (m) { return typeof m === 'string'; }) : [],
+      error: typeof d.error === 'string' ? d.error : null
+    };
+  }
+
+  // Grind spot id whose name matches `name` (case-insensitive), or null.
+  function matchSpot(spots, name) {
+    if (typeof name !== 'string') return null;
+    const n = name.trim().toLowerCase();
+    const s = (Array.isArray(spots) ? spots : []).filter(function (x) {
+      return plainObject(x) && typeof x.name === 'string' && x.name.trim().toLowerCase() === n;
+    })[0];
+    return s ? (s.id === undefined || s.id === null ? s.name : String(s.id)) : null;
+  }
+
   // ---- Events (plan 006) ----
   // Coupons, events and Twitch drops; all operator input. Status / soon follow
   // the server rule (events.py) so countdowns flip locally between polls.
@@ -1458,6 +1519,11 @@
     spotName: spotName,
     validGrindBody: validGrindBody,
     parseGrindForm: parseGrindForm,
+    SPOT_GOALS: SPOT_GOALS,
+    spotsPath: spotsPath,
+    spotNeedText: spotNeedText,
+    spotRecs: spotRecs,
+    matchSpot: matchSpot,
     EVENT_KINDS: EVENT_KINDS,
     EVENTS_SOON_S: EVENTS_SOON_S,
     fmtLeft: fmtLeft,
