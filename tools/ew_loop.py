@@ -455,7 +455,9 @@ def ci_gate_commands(text):
     cmds, block, indent = [], False, 0
     for line in text.splitlines():
         if block:
-            if line.strip() and len(line) - len(line.lstrip()) > indent:
+            if not line.strip():
+                continue
+            if len(line) - len(line.lstrip()) > indent:
                 cmds.append(line.strip())
                 continue
             block = False
@@ -923,6 +925,12 @@ class Tick:
             return
         lane = Path(rec["worktree"]).name
         g = self.d.git
+        if g(["merge-base", "--is-ancestor", rec["commit"], "HEAD"], main).returncode == 0:
+            # already in main (a crash after the merge commit): re-run is a no-op
+            rec["state"] = "merged"
+            self.step(f"{rec['id']}: already merged")
+            self.items.put(rec)
+            return
         r = g(["merge", "--no-ff", "--no-commit", "-q", rec["commit"]], main)
         why = None
         if r.returncode != 0 and not self.resolve_roadmap_conflict(main):

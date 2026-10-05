@@ -922,3 +922,25 @@ def test_plan_and_handoff_prompts_keep_lanes_off_roadmap_and_name_ruff():
     for prompt in (ew_loop.plan_prompt(item), ew_loop.handoff_prompt(item)):
         assert "Do NOT edit docs/plans/ROADMAP.md" in prompt
         assert "python -m ruff check server tools tests" in prompt
+
+
+def test_merge_rerun_of_an_already_merged_commit_is_a_no_op(tmp_path):
+    root, wt = git_world(tmp_path)
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: PASS"}])
+    d = deps(root, spawn=sp, git=real_git,
+             lane_state=lambda: [{"index": i, "state": "RUNNING", "lane": n}
+                                 for i, n in enumerate(("build", "data", "review"))])
+    ew_loop.tick(deps=d, no_push=True)
+    items = ew_loop.Items(root)
+    rec = items.get("012")
+    assert rec["state"] == "merged"
+    head = git(root, "rev-parse", "main")
+    rec["state"] = "committed"  # crash between the merge commit and the record write
+    items.put(rec)
+    ew_loop.tick(deps=d, no_push=True)
+    assert items.get("012")["state"] == "merged" and git(root, "rev-parse", "main") == head
+
+
+def test_ci_gate_commands_block_run_with_blank_line():
+    text = "steps:\n  - name: a\n    run: |\n      echo one\n\n      echo two\n  - name: b\n    run: echo three\n"
+    assert ew_loop.ci_gate_commands(text) == ["echo one", "echo two", "echo three"]
