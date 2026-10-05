@@ -47,6 +47,7 @@ INBOX_REL = "moon_sync_inbox"
 OUTBOX_REL = "moon_sync_outbox"
 sys.path.insert(0, str(ROOT / "tools"))
 import eta  # noqa: E402
+import ew_inbox  # noqa: E402
 import ew_lane  # noqa: E402
 
 CODE = "EW"
@@ -59,10 +60,12 @@ WATCH_REL = CONTROL_REL / "loop_inbox_watch.json"
 ORDERS_REL = CONTROL_REL / "loop_orders.json"
 # Responder diet (operator 2026-10-05): an ORDER / FIX / RULING note escalates
 # to a lane work item (a lane does the work, the loop answers after merge);
-# any other note gets one sonnet low-effort triage answer. At most
-# loop.max_notes_per_day answers are written per local day.
+# any other note gets one sonnet low-effort bare triage spawn (kit v8 item 14:
+# NOREPLY / ACK are ledger lines, only ANSWER writes a note). At most
+# ew_inbox.CAP (6) notes per local day (config may lower it), escalated-order
+# answers exempt; several answers to one destination go in ONE note.
 ESCALATE_RX = re.compile(r"-(ORDER|FIX|RULING)-", re.I)
-DEFAULT_MAX_NOTES = 12
+DEFAULT_MAX_NOTES = ew_inbox.CAP
 PROGRESS_TASK = "loop"
 TICK_S = 900
 HEADROOM = 3
@@ -466,6 +469,8 @@ class Tick:
         self.items = Items(self.root)
         self.log = []
         self.pushed = None
+        self.cap = ew_inbox.OutboundCap(self.root, self.cfg["max_notes_per_day"])
+        self.ledger = ew_inbox.Ledger(self.root)
 
     # -- gates on spawning (item f)
     def blocked(self):
@@ -480,8 +485,10 @@ class Tick:
             return "runs cap"
         return None
 
-    def spawn(self, prompt, **kw):
-        """kit spawn + backoff bookkeeping. Returns the usage line or None."""
+    def spawn(self, prompt, kind="build", **kw):
+        """kit spawn + backoff bookkeeping. Returns the usage line or None.
+        kind (build / inbox / triage) reaches the usage line on kit v8."""
+        kw = ew_inbox.with_kind(self.d.spawn, kw, kind)
         try:
             line = self.d.spawn(self.root, CODE, prompt, stdin=True, **kw)
         except self.d.kit.Refused as exc:
@@ -524,7 +531,9 @@ class Tick:
             return
 
         def deliver(names):
-            pending = [n for n in names if not self.answer(inbox / n, outbox)]
+            batch = {}  # destination -> [(note, reply body, hop)]: ONE note each
+            pending = [n for n in names if not self.answer(inbox / n, outbox, batch)]
+            pending += self.send_batches(batch, outbox)
             if pending:  # left unseen: run_source re-offers them next tick
                 return {"delivered": False, "detail": f"{len(pending)} pending"}
             return {"delivered": True}
@@ -533,57 +542,113 @@ class Tick:
                                       lambda s, n, d: {"delivered": True})
         self.step(f"inbox: {res['outcome']} {len(res['new'])} {res['detail']}"[:200])
 
-    def answer(self, path, outbox):
-        """True when the note needs nothing more (answered now or before, or skipped)."""
+    def answer(self, path, outbox, batch):
+        """True when the note needs nothing more (answered now or before, acked,
+        skipped, or its reply joined this tick's batch); False = pending.
+        FLEET item 14: skip / ack cost nothing, ORDER / FIX / RULING escalate to
+        a lane, everything else gets ONE sonnet-low bare triage spawn."""
         name = path.name
         text = path.read_text(encoding="utf-8", errors="replace")
-        skip = self.d.should_skip(name, CODE, text[:NOTE_HEAD])
-        if skip:
-            self.step(f"inbox skip {skip}: {name}")
+        head = text[:NOTE_HEAD]
+        skip = self.d.should_skip(name, CODE, head)
+        cls = "skip" if skip else ew_inbox.classify(name, CODE, head)
+        if cls == "skip":
+            self.step(f"inbox skip {skip or 'terminal'}: {name}")
             return True
         stem = Path(name).stem
-        if outbox.is_dir() and any(p.name.endswith(f"-re-{stem}.md") for p in outbox.iterdir()):
+        if self.ledger.answered(name) or (outbox.is_dir() and any(
+                p.name.endswith(f"-re-{stem}.md") for p in outbox.iterdir())):
             return True
-        context = None
-        if ESCALATE_RX.search(name):
-            oid = order_id(name)
-            rec = self.items.get(oid)
-            if not rec or rec.get("state") not in DONE_STATES + ("adjudicate",):
-                self.queue_order(oid, name, text)
-                return False  # answered after the lane item is done
-            context = (f"EW's loop carried this order out as lane item {oid}: state "
-                       f"{rec.get('state')}, verdict {rec.get('verdict', 'none')}, "
-                       f"refute-rounds {rec.get('rounds', 0)}/{MAX_ROUNDS}, commit "
-                       f"{rec.get('commit', 'none')}. Mark each item DONE in that commit, "
-                       "or BLOCKED / NOT-APPLICABLE with the reason.")
-        if self.notes_today(outbox) >= self.cfg["max_notes_per_day"]:
-            self.step(f"inbox: daily note cap {self.cfg['max_notes_per_day']} reached")
+        now = self.d.clock()
+        if cls == "ack":  # mechanical ack: a ledger line, never a note
+            self.ledger.mark(name, "ack", now, ew_inbox.note_class(name, head) or "hop")
+            self.step(f"inbox ack (ledger, no note): {name}")
+            return True
+        if cls == "work" or ESCALATE_RX.search(name):
+            return self.answer_order(path, name, text, outbox)
+        to = ew_inbox.sender(name, head) or "MAIN"
+        extra = 0 if to in batch else 1
+        if not self.cap.allow("ANSWER", now, pending=len(batch) + extra - 1):
+            self.step(f"inbox: daily note cap {self.cap.cap} reached")
             return False
         if self.blocked():
             return False
-        line = self.spawn(inbox_prompt(name, text, context), note=name, writes_code=False,
-                          model="sonnet",
-                          effort=self.d.pick_effort(name) if context else "low",
-                          timeout=1800)
+        kw = dict(ew_inbox.TRIAGE_SPAWN, note=name, writes_code=False, timeout=1800)
+        line = self.spawn(ew_inbox.triage_prompt(name, text, CODE, NOTE_MAX),
+                          kind="triage", **kw)
+        if not line or line.get("rc") != 0 or not line.get("result"):
+            return False
+        verdict, body = ew_inbox.parse_verdict(ascii_text(line["result"]))
+        if verdict != "ANSWER":
+            self.ledger.mark(name, verdict.lower(), now, "triage")
+            self.step(f"inbox triage {verdict}: {name}")
+            return True
+        batch.setdefault(to, []).append((name, body, ew_inbox.next_hop(text)))
+        return True
+
+    def answer_order(self, path, name, text, outbox):
+        """An escalated ORDER / FIX / RULING: queued as a lane item, answered
+        once the item is done. The closing answer is exempt from the daily cap
+        (plan 015 deviation 13)."""
+        oid = order_id(name)
+        rec = self.items.get(oid)
+        if not rec or rec.get("state") not in DONE_STATES + ("adjudicate",):
+            self.queue_order(oid, name, text)
+            return False  # answered after the lane item is done
+        context = (f"EW's loop carried this order out as lane item {oid}: state "
+                   f"{rec.get('state')}, verdict {rec.get('verdict', 'none')}, "
+                   f"refute-rounds {rec.get('rounds', 0)}/{MAX_ROUNDS}, commit "
+                   f"{rec.get('commit', 'none')}. Mark each item DONE in that commit, "
+                   "or BLOCKED / NOT-APPLICABLE with the reason.")
+        if self.blocked():
+            return False
+        kw = dict(note=name, writes_code=False, model="sonnet",
+                  effort=self.d.pick_effort(name), timeout=1800)
+        line = self.spawn(inbox_prompt(name, text, context), kind="inbox", **kw)
         reply = (line or {}).get("result")
         if not line or line.get("rc") != 0 or not reply:
             return False
-        stamp = _dt.datetime.fromtimestamp(self.d.clock()).strftime("%Y%m%d-%H%M")
-        dest = outbox / f"{stamp}-from-{CODE}-ANSWER-re-{stem}.md"
-        body = ascii_text(reply).rstrip("\n") + "\n"
-        atomic_write(dest, body)
-        if hashlib.sha256(dest.read_bytes()).hexdigest() != \
-                hashlib.sha256(body.encode("ascii")).hexdigest():
+        stem = Path(name).stem
+        body = ew_inbox.with_hop(ascii_text(reply), ew_inbox.next_hop(text))
+        to = ew_inbox.sender(name, text[:NOTE_HEAD]) or "MAIN"
+        if not self.deliver_note(outbox, f"re-{stem}", body):
             return False
+        now = self.d.clock()
+        self.cap.record("ANSWER", to, name, now, exempt=True)
+        self.ledger.mark(name, "answered", now, "order")
         self.step(f"inbox answered: {name} (1/1 reached)")
         return True
 
-    def notes_today(self, outbox):
-        day = _dt.datetime.fromtimestamp(self.d.clock()).strftime("%Y%m%d")
-        if not outbox.is_dir():
-            return 0
-        return sum(1 for p in outbox.iterdir()
-                   if p.name.startswith(day) and f"-from-{CODE}-ANSWER-" in p.name)
+    def send_batches(self, batch, outbox):
+        """Write ONE note per destination; returns the notes left pending."""
+        pending = []
+        for to, pairs in batch.items():
+            names = [n for n, _, _ in pairs]
+            hop_n = max(h for _, _, h in pairs)
+            if len(pairs) == 1:
+                tail = f"re-{Path(names[0]).stem}"
+                body = ew_inbox.with_hop(pairs[0][1], hop_n)
+            else:
+                tail = f"to-{to}-batch-" + hashlib.sha1(
+                    "\n".join(names).encode("utf-8")).hexdigest()[:6]
+                body = ew_inbox.batch_note(CODE, to, [(n, b) for n, b, _ in pairs], hop_n)
+            if not self.deliver_note(outbox, tail, body):
+                pending += names
+                continue
+            now = self.d.clock()
+            self.cap.record("ANSWER", to, ",".join(names)[:400], now)
+            for n in names:
+                self.ledger.mark(n, "answered", now, tail)
+            self.step(f"inbox answered: {', '.join(names)} -> {to} (1/1 reached)"[:200])
+        return pending
+
+    def deliver_note(self, outbox, tail, body):
+        stamp = _dt.datetime.fromtimestamp(self.d.clock()).strftime("%Y%m%d-%H%M")
+        dest = outbox / f"{stamp}-from-{CODE}-ANSWER-{tail}.md"
+        body = ascii_text(body).rstrip("\n") + "\n"
+        atomic_write(dest, body)
+        return hashlib.sha256(dest.read_bytes()).hexdigest() == \
+            hashlib.sha256(body.encode("ascii")).hexdigest()
 
     def orders(self):
         doc = read_json(self.root / ORDERS_REL, {}) or {}
@@ -937,7 +1002,8 @@ def lane_worker(iid, deps=None, run_lane=None):
     if rec.get("kind") == "deep-dive":
         def spawn(root, code, prompt, **kw):
             kw["extra"] = DEEP_EXTRA
-            return d.spawn(root, code, prompt, **kw)
+            kind = kw.pop("kind", "build")
+            return d.spawn(root, code, prompt, **ew_inbox.with_kind(d.spawn, kw, kind))
     try:
         line = run_lane(rec["lane"], rec["prompt"], writes_code=True, timeout=timeout,
                         root=d.root, spawn=spawn)

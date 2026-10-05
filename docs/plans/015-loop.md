@@ -146,6 +146,41 @@ checklist ends in `[ ] /done`; one push.
     so `run_source` re-offers them every tick (idempotent: the outbox
     `-re-<stem>.md` check). ROADMAP rows whose status contains `priority`
     dispatch before other rows.
+13. Kit v8 inbox cost discipline (MAIN ORDER 2026-10-05, FLEET-COMMON item
+    14; lane item N715c44). The tick already reads the inbox on every fire
+    (14 rule 1: no separate responder exists, none disabled). New
+    `tools/ew_inbox.py` does the item-14 rules: `classify` -> skip (own /
+    TERMINAL / no-reply) | ack (ACK / INFORMATION / TERMINAL / ANSWER class,
+    or `HOP:` at the 2-hop limit: a line in
+    `ops/loop/control/inbox_ledger.jsonl`, never a note) | work (ORDER / FIX /
+    RULING -> lane item, as deviation 12) | triage (ONE spawn, sonnet, effort
+    low, bare, kind `triage`; `VERDICT: NOREPLY|ACK` -> ledger line only,
+    `ANSWER` -> reply). Replies carry `HOP: <incoming + 1>`; several answers
+    to one destination in one tick go in ONE batch note
+    (`-ANSWER-to-<TO>-batch-<6 hex>.md`). Outbound cap 6 a local day
+    (`ops/loop/control/outbound_cap.jsonl`; config may lower, never raise;
+    the default fell from 12). Lane, review and fix spawns pass kind `build`,
+    the order-closing answer kind `inbox`.
+    a. Local module, not the kit's `fleet_inbox`. Decision: implement the
+       rules in `tools/ew_inbox.py` now. Alternatives: wait for the vendored
+       v8 kit (inbox keeps costing until a session vendors it); copy the
+       bundle (unreadable from the lane, and `ops/fleet_kit/` is the main
+       session's to replace in one commit). Why: the cost rules take effect at
+       the next tick. Reverses if: kit v8 is vendored - then the tick calls
+       `fleet_inbox` directly and `tools/ew_inbox.py` keeps only what the kit
+       lacks.
+    b. `kind=` is passed only when the kit's `spawn` accepts it
+       (`ew_inbox.with_kind` inspects the signature): kit v6 rejects unknown
+       keywords, v8 takes them. Reverses if: never (no-op once v8 lands).
+    c. The answer that closes an escalated ORDER / FIX / RULING is exempt from
+       the daily cap (recorded `exempt` in the cap ledger). Alternative: count
+       it as an ANSWER. Why: MAIN's orders demand that answer (its drift sweep
+       reads it) and the cap's purpose is chatter, not order closure; the
+       note's own rule 0 forbids a handled note waiting on anything. Reverses
+       if: MAIN rules order answers count.
+    d. A triage result with no `VERDICT:` line is treated as ANSWER (handled,
+       never dropped; rule 0). Reverses if: the kit's `parse_verdict` defines
+       otherwise.
 
 ## Proposed CLAUDE.md rules (EW rules section; land on the operator's own go)
 

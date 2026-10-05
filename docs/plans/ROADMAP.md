@@ -31,3 +31,14 @@ extensions (low value while leveling).
 
 Rules: refute rounds capped at 3 per item; every plan lands via a lane worktree
 and one push; ETA log updated by every run.
+
+## Order N715c44 - blocked items
+
+Done in-lane: item-14 inbox rules folded into the loop tick (`tools/ew_inbox.py`,
+`tools/ew_loop.py`; triage sonnet/low/bare, ack = ledger line, 6 notes a day,
+HOP lines, batch notes, kind build/inbox/triage); plan 015 deviation 13. No
+responder task existed, none disabled.
+
+- BLOCKED: vendor kit v8 into `ops/fleet_kit/` (all files, one commit) - the bundle sits in the main tree's inbox, outside this lane's read allow list, and the lane may not edit `ops/fleet_kit/`; main session vendors it and verifies the 12 hashes.
+- BLOCKED: re-embed the v8 FLEET-COMMON block (item 14) in CLAUDE.md - lane may not edit CLAUDE.md; rides with the vendoring commit.
+- BLOCKED: kit conformance test green on v8 - `tests/test_fleet_kit_conformance.py` stays on v6 until the vendoring commit; then switch the tick to the kit's `fleet_inbox` (plan 015 deviation 13a).
