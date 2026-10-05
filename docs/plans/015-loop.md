@@ -267,7 +267,7 @@ checklist ends in `[ ] /done`; one push.
        0; attention states 0. `loop-review` was never recorded (always the
        60 s default).
 
-15. Gates = ci, and ROADMAP rows are flipped in main at merge (fix-0130,
+16. Gates = ci, and ROADMAP rows are flipped in main at merge (fix-0130,
     2026-10-05).
     a. Pre-merge gates run exactly the `run:` commands of the tree's own
        `.github/workflows/ci.yml` (in order, minus `pip install` setup):
