@@ -97,3 +97,37 @@ the first tick after its dependency row flips to `[x]`; pytest + node gates gree
 ToS check: repository tooling only; nothing touches the game or the web.
 
 Depends on: none.
+
+## As-built deviations
+
+1. Re-arm while a dependency row is still `[ ]` open. Decision: the
+   `no-change` record is left undecided (no `rearmed` flag) and re-examined
+   every tick; once a dependency flips `[x]` after `rec["dispatched"]` it is
+   re-armed with `needs` = the late plus still-open ids. Alternatives: re-arm
+   at once on any open dependency; mark `rearmed: false`. Why: 4c defines
+   "was still open" operationally as "flipped after dispatch", which cannot be
+   known before the flip; marking false would lose the re-run for good. The
+   row is skipped as waiting meanwhile, so nothing dispatches early. Reverses
+   if: a record is seen parked undecided forever behind a dependency that
+   never lands (then cap it like `blocked_runs`).
+2. Marker lookup falls through. A stale or malformed worktree marker does not
+   end the search: the main-checkout marker is still read. Alternatives: the
+   first existing file decides. Why: the worktree is reused and never cleaned,
+   so its marker is the likeliest stale one; a fresh main-checkout marker of
+   this run must still count. A fresh worktree marker always wins. Reverses
+   if: lanes stop writing markers into the main checkout.
+3. Blocked markers are read for `kind: plan` items only (the file name is
+   `p<id>-build.json`; orders, hand-off and deep-dive items have no plan doc
+   or Depends-on line). Reverses if: hand-off items gain dependencies.
+4. A `needs` id with no ROADMAP row does not hold a `blocked` record
+   (`dispatchable()` checks needs against the open row ids), the same
+   fail-open rule item 2 gives Depends-on ids.
+5. Checklist rows for `blocked` records carry no ETA (`eta_s` null): the wait
+   depends on another lane, not on a lane median. Waiting rows likewise.
+6. Acceptance "`tick --dry-run` on the current ROADMAP" is pinned as the test
+   `test_current_roadmap_dispatches_only_ready_rows` (read-only, runs the real
+   work list over the real ROADMAP and plan docs and asserts every ready row
+   has no open Depends-on and every waiting row names exactly its open ones).
+   Why: the build lane's tool grant refused running ad-hoc scripts and the
+   tick itself; a test re-checks it on every gate run instead of once.
+   Reverses if: never - the live `tick --dry-run` remains a valid extra check.

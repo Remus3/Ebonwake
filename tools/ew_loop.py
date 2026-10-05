@@ -93,6 +93,10 @@ ATTENTION_STATES = ("merge-conflict", "failed-dirty", "lane-dirty", "gave-up")
 LIMIT_RX = re.compile(r"usage limit|rate[ -]?limit|\b429\b|limit reached|overloaded", re.I)
 VERDICT_RX = re.compile(r"^\s*VERDICT:\s*(PASS|FAIL)\b", re.I | re.M)
 ROW_RX = re.compile(r"^\|\s*(\d{3})\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*$")
+# plan 019: a plan doc's first `Depends on:` line names the plans it builds on
+DEPENDS_RX = re.compile(r"^Depends on:\s*(.+)$", re.M)
+DEP_ID_RX = re.compile(r"(?<![0-9A-Za-z])\d{3}(?![0-9A-Za-z])")
+NEED_RX = re.compile(r"^\d{3}$")
 # FLEET item 1: physical acts, passwords and OAuth grants wait for the operator;
 # per-host values (gitignored config/local.json) are set on the host, not by a lane.
 SKIP_TAGS = (("operator", re.compile(r"^(OPERATOR\b|.*\(physical\))|\bphysical\b|"
@@ -167,6 +171,14 @@ def iso(epoch):
     return _dt.datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
 
 
+def epoch_of(text):
+    """Epoch seconds of an ISO timestamp (a naive one is local time), or None."""
+    try:
+        return _dt.datetime.fromisoformat(str(text)).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
 def eta_label(seconds):
     return eta.fmt(seconds)[1:-1]  # "[~45m]" -> "~45m"
 
@@ -212,6 +224,56 @@ def flip_roadmap(text, plan_id, note):
             line = f"| {m.group(1)} | {m.group(2)} | [x] {note} |"
         out.append(line)
     return "\n".join(out)
+
+
+def plan_depends(text):
+    """The three-digit plan ids named by the first `Depends on:` line, in order
+    ("none" or no such line -> [])."""
+    m = DEPENDS_RX.search(text or "")
+    out = []
+    for dep in DEP_ID_RX.findall(m.group(1)) if m else ():
+        if dep not in out:
+            out.append(dep)
+    return out
+
+
+def plan_doc(root, plan_id):
+    """docs/plans/<id>-*.md text, or None when there is none."""
+    for p in sorted((Path(root) / "docs" / "plans").glob(f"{plan_id}-*.md")):
+        with contextlib.suppress(OSError):
+            return p.read_text(encoding="utf-8", errors="replace")
+    return None
+
+
+def dependency_cycles(graph):
+    """Each cycle of {id: [dep ids]} once, as [a, b, ..., a]."""
+    cycles, state = [], {}
+
+    def visit(node, stack):
+        state[node] = 1
+        stack.append(node)
+        for dep in graph.get(node, ()):
+            if state.get(dep) == 1:
+                cycles.append(stack[stack.index(dep):] + [dep])
+            elif dep in graph and not state.get(dep):
+                visit(dep, stack)
+        stack.pop()
+        state[node] = 2
+
+    for node in sorted(graph):
+        if not state.get(node):
+            visit(node, [])
+    return cycles
+
+
+def roadmap_flip_time(git, main, dep):
+    """ISO commit time of the first-parent commit on main that introduced row
+    dep's `[x]` line (the --no-ff merge commit for a loop merge), or None.
+    Fallback for dependencies merged before merge() recorded merged_at."""
+    r = git(["log", "-m", "--first-parent", "-1", "--format=%cI",
+             f"-G^\\| {dep} \\|.*\\[x\\]", "--", ROADMAP_REL.as_posix()], main)
+    out = (r.stdout or "").strip() if r.returncode == 0 else ""
+    return out.splitlines()[0] if out else None
 
 
 def resolve_roadmap(base, ours, theirs):
@@ -425,9 +487,14 @@ class Items:
         return out
 
 
-def dispatchable(rec):
+def dispatchable(rec, open_ids=()):
     """paused (the lane worker found HALT / backoff / runs cap before it ran)
-    costs no attempt; refused / lost get MAX_ATTEMPTS dispatches."""
+    costs no attempt; refused / lost get MAX_ATTEMPTS dispatches; blocked
+    (plan 019) waits until no id it needs is an open ROADMAP row, for at most
+    MAX_ATTEMPTS blocked runs."""
+    if rec is not None and rec.get("state") == "blocked":
+        return (rec.get("blocked_runs", 0) < MAX_ATTEMPTS
+                and not set(rec.get("needs") or ()) & set(open_ids))
     return rec is None or rec.get("state") == "paused" or (
         rec.get("state") in ("refused", "lost") and rec.get("attempts", 0) < MAX_ATTEMPTS)
 
@@ -636,6 +703,7 @@ class Tick:
         self.cap = self.fi.OutboundCap(self.root, cap=self.cfg["max_notes_per_day"],
                                        clock=deps.clock)
         self.awaiting = self.capped = self.paused = 0
+        self.open_ids = set()  # open ROADMAP row ids, set by work_list()
 
     # -- gates on spawning (item f)
     def blocked(self):
@@ -853,6 +921,12 @@ class Tick:
                 self.items.put(rec)
                 self.step(f"{rec['id']}: gave up after {rec.get('attempts', 0)} attempts: "
                           f"{rec.get('error') or state}")
+            if state == "blocked" and rec.get("blocked_runs", 0) >= MAX_ATTEMPTS:
+                rec.update(state="gave-up",
+                           error=f"blocked {rec['blocked_runs']} times on "
+                                 f"{', '.join(rec.get('needs') or [])}")
+                self.items.put(rec)
+                self.step(f"{rec['id']}: gave up: {rec['error']}")
 
     # -- d. finished worktrees
     def finished(self):
@@ -872,6 +946,8 @@ class Tick:
         if rec["state"] == "committed":
             return self.merge(rec)
         if not wt.is_dir() or not self.dirty(wt):
+            if rec.get("rc") == 0 and self.blocked_marker(rec, wt):
+                return
             rec["state"] = "no-change" if rec.get("rc") == 0 else "lost"
             self.items.put(rec)
             self.step(f"{rec['id']}: {rec['state']}")
@@ -926,6 +1002,88 @@ class Tick:
                 return
         rec["rounds"] = rounds
         self.commit(rec, wt, ok)
+
+    def blocked_marker(self, rec, wt):
+        """Plan 019 4a: True when this run's lane left a fresh `"status":
+        "blocked"` progress marker (worktree first, then the main checkout)
+        and the record is now blocked. Lane worktrees are reused, never
+        cleaned, so a marker older than this run's dispatch is stale."""
+        if rec.get("kind") != "plan":
+            return False
+        rel = self.d.kit.PROGRESS_REL / f"p{rec['id']}-build.json"
+        since = epoch_of(rec.get("dispatched"))
+        for tree in (wt, self.d.main_tree):
+            doc = read_json(Path(tree) / rel)
+            if not isinstance(doc, dict) or doc.get("status") != "blocked":
+                continue
+            updated, needs = epoch_of(doc.get("updated")), doc.get("needs")
+            if updated is None or not isinstance(needs, list) or not needs or \
+                    not all(isinstance(n, str) and NEED_RX.match(n) for n in needs):
+                self.step(f"{rec['id']}: malformed blocked marker ignored "
+                          "(needs a three-digit 'needs' list and a parsable 'updated')")
+                continue
+            if since is None or updated < since:
+                self.step(f"{rec['id']}: stale blocked marker ignored")
+                continue
+            needs = list(dict.fromkeys(needs))
+            rec.update(state="blocked", needs=needs,
+                       blocked_runs=rec.get("blocked_runs", 0) + 1)
+            self.items.put(rec)
+            self.step(f"{rec['id']}: blocked on {', '.join(needs)}")
+            return True
+        return False
+
+    def rearm(self, rows):
+        """Plan 019 4c, once per record: a no-change plan whose own row is
+        still open and one of whose Depends-on rows flipped [x] after its
+        dispatch ran against code that was not on main yet: blocked again."""
+        row_open = {r["id"]: r["open"] for r in rows}
+        for rec in self.items.all().values():
+            iid = rec["id"]
+            if rec.get("state") != "no-change" or "rearmed" in rec or not row_open.get(iid):
+                continue
+            deps = self.plan_deps(iid, row_open)
+            if not deps:
+                continue
+            since = epoch_of(rec.get("dispatched"))
+            late, pending = [], []
+            for dep in deps:
+                if row_open[dep]:
+                    pending.append(dep)
+                    continue
+                flip = epoch_of((self.items.get(dep) or {}).get("merged_at"))
+                if flip is None:
+                    flip = epoch_of(roadmap_flip_time(self.d.git, self.d.main_tree, dep))
+                if since is not None and flip is not None and flip > since:
+                    late.append(dep)
+            if pending and not late:
+                continue  # decided once those rows flip
+            if self.dry:
+                self.step(f"{iid}: would {'re-arm' if late else 'settle no-change'}")
+                continue
+            if late:
+                rec.update(state="blocked", needs=late + pending, rearmed=True)
+                self.step(f"{iid}: re-armed, blocked on {', '.join(late + pending)}")
+            else:
+                rec["rearmed"] = False  # genuine no-change: never reconsidered
+            self.items.put(rec)
+
+    def plan_deps(self, iid, row_open, log=False):
+        """Depends-on ids of plan iid that have a ROADMAP row; a missing doc or
+        an unknown id is no dependency (fail open: a typo never wedges the
+        queue)."""
+        text = plan_doc(self.d.main_tree, iid)
+        if text is None:
+            if log:
+                self.step(f"{iid}: no plan doc, no dependency gate")
+            return []
+        out = []
+        for dep in plan_depends(text):
+            if dep in row_open:
+                out.append(dep)
+            elif log:
+                self.step(f"{iid}: depends on {dep}: no ROADMAP row, ignored")
+        return out
 
     def extra_checks(self, rec, wt):
         if rec.get("kind") != "deep-dive":
@@ -988,7 +1146,7 @@ class Tick:
             self.items.put(rec)
             return
         r = g(["merge", "--no-ff", "--no-commit", "-q", rec["commit"]], main)
-        why = None
+        why, flipped_row = None, False
         if r.returncode != 0 and not self.resolve_roadmap_conflict(main):
             why = "merge conflict"
         if why is None and rec.get("kind") == "plan":
@@ -1004,6 +1162,7 @@ class Tick:
                     atomic_write(rm, flipped)
                     if g(["add", ROADMAP_REL.as_posix()], main).returncode != 0:
                         why = "roadmap stage refused"
+                    flipped_row = True
             except OSError:
                 pass
         if why is None:
@@ -1017,6 +1176,8 @@ class Tick:
             self.step(f"{rec['id']}: {why}, aborted")
         else:
             rec["state"] = "merged"
+            if flipped_row:  # plan 019 4c: when this row became [x]
+                rec["merged_at"] = iso(self.d.clock())
             self.step(f"{rec['id']}: merged")
         self.items.put(rec)
 
@@ -1058,9 +1219,22 @@ class Tick:
         work = [{"id": o["id"], "kind": "order", "title": o["title"], "note": o["note"],
                  "label": f"order {o['id']}: {o['title']}", "prompt": order_prompt(o)}
                 for o in self.orders()]
-        work += [{"id": r["id"], "kind": "plan", "title": r["title"],
-                  "label": f"plan {r['id']}: {r['title']}"} for r in open_rows]
-        skipped = []
+        # plan 019: a row whose plan doc depends on an open row waits (skipped)
+        row_open = {r["id"]: r["open"] for r in rows}
+        self.open_ids = {iid for iid, is_open in row_open.items() if is_open}
+        skipped, waiting = [], {}
+        for r in open_rows:
+            wait = [dep for dep in self.plan_deps(r["id"], row_open, log=True)
+                    if row_open[dep]]
+            if wait:
+                waiting[r["id"]] = wait
+                skipped.append({"id": r["id"], "text": r["title"], "skip": "waits",
+                                "reason": f"waits on {', '.join(wait)}"})
+            else:
+                work.append({"id": r["id"], "kind": "plan", "title": r["title"],
+                             "label": f"plan {r['id']}: {r['title']}"})
+        for cycle in dependency_cycles(waiting):
+            self.step(f"dependency cycle: {' -> '.join(cycle)}")
         for h in hand:
             if h["skip"]:
                 skipped.append(h)
@@ -1081,7 +1255,7 @@ class Tick:
             if not free:
                 break
             rec = self.items.get(item["id"])
-            if not dispatchable(rec):
+            if not dispatchable(rec, self.open_ids):
                 continue
             if self.dry:
                 self.step(f"{item['id']}: would dispatch to lane {free.pop(0)}")
@@ -1093,7 +1267,9 @@ class Tick:
             lane = free.pop(0)
             prompt = {"plan": plan_prompt, "handoff": handoff_prompt}.get(item["kind"])
             prompt = item.get("prompt") or prompt(item)
-            new = dict(item, state="dispatched", lane=lane, prompt=prompt,
+            # plan 019: the blocked-run count and the one-time re-arm survive a dispatch
+            keep = {k: rec[k] for k in ("blocked_runs", "rearmed") if rec and k in rec}
+            new = dict(item, **keep, state="dispatched", lane=lane, prompt=prompt,
                        attempts=(rec or {}).get("attempts", 0) + 1, rounds=0,
                        dispatched=iso(self.d.clock()))
             self.items.put(new)
@@ -1164,8 +1340,13 @@ class Tick:
 
         def add(iid, title, state, eta_s):
             if len(out) < self.d.checklist.ROWS_MAX:
+                if state:
+                    state = ascii_text(state, self.d.checklist.STATE_MAX)
                 out.append(self.d.checklist.item(iid, ascii_text(" ".join(str(title).split()), 70)
                                                  or iid, state, eta_s))
+
+        def blocked_on(rec):
+            return "blocked on " + ", ".join(rec.get("needs") or [])
 
         for item in work:
             rec = recs.get(item["id"]) or {}
@@ -1173,14 +1354,27 @@ class Tick:
             listed.add(item["id"])
             if state in DONE_STATES:
                 continue
+            if state == "blocked":
+                add(item["id"], item["title"], blocked_on(rec), None)
+                continue
             e = 0 if state in ATTENTION_STATES else est(rec)
             add(item["id"], item["title"], None if state == "open" else state, e)
+        for h in skipped:  # plan 019: rows waiting on an open dependency
+            if h.get("reason"):
+                listed.add(h["id"])
+                rec = recs.get(h["id"]) or {}
+                add(h["id"], h["text"],
+                    blocked_on(rec) if rec.get("state") == "blocked" else h["reason"], None)
         for iid, rec in sorted(recs.items()):
             if iid not in listed and rec.get("state") not in DONE_STATES:
+                if rec.get("state") == "blocked":
+                    add(iid, rec.get("title", ""), blocked_on(rec), None)
+                    continue
                 add(iid, rec.get("title", ""), rec.get("state"),
                     0 if rec.get("state") in ATTENTION_STATES else est(rec))
         for h in skipped:
-            add(h["id"], h["text"], f"{h['skip']}-only, skipped", None)
+            if not h.get("reason"):
+                add(h["id"], h["text"], f"{h['skip']}-only, skipped", None)
         return out
 
     def write(self, state, task, lines, started):
@@ -1208,10 +1402,11 @@ class Tick:
             self.step(f"spawning paused: {self.blocked()}")
         self.finished()
         rows, work, skipped = self.work_list()
+        self.rearm(rows)
         self.dispatch(work)
         recs = self.items.all()
         in_flight = [r for r in recs.values() if r.get("state") in ("dispatched", "ran", "committed")]
-        open_work = [w for w in work if dispatchable(recs.get(w["id"]))]
+        open_work = [w for w in work if dispatchable(recs.get(w["id"]), self.open_ids)]
         if not open_work and not in_flight:
             dd = self.deep_dive_item()
             if dd:
