@@ -10,7 +10,7 @@
     "test": "node --test test/*.test.js"
   },
   "devDependencies": {
-    "electron": "^38.0.0"
+    "electron": "^41.10.6"
   },
   "engines": {
     "node": ">=20"
