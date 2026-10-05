@@ -4,7 +4,8 @@ Routes: /api/health, /api/version (fleet P0-5), /api/state, /events (SSE),
 / and /app/* (static dashboard + overlay assets, browser fallback),
 /api/market/{watch,item,hot} (plan 002), /api/today (plan 003),
 /api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006),
-/api/deadeye (plan 007), /api/game (plan 008), /api/leveling (plan 011), and POST
+/api/deadeye (plan 007), /api/game (plan 008), /api/leveling (plan 011),
+/api/spots (plan 012, GET only), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
 /api/ocr (plan 009) + /api/leveling behind one shared guard.
 """
@@ -24,7 +25,7 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 from . import (__version__, deadeye, events, gamewatch, grind, leveling, market, ocr, ports,
-               progress, single, today)
+               progress, single, spots, today)
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -119,6 +120,10 @@ class EWServer(ThreadingHTTPServer):
         # XP stack counts armed grind buffs that carry an xp_pct (plan 011).
         self.leveling = leveling.LevelingService(self.store, clock=leveling_clock or time.time,
                                                  buffs=lambda: self.grind.view()["buffs"])
+        # Plan 012: plan 004's character + plan 005's per-spot silver/h.
+        self.spots = spots.SpotsService.from_file(
+            character=lambda: self.progress.view(refresh=False)["character"],
+            grind=self.grind.view)
         self.events = events.EventsService(self.store, clock=events_clock or time.time)
         self.deadeye = deadeye.DeadeyeService(self.store, clock=deadeye_clock or time.time)
         if game_watch is None:
@@ -214,6 +219,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.game.view())
         if path == "/api/leveling":
             return self._send(200, self.server.leveling.view())
+        if path == "/api/spots":
+            try:
+                return self._send(200, self.server.spots.view(parse_qs(query)))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
         if path == "/events":
             return self._sse()
         if path == "/":

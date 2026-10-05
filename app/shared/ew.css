@@ -175,6 +175,14 @@ html, body {
 .ew-bbtn { padding: 1px 8px; }
 .ew-gnum { font-size: 12px; white-space: nowrap; }
 .ew-grind .ew-form { gap: 4px; }
+/* Plan 012 "Where next": one row of goal + what-if, clickable spot rows. */
+.ew-grind .ew-rform { flex-direction: row; flex-wrap: wrap; align-items: center; margin-bottom: 4px; }
+.ew-grind .ew-rform select { width: 70px; }
+.ew-grind .ew-rform input[type="text"] { width: 44px; }
+.ew-rrow {
+  grid-template-columns: minmax(0, 1fr) auto auto; width: 100%; text-align: left; font: inherit;
+  color: inherit; background: none; border: 0; cursor: pointer;
+}
 
 /* Events tab (plan 006): lists scroll inside their card; soon = warn, ended = muted. */
 .ew-events [hidden] { display: none; }
