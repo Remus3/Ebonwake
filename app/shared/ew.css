@@ -68,7 +68,7 @@ html, body {
 .ew-mprice { font-family: var(--ew-mono); }
 .ew-stale { color: var(--fk-text-muted); opacity: .7; }
 .ew-err { color: var(--fk-status-bad); font-size: 12px; margin-bottom: 4px; }
-.ew-badge { font-size: 11px; text-transform: uppercase; }
+.ew-badge { font-size: 12px; text-transform: uppercase; }
 .ew-badge.below { color: var(--fk-status-ok); }
 .ew-badge.above { color: var(--fk-status-warn); }
 /* Plan 027: net-after-tax column, pre-order badge, pair calculator. */
@@ -165,14 +165,14 @@ html, body {
 .ew-ldet { margin-top: 2px; }
 .ew-ldet summary { cursor: pointer; font-size: 12px; }
 .ew-ldays { display: flex; gap: 2px; width: 100%; }
-.ew-lday { display: flex; align-items: center; gap: 1px; font-size: 11px; cursor: pointer; }
+.ew-lday { display: flex; align-items: center; gap: 1px; font-size: 12px; cursor: pointer; }
 .ew-lday input { margin: 0; accent-color: var(--fk-accent); }
 .ew-lrow {
   display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center;
   gap: 6px; padding: 1px 4px; border-radius: var(--ew-radius);
 }
 .ew-lrow:hover { background: var(--fk-surface); }
-.ew-lnote { font-size: 11px; margin: 2px 0; }
+.ew-lnote { font-size: 12px; margin: 2px 0; }
 
 /* Grind tab (plan 005): rows scroll inside their card; hidden must beat flex. */
 .ew-grind [hidden], .ew-ov-row[hidden] { display: none; }
@@ -331,6 +331,14 @@ html.ew-overlay, html.ew-overlay body { background: transparent; height: auto; o
 .ew-hrow.warn .ew-hval { color: var(--fk-status-warn); }
 .ew-hrow.ok .ew-hval { color: var(--fk-status-ok); }
 .ew-hrow.bad .ew-hval { color: var(--fk-status-bad); }
-.ew-htick { padding: 0 6px; font-size: 11px; }
+.ew-htick { padding: 0 6px; font-size: 12px; }
 .ew-herr { margin-top: 6px; font-size: 12px; }
 .ew-hcard h2 .ew-tx:hover { color: var(--fk-text); }
+
+/* Settings tab (plan 030) */
+.ew-sgroup { display: flex; flex-direction: column; gap: 4px; }
+.ew-srow { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.ew-slabel { flex: 0 0 220px; }
+.ew-sinput { width: 180px; }
+.ew-sdef { font-size: 12px; }
+.ew-sbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }

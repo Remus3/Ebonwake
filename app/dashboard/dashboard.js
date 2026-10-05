@@ -1,6 +1,7 @@
 /* EW dashboard shell: tabs from /api/state, server pill, reset clocks.
    Plan 001 renders placeholders; plans 002+ fill each tab (home.js, market.js, today.js,
-   progress.js + leveling.js, grind.js, events.js, deadeye.js; game.js on System).
+   progress.js + leveling.js, grind.js, events.js, deadeye.js; game.js on System;
+   settings.js, plan 030).
    Plan 020: the pill re-checks /api/version every 30 s (and on SSE reconnect),
    flags a server older than the app, and the System tab shows data freshness. */
 (function () {
@@ -46,6 +47,7 @@
     if (id === 'events' && window.EWEvents) window.EWEvents.show();
     if (id === 'deadeye' && window.EWDeadeye) window.EWDeadeye.show();
     if (id === 'system' && window.EWGame) window.EWGame.show();
+    if (id === 'settings' && window.EWSettings) window.EWSettings.show();
   }
 
   function render(state) {
@@ -82,6 +84,8 @@
         window.EWDeadeye.mount(p);
       } else if (t.id === 'market' && window.EWMarket) {
         window.EWMarket.mount(p);
+      } else if (t.id === 'settings' && window.EWSettings) {
+        window.EWSettings.mount(p);
       } else if (t.id === 'system') {
         const sv = el('div', 'ew-kv');
         sv.id = 'sys-server';

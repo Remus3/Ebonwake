@@ -64,7 +64,8 @@ test('appCommit is read-only; restart is one allowlisted, sender-checked IPC', (
   const m = read('main.js');
   assert.match(pre, /appCommit: function \(\) \{ return APP_COMMIT; \}/);
   assert.match(pre, /ipcRenderer\.invoke\('ew:restart-server'\)/);
-  assert.strictEqual((pre.match(/ipcRenderer\.\w+\(/g) || []).length, 2, 'post + restart only');
+  // plan 030 adds the two payload-free settings reloads (settings.test.js).
+  assert.strictEqual((pre.match(/ipcRenderer\.\w+\(/g) || []).length, 4, 'post + restart + 2 reloads only');
   assert.match(m, /rev-parse', '--short', 'HEAD'/);
   assert.match(m, /windowsHide: true/);
   assert.match(m, /additionalArguments: \['--ew-app-commit=' \+ APP_COMMIT\]/);
