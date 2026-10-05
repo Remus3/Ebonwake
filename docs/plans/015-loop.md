@@ -300,6 +300,23 @@ checklist ends in `[ ] /done`; one push.
        row. Real code conflicts (014 vs 012 in `server/ew/app.py`) still
        abort to `merge-conflict` for a session. Reverses if: a ROADMAP row
        is measured lost or duplicated by the resolver.
+17. Loop gate limits (hand-off He6bbd0, 2026-10-05). (a) The loop runs the
+    gates on ONE local Python (`_python()`); ci runs the 3.11 + 3.14 matrix.
+    A version-only break is caught by ci after push, not before merge.
+    Accepted, no code: installing and switching interpreters per tick costs
+    minutes per gate run for a class of break not yet seen. (b) Gates run as
+    argv without a shell (`shlex.split`), so a ci step using `&&`, `||`, `|`,
+    `;` or a redirect would hand the operator to the first program as an
+    argument and silently skip the rest - the loop could merge what ci
+    rejects. None exists today; `_gates` now fails closed on any unquoted
+    shell operator (`_shell_operator`, test
+    `test_loop_gates_fail_closed_on_shell_operators`). Alternatives: run
+    steps through `bash -c` (no bash guaranteed on this host; Git Bash path
+    is per-host); split `a && b` into two gates (wrong for `||`, pipes,
+    redirects). Why: fail closed is the fix-0130 posture and costs nothing
+    while ci has no such step. Reverses if: ci gains a step that needs a
+    shell - then that step is rewritten as a `tools/*.py` script, or the loop
+    gains a per-host shell, with a test.
 
 ## CLAUDE.md rules - LANDED 2026-10-05 (CLAUDE.md "Loop (plan 015)"; text below is the proposal, CLAUDE.md is authoritative: cap 6, not 12)
 

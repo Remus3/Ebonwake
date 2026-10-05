@@ -974,6 +974,18 @@ def test_loop_gates_fail_closed_without_ci_workflow(tmp_path):
     assert not ok
 
 
+def test_loop_gates_fail_closed_on_shell_operators(tmp_path):
+    # the loop runs argv without a shell: `a && b` would hand "&&" to a as an
+    # argument and never run b, so the loop could merge what ci rejects
+    for i, op in enumerate(("&&", "||", "|", ";", ">", "<", "2>&1", "a&&b")):
+        cwd, ran = _ci_tree(tmp_path / str(i),
+                            f"jobs:\n  check:\n    steps:\n      - run: python a.py {op} python b.py\n"), []
+        ok, detail = ew_loop._gates(cwd, run=lambda argv, cwd: ran.append(argv) or (0, ""))
+        assert not ok and "shell operator" in detail and not ran, op
+    assert ew_loop._shell_operator("python a.py 'x|y' \"a && b\"") is None  # quoted: plain args
+    assert ew_loop._shell_operator("python -m pytest -q") is None
+
+
 # ---------------------------------------------------------------- fix-0130: ROADMAP collisions
 
 def test_resolve_roadmap_takes_both_sides_row_changes():
