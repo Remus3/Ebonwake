@@ -1922,6 +1922,125 @@
     return out;
   }
 
+  // Overlay placement and legibility (plan 022). Config overlay.anchor is a
+  // named anchor or a work-area-relative {x, y}; display an index (null =
+  // primary); scale 0.8-1.6; opacity 0.5-0.95. Default middle-left, off BDO's
+  // top-right minimap and buff tray.
+  const OVERLAY_ANCHORS = ['tl', 'tr', 'bl', 'br', 'ml', 'mr'];
+  const OVERLAY_DEFAULT = { anchor: 'ml', display: null, scale: 1, opacity: 0.85 };
+  const OVERLAY_SCALE = [0.8, 1.6];
+  const OVERLAY_OPACITY = [0.5, 0.95];
+  const OVERLAY_SIZE = { width: 340, height: 220 };
+  const OVERLAY_HEIGHT = [60, 600];
+  const MINIMAP_ZONE = { width: 360, height: 300 };
+
+  function clampNum(v, range, dflt) {
+    if (typeof v !== 'number' || !isFinite(v)) return dflt;
+    return Math.min(range[1], Math.max(range[0], v));
+  }
+
+  function validAnchor(a) {
+    if (typeof a === 'string') return OVERLAY_ANCHORS.indexOf(a) >= 0;
+    return plainObject(a) && Object.keys(a).length === 2 &&
+      Number.isInteger(a.x) && Number.isInteger(a.y);
+  }
+
+  function overlayConfig(config) {
+    const o = config && plainObject(config.overlay) ? config.overlay : {};
+    return {
+      anchor: validAnchor(o.anchor) ? (typeof o.anchor === 'string' ? o.anchor : { x: o.anchor.x, y: o.anchor.y })
+        : OVERLAY_DEFAULT.anchor,
+      display: Number.isInteger(o.display) && o.display >= 0 ? o.display : OVERLAY_DEFAULT.display,
+      scale: clampNum(o.scale, OVERLAY_SCALE, OVERLAY_DEFAULT.scale),
+      opacity: clampNum(o.opacity, OVERLAY_OPACITY, OVERLAY_DEFAULT.opacity)
+    };
+  }
+
+  function validRect(r) {
+    return plainObject(r) && [r.x, r.y, r.width, r.height].every(isNum);
+  }
+
+  // {x, y, width, height} clamped inside the work area; null without one.
+  function overlayBounds(workArea, anchor, size, margin) {
+    const wa = workArea;
+    if (!validRect(wa) || wa.width <= 0 || wa.height <= 0) return null;
+    const a = validAnchor(anchor) ? anchor : OVERLAY_DEFAULT.anchor;
+    const m = isNum(margin) && margin > 0 ? margin : 0;
+    const sw = size && isNum(size.width) && size.width > 0 ? size.width : OVERLAY_SIZE.width;
+    const sh = size && isNum(size.height) && size.height > 0 ? size.height : OVERLAY_SIZE.height;
+    const w = Math.round(Math.min(sw, wa.width));
+    const h = Math.round(Math.min(sh, wa.height));
+    let x;
+    let y;
+    if (typeof a === 'string') {
+      x = a[1] === 'l' ? wa.x + m : wa.x + wa.width - w - m;
+      if (a[0] === 't') y = wa.y + m;
+      else if (a[0] === 'b') y = wa.y + wa.height - h - m;
+      else y = wa.y + Math.round((wa.height - h) / 2);
+    } else {
+      x = wa.x + a.x;
+      y = wa.y + a.y;
+    }
+    x = Math.min(wa.x + wa.width - w, Math.max(wa.x, Math.round(x)));
+    y = Math.min(wa.y + wa.height - h, Math.max(wa.y, Math.round(y)));
+    return { x: x, y: y, width: w, height: h };
+  }
+
+  // BDO's minimap + buff tray: the top-right 360x300 of the work area.
+  function minimapZone(workArea) {
+    return {
+      x: workArea.x + workArea.width - MINIMAP_ZONE.width, y: workArea.y,
+      width: MINIMAP_ZONE.width, height: MINIMAP_ZONE.height
+    };
+  }
+
+  function rectInside(inner, outer) {
+    return validRect(inner) && validRect(outer) && inner.x >= outer.x && inner.y >= outer.y &&
+      inner.x + inner.width <= outer.x + outer.width && inner.y + inner.height <= outer.y + outer.height;
+  }
+
+  function rectsIntersect(a, b) {
+    return validRect(a) && validRect(b) && a.x < b.x + b.width && b.x < a.x + a.width &&
+      a.y < b.y + b.height && b.y < a.y + a.height;
+  }
+
+  // Content height the overlay page reports (ew:overlay-size), clamped; null
+  // for anything that is not a non-negative finite number. Rounded up so a
+  // fractional last line is never clipped.
+  function overlayHeight(px) {
+    if (!isNum(px) || px < 0) return null;
+    return Math.ceil(Math.min(OVERLAY_HEIGHT[1], Math.max(OVERLAY_HEIGHT[0], px)));
+  }
+
+  // Scale and opacity ride in the overlay query (the overlay page has no bridge).
+  function overlayStyleQuery(oc) {
+    const c = overlayConfig({ overlay: oc });
+    return { scale: String(c.scale), opacity: String(c.opacity) };
+  }
+
+  function overlayStyleFromQuery(search) {
+    const q = new URLSearchParams(typeof search === 'string' ? search : '');
+    const num = function (k) {
+      const s = q.get(k);
+      return s !== null && /^\d+(\.\d+)?$/.test(s) ? Number(s) : null;
+    };
+    return {
+      scale: clampNum(num('scale'), OVERLAY_SCALE, OVERLAY_DEFAULT.scale),
+      opacity: clampNum(num('opacity'), OVERLAY_OPACITY, OVERLAY_DEFAULT.opacity)
+    };
+  }
+
+  // Quiet rows (plan 022): a row whose value says nothing is hidden; offline
+  // still shows (it is news).
+  const OV_QUIET = ['', '-', '?', 'none', 'idle'];
+  function ovQuiet(text) {
+    return text === null || text === undefined || OV_QUIET.indexOf(String(text)) >= 0;
+  }
+
+  function ovServerRowHidden(text) {
+    return text === 'ok' || ovQuiet(text);
+  }
+
   // The only routes the dashboard bridge forwards, each with its body check.
   const POST_VALIDATORS = {
     '/api/market/watch': validWatchBody, '/api/today': validTodayBody, '/api/progress': validProgressBody,
@@ -2040,6 +2159,18 @@
     overlayWidgets: overlayWidgets,
     widgetsQuery: widgetsQuery,
     widgetsFromQuery: widgetsFromQuery,
+    OVERLAY_ANCHORS: OVERLAY_ANCHORS,
+    OVERLAY_SIZE: OVERLAY_SIZE,
+    overlayConfig: overlayConfig,
+    overlayBounds: overlayBounds,
+    minimapZone: minimapZone,
+    rectInside: rectInside,
+    rectsIntersect: rectsIntersect,
+    overlayHeight: overlayHeight,
+    overlayStyleQuery: overlayStyleQuery,
+    overlayStyleFromQuery: overlayStyleFromQuery,
+    ovQuiet: ovQuiet,
+    ovServerRowHidden: ovServerRowHidden,
     validPost: validPost,
     POST_ROUTES: POST_ROUTES,
     fmtSilver: fmtSilver,

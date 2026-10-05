@@ -258,14 +258,28 @@ html, body {
 .ew-dform .ew-dline input[type="text"] { flex: 1; min-width: 0; width: auto; box-sizing: border-box; }
 .ew-dform select { width: 72px; box-sizing: border-box; }
 
-/* Overlay: glanceable, corner-anchored, translucent. */
-html.ew-overlay, html.ew-overlay body { background: transparent; }
+/* Overlay (plan 022): glanceable, anchored off the minimap, translucent.
+   Height auto so the page can report its content height; scale and panel
+   alpha come from config via the query (overlay.js sets the variables).
+   Hierarchy by weight, not colour: labels at --fk-text, values bold, with a
+   halo so text holds over bright scenes. */
+html.ew-overlay, html.ew-overlay body { background: transparent; height: auto; overflow: hidden; }
 .ew-ov {
-  margin: 0; padding: 8px 10px; border-radius: var(--ew-radius);
-  background: color-mix(in srgb, var(--fk-surface) 72%, transparent);
-  border: 1px solid var(--fk-border); font-size: 12px;
+  margin: 0; padding: .6em .8em; border-radius: var(--ew-radius);
+  background: color-mix(in srgb, var(--fk-surface) var(--ew-overlay-alpha, 85%), transparent);
+  border: 1px solid var(--fk-border);
+  font-size: calc(13px * var(--ew-overlay-scale, 1)); color: var(--fk-text);
+  text-shadow: 0 0 2px #000, 0 1px 2px #000;
 }
-.ew-ov-row { display: flex; justify-content: space-between; gap: 12px; }
+.ew-ov-row { display: flex; justify-content: space-between; align-items: baseline; gap: 1em; }
+.ew-ov-lab { flex: 0 1 auto; min-width: 0; color: var(--fk-text); font-weight: 400; white-space: nowrap; }
+.ew-ov-val {
+  flex: 0 0 auto; min-width: 11ch; text-align: right; font-weight: 600; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ew-ov-val.ew-mname { flex: 0 1 auto; }
+/* hidden must beat .ew-dot's inline-block (the header server dot). */
+.ew-ov [hidden] { display: none; }
 .ew-ov-row .ew-stale { color: var(--fk-text-muted); }
 .ew-ov-row .ew-mname { min-width: 0; }
 .ew-ov-head { margin-bottom: 2px; }

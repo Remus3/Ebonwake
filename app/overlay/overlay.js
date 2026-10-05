@@ -15,7 +15,11 @@
    locally.
    Season (plan 013): opt-in (default off) one line from GET /api/progress
    `season` ("Pass 23/40 - next: Lv 50 (2 lv)"), same cadence plus each SSE
-   `leveling` event (a new XP sample can auto-tick a level objective). */
+   `leveling` event (a new XP sample can auto-tick a level objective).
+   Plan 022: scale / opacity from the query set two CSS variables; rows with
+   nothing to say (C.ovQuiet) are hidden; the server row (and a red header
+   dot) shows only when the server is not ok; after each layout change the
+   content height goes one-way to main (window.ewOverlay.reportSize). */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -41,16 +45,40 @@
   let season = null;
   let seasonStale = false;
 
+  // Plan 022: a row shows only when its widget is on and it has something to say.
+  function showRow(id, enabled, text) {
+    document.getElementById(id).hidden = !enabled || C.ovQuiet(text);
+  }
+
+  function setServer(text) {
+    document.getElementById('ov-server').textContent = text;
+    const hide = C.ovServerRowHidden(text);
+    document.getElementById('ov-server-row').hidden = hide;
+    document.getElementById('ov-server-dot').hidden = hide;
+  }
+
+  // One-way content height to main, only when it changed. Fractional (not
+  // scrollHeight, which may round down) so main's ceil never clips a line.
+  let lastSize = -1;
+  function reportSize() {
+    const h = document.body.getBoundingClientRect().height;
+    if (h === lastSize || !window.ewOverlay) return;
+    lastSize = h;
+    window.ewOverlay.reportSize(h);
+  }
+
   function drawToday(now) {
     const t = document.getElementById('ov-today');
     if (!today) {
       t.textContent = todayStale ? 'offline' : '-';
       t.className = todayStale ? 'ew-stale' : '';
+      showRow('ov-today-row', true, t.textContent);
       return;
     }
     const g = C.groupItems(today.items, now);
     t.textContent = 'daily ' + g.daily.done + '/' + g.daily.total + '  weekly ' + g.weekly.done + '/' + g.weekly.total;
     t.className = todayStale ? 'ew-stale' : '';
+    showRow('ov-today-row', true, t.textContent);
   }
 
   // Offline keeps the last values (clock still running), muted.
@@ -63,6 +91,7 @@
       else if (secs === null) s.textContent = 'idle';
       else s.textContent = C.spotName(grind.spots, grind.active.spot) + ' ' + C.fmtElapsed(secs);
       s.className = cls;
+      showRow('ov-grind-row', true, s.textContent);
     }
     if (W.grindBuff) {
       const b = document.getElementById('ov-buff');
@@ -72,6 +101,7 @@
       if (soon) b.textContent = C.fmtDuration(soon.left_s * 1000);
       else b.textContent = grind ? 'none' : (grindStale ? 'offline' : '-');
       b.className = cls;
+      showRow('ov-buff-row', true, b.textContent);
     }
   }
 
@@ -84,6 +114,7 @@
     if (soon) v.textContent = C.fmtLeft(soon.left_s);
     else v.textContent = events ? 'none' : (eventsStale ? 'offline' : '-');
     v.className = eventsStale ? 'ew-stale' : '';
+    showRow('ov-events-row', true, v.textContent);
   }
 
   function drawGame() {
@@ -96,16 +127,18 @@
 
   function drawLeveling(now) {
     const v = document.getElementById('ov-leveling');
-    v.textContent = lev ? C.levelingLine(lev, levAt, now) : (levStale ? 'Leveling offline' : 'Leveling -');
+    v.textContent = lev ? C.levelingLine(lev, levAt, now) : (levStale ? 'offline' : '-');
     v.title = v.textContent;
-    v.className = 'ew-mname' + (levStale ? ' ew-stale' : '');
+    v.className = 'ew-ov-val ew-mname' + (levStale ? ' ew-stale' : '');
+    showRow('ov-leveling-row', true, v.textContent);
   }
 
   function drawSeason() {
     const v = document.getElementById('ov-season');
-    v.textContent = season ? C.seasonLine(season.season) : (seasonStale ? 'Pass offline' : 'Pass -');
+    v.textContent = season ? C.seasonLine(season.season) : (seasonStale ? 'offline' : '-');
     v.title = v.textContent;
-    v.className = 'ew-mname' + (seasonStale ? ' ew-stale' : '');
+    v.className = 'ew-ov-val ew-mname' + (seasonStale ? ' ew-stale' : '');
+    showRow('ov-season-row', true, v.textContent);
   }
 
   function tick() {
@@ -201,7 +234,7 @@
     const src = new EventSource(C.SERVER + '/events');
     src.onmessage = function () {
       attempt = 0;
-      document.getElementById('ov-server').textContent = 'ok';
+      setServer('ok');
       loadToday(false);
     };
     src.addEventListener('game', function () { loadGame(); });
@@ -210,7 +243,7 @@
       if (W.season) loadSeason();
     });
     src.onerror = function () {
-      document.getElementById('ov-server').textContent = 'offline';
+      setServer('offline');
       todayStale = true;
       grindStale = true;
       drawToday(Date.now());
@@ -228,12 +261,15 @@
     };
   }
 
-  document.getElementById('ov-grind-row').hidden = !W.grindSession;
-  document.getElementById('ov-buff-row').hidden = !W.grindBuff;
-  document.getElementById('ov-events-row').hidden = !W.eventsSoon;
-  document.getElementById('ov-leveling-row').hidden = !W.leveling;
-  document.getElementById('ov-season-row').hidden = !W.season;
+  const S = C.overlayStyleFromQuery(window.location.search);
+  document.documentElement.style.setProperty('--ew-overlay-scale', String(S.scale));
+  document.documentElement.style.setProperty('--ew-overlay-alpha', Math.round(S.opacity * 100) + '%');
+  // Rows start hidden (index.html) and appear once they have something to say.
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(reportSize).observe(document.getElementById('ov-panel'));
+  }
   tick();
+  reportSize();
   setInterval(tick, 1000);
   setInterval(function () { loadToday(true); }, TODAY_MS);
   loadToday(true);

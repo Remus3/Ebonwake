@@ -5,7 +5,7 @@
    /api/events, /api/deadeye, /api/ocr, /api/leveling. Plan 020 adds the app's
    commit (a read-only launch argument) and a restart of EW's own server (the
    tray "Restart server" path; it never touches the game).
-   The overlay window has no preload. */
+   The overlay window has its own one-way preload (overlay/preload.js). */
 'use strict';
 
 const { contextBridge, ipcRenderer } = require('electron');

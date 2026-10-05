@@ -57,25 +57,60 @@ function createDashboard() {
   dashboard.on('closed', function () { dashboard = null; });
 }
 
+// Plan 022: placement from config overlay.{anchor, display, scale} (default
+// middle-left of the primary display, off BDO's top-right minimap); height
+// follows the overlay page's content (ew:overlay-size).
+const OVERLAY_MARGIN = 16;
+let overlayCfg = core.overlayConfig({});
+
+function overlayWorkArea() {
+  const all = screen.getAllDisplays();
+  const d = overlayCfg.display !== null && all[overlayCfg.display] ? all[overlayCfg.display]
+    : screen.getPrimaryDisplay();
+  return d.workArea;
+}
+
+function overlayPlacement(height) {
+  const size = { width: Math.round(core.OVERLAY_SIZE.width * overlayCfg.scale), height: height };
+  return core.overlayBounds(overlayWorkArea(), overlayCfg.anchor, size, OVERLAY_MARGIN);
+}
+
 function createOverlay() {
-  const wa = screen.getPrimaryDisplay().workArea;
-  const w = 340;
-  const h = 220;
+  const cfg = readConfig();
+  overlayCfg = core.overlayConfig(cfg);
+  const b = overlayPlacement(core.OVERLAY_SIZE.height);
   overlay = new BrowserWindow({
-    x: wa.x + wa.width - w - 16, y: wa.y + 16, width: w, height: h,
+    x: b.x, y: b.y, width: b.width, height: b.height, useContentSize: true,
     transparent: true, frame: false, resizable: false, movable: false,
     focusable: false, skipTaskbar: true, hasShadow: false, show: false,
     alwaysOnTop: true,
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
+    webPreferences: {
+      contextIsolation: true, nodeIntegration: false, sandbox: true,
+      preload: path.join(__dirname, 'overlay', 'preload.js')
+    }
   });
   overlay.setAlwaysOnTop(true, 'screen-saver');
   overlay.setIgnoreMouseEvents(true, { forward: false });
   overlay.setVisibleOnAllWorkspaces(true);
-  // Opt-in widgets (spec section 3) ride in the query; the overlay has no bridge.
-  const widgets = core.overlayWidgets(readConfig());
-  overlay.loadFile(path.join(__dirname, 'overlay', 'index.html'), { query: core.widgetsQuery(widgets) });
+  overlay.webContents.on('will-navigate', function (e) { e.preventDefault(); });
+  overlay.webContents.setWindowOpenHandler(function () { return { action: 'deny' }; });
+  // Opt-in widgets (spec section 3) and scale / opacity ride in the query.
+  const query = Object.assign(core.widgetsQuery(core.overlayWidgets(cfg)), core.overlayStyleQuery(overlayCfg));
+  overlay.loadFile(path.join(__dirname, 'overlay', 'index.html'), { query: query });
   overlay.on('closed', function () { overlay = null; });
 }
+
+// One-way, number only, from the overlay page alone: clamp 60-600 px and
+// re-place so bottom / middle anchors stay anchored.
+ipcMain.on('ew:overlay-size', function (event, px) {
+  if (!overlay || event.sender !== overlay.webContents) return;
+  const h = core.overlayHeight(px);
+  if (h === null) return;
+  const b = overlayPlacement(h);
+  const cur = overlay.getContentBounds();
+  if (cur.x === b.x && cur.y === b.y && cur.width === b.width && cur.height === b.height) return;
+  overlay.setContentBounds(b);
+});
 
 // Dashboard writes (plans 002, 003): the server answers no CORS preflight, so
 // the dashboard cannot POST itself. Only the dashboard may ask, only allowlisted
@@ -211,7 +246,8 @@ if (!app.requestSingleInstanceLock()) {
       selftest.run({
         app: app, dashboard: dashboard, overlay: overlay, keys: keys,
         globalShortcut: globalShortcut, toggleOverlay: toggleOverlay,
-        out: process.env.EW_SELFTEST
+        out: process.env.EW_SELFTEST,
+        overlayPlace: { workArea: overlayWorkArea(), defaultAnchor: overlayCfg.anchor === core.overlayConfig({}).anchor }
       });
     }
   });
