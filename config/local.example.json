@@ -12,6 +12,9 @@
   "secrets": {
     "_example_ocr_key": {"env": "EW_OCR_API_KEY"}
   },
+  "overlay": {
+    "widgets": {"grindSession": true, "grindBuff": true}
+  },
   "market_watch": [4901],
   "profile": {
     "family": "",
