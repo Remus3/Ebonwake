@@ -8,7 +8,9 @@
    reload. Plan 025 (M8): the Events card keeps existing `event` items but also
    lists Events-tab items ending before the weekly reset (read-only, GET
    /api/events), and the add form no longer offers `event` - events are added
-   once, on the Events tab. Every node is built with DOM APIs - no HTML from data. */
+   once, on the Events tab. Plan 032: the World bosses card (bosses.js,
+   window.EWBosses) mounts between Events and Add item. Every node is built
+   with DOM APIs - no HTML from data. */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -334,7 +336,9 @@
     const w = listCard('Weekly', true);
     const e = listCard('Events', false);
     const fm = formCard();
-    [d, w, e, fm].forEach(function (c) { panel.appendChild(c.card); });
+    [d, w, e].forEach(function (c) { panel.appendChild(c.card); });
+    if (window.EWBosses) window.EWBosses.mount(panel); // plan 032: World bosses card
+    panel.appendChild(fm.card);
     S.ui = { daily: d, weekly: w, event: e, form: fm.form };
     if (!S.timer) {
       setInterval(tick, 1000);
@@ -344,7 +348,10 @@
     }
   }
 
-  function show() { poll(false); }
+  function show() {
+    poll(false);
+    if (window.EWBosses) window.EWBosses.show();
+  }
 
   window.EWToday = { mount: mount, show: show };
 })();
