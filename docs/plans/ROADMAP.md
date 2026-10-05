@@ -6,9 +6,9 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | # | Plan | Status |
 |---|---|---|
 | 001 | Skeleton: server (health/version/state, SSE), dashboard shell (tabs), overlay shell (click-through + hotkey), ETA log, lane driver, tests + CI | [x] done 2026-10-04 (desktop self-test green: 7 tabs fit 1264x761 content, overlay alpha 0 + WS_EX_TRANSPARENT, hotkeys registered) |
-| 002 | Market tab: arsha.io v2 client with disk cache + TTL + backoff, watchlist, sparkline, order book, alert thresholds | [ ] |
-| 003 | Today tab: daily/weekly checklist with NA reset clocks, login events, dice; overlay reset countdown | [ ] |
-| 004 | Progress tab: quest / season-pass / gear tracker, BDO-REST-API profile card | [ ] |
+| 002 | Market tab: arsha.io v2 client with disk cache + TTL + backoff, watchlist, sparkline, order book, alert thresholds | [x] done 2026-10-04 (live arsha data on the desktop, self-test 7/7) |
+| 003 | Today tab: daily/weekly checklist with NA reset clocks, login events, dice; overlay reset countdown | [>] spec `003-today.md` |
+| 004 | Progress tab: quest / season-pass / gear tracker, BDO-REST-API profile card | [ ] spec `004-progress.md` |
 | 005 | Grind tab: grind session log, silver/h, buff timers (overlay widget) | [ ] |
 | 006 | Events tab: coupon + event + Twitch-drop tracker with expiries (seed from official pages) | [ ] |
 | 007 | Deadeye tab: build notes (markdown), enhancement plan | [ ] |

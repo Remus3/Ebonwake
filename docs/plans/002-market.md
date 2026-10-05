@@ -1,6 +1,6 @@
 # Plan 002 - Market tab
 
-Status: in progress (2026-10-04). Lanes: `build` (slice A), `data` (slice B).
+Status: done (2026-10-04); refute rounds A 2/3, B 2/3, both PASS. Lanes: `build` (slice A), `data` (slice B).
 
 ## Goal
 

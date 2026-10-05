@@ -102,3 +102,4 @@ html.ew-overlay, html.ew-overlay body { background: transparent; }
   border: 1px solid var(--fk-border); font-size: 12px;
 }
 .ew-ov-row { display: flex; justify-content: space-between; gap: 12px; }
+.ew-card h2 .ew-pill { text-transform: none; letter-spacing: 0; font-weight: 400; }
