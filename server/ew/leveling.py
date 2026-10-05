@@ -243,8 +243,11 @@ class LevelingService:
         self._lock = threading.Lock()  # read-modify-write; Store guards each file op
         with self._lock:
             if "milestones" not in store.get("leveling"):
-                self._save({"samples": [], "hot_windows": [],
-                            "milestones": list(SEED_MILESTONES), "next_id": 1}, bump=False)
+                # seed milestones only; keep any samples / windows already
+                # stored (a hand-edited file lacking the key; refute r1 minor 2)
+                doc = self._load()
+                doc["milestones"] = list(SEED_MILESTONES)
+                self._save(doc, bump=False)
 
     def _now(self):
         return _dt.datetime.fromtimestamp(self.clock(), _UTC)
@@ -330,7 +333,10 @@ class LevelingService:
         when = _parse_iso(ts)
         if when is None:
             raise ValueError("sample_del must be a sample ts")
-        key = _iso(when)
+        try:
+            key = _iso(when)
+        except (OverflowError, ValueError, OSError):  # refute r1 minor 1
+            raise ValueError("sample_del must be a sample ts") from None
         with self._lock:
             doc = self._load()
             keep = [s for s in doc["samples"] if s["ts"] != key]

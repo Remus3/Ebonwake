@@ -501,3 +501,25 @@ def test_sse_pushes_leveling_event_on_change(lsrv):
             break
     c.close()
     assert got is not None and got["level"] == 53
+
+
+def test_refute_r1_sample_del_overflow_is_value_error(tmp_path):
+    svc = _svc_for_refute(tmp_path)
+    with pytest.raises(ValueError):
+        svc.sample_del("9999-12-31T23:59:59-01:00")
+
+
+def test_refute_r1_missing_milestones_keeps_samples(tmp_path):
+    from server.ew import store as store_mod
+    st = store_mod.Store(tmp_path)
+    st.put("leveling", {"samples": [{"ts": "2026-10-05T10:00:00+00:00", "level": 52,
+                                     "pct": 10.0}], "hot_windows": [], "next_id": 1})
+    svc = leveling.LevelingService(st, clock=lambda: 1791190000.0)
+    doc = st.get("leveling")
+    assert doc["milestones"] == list(leveling.SEED_MILESTONES)
+    assert len(doc["samples"]) == 1
+
+
+def _svc_for_refute(tmp_path):
+    from server.ew import store as store_mod
+    return leveling.LevelingService(store_mod.Store(tmp_path), clock=lambda: 1791190000.0)

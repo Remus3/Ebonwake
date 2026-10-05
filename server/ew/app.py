@@ -376,7 +376,10 @@ class Handler(BaseHTTPRequestHandler):
                     out.append(f"event: game\ndata: {json.dumps(game.view())}\n\n")
                 if lev.seq != lseq:
                     lseq = lev.seq
-                    out.append(f"event: leveling\ndata: {json.dumps(lev.view())}\n\n")
+                    try:  # a bad buff source never ends the stream (refute r1 minor 3)
+                        out.append(f"event: leveling\ndata: {json.dumps(lev.view())}\n\n")
+                    except Exception:  # noqa: BLE001
+                        pass
                 if not out and time.monotonic() >= quiet:
                     msg = json.dumps({"type": "heartbeat", "now": _now_iso()})
                     out.append(f"data: {msg}\n\n")
