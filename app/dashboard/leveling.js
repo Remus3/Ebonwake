@@ -3,6 +3,7 @@
    now / next with a local countdown and the XP stack total. The Hot Time
    window editor, milestones and recent samples sit in a details row that is
    collapsed by default (the tab must fit 1280x800 with no page scroll).
+   Plan 024: one line + pill per level-gated deadline (Olvia Academy).
    Reads GET /api/leveling every 60 s and on each SSE `leveling` event; writes
    go through the dashboard preload (window.ewApi). Operator-typed data only;
    nothing is read from or sent to the game. Every node is built with DOM APIs -
@@ -212,10 +213,29 @@
     msg('editing epoch ' + e.id + ' - fix the date, tick verified, Save');
   }
 
+  // Plan 024: one line per level-gated deadline (Olvia Academy) with a pill;
+  // red when the level ETA lands after enrolment closes.
+  function drawDeadlines() {
+    const ui = S.ui;
+    ui.deadlines.textContent = '';
+    const list = S.data ? S.data.deadlines : [];
+    list.forEach(function (dl) {
+      const r = el('div', 'ew-lrow ew-lnote');
+      const p = C.deadlinePill(dl);
+      r.appendChild(el('span', 'ew-pill ' + p.cls, p.text));
+      const t = el('span', 'ew-mname', C.deadlineLine(dl));
+      t.title = t.textContent;
+      r.appendChild(t);
+      ui.deadlines.appendChild(r);
+    });
+    ui.deadlines.hidden = !list.length;
+  }
+
   function draw() {
     const ui = S.ui;
     if (!ui || !ui.card.isConnected) return;
     drawLive(Date.now());
+    drawDeadlines();
     drawEditor();
   }
 
@@ -359,7 +379,10 @@
     ui.hot = stat(kv, 'Hot Time');
     ui.stack = stat(kv, 'XP stack');
     body.appendChild(kv);
-    ui.epoch = el('div', 'ew-muted ew-lnote', '');
+    ui.deadlines = el('div', 'ew-list');
+    ui.deadlines.hidden = true;
+    body.appendChild(ui.deadlines);
+    ui.epoch =el('div', 'ew-muted ew-lnote', '');
     ui.epoch.hidden = true;
     body.appendChild(ui.epoch);
     ui.cap = el('div', 'ew-muted ew-lnote', '');

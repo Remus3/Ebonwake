@@ -13,7 +13,8 @@ import time
 import pytest
 
 from server.ew import app as ewapp
-from server.ew import grind, leveling
+from server.ew import events as ewevents
+from server.ew import grind, leveling, levels
 from server.ew.store import Store
 
 UTC = dt.timezone.utc
@@ -523,3 +524,228 @@ def test_refute_r1_missing_milestones_keeps_samples(tmp_path):
 def _svc_for_refute(tmp_path):
     from server.ew import store as store_mod
     return leveling.LevelingService(store_mod.Store(tmp_path), clock=lambda: 1791190000.0)
+
+
+# --- plan 024: level-gated deadlines -------------------------------------------
+
+ENROL = T0 + dt.timedelta(days=10)  # 2026-10-15 12:00 UTC
+DL = {"id": "olvia-test", "label": "Olvia Academy", "needs_level": 60,
+      "enrol_by_utc": ENROL.isoformat(), "quests_by_utc": None, "source": "test", "verified": False}
+
+
+def _dsvc(store, clock, deadlines=None, epochs=()):
+    return leveling.LevelingService(store, clock=clock, epochs=list(epochs),
+                                    deadlines=[dict(DL)] if deadlines is None else deadlines)
+
+
+def _st(level, eta_s, now=T0):
+    return leveling.deadline_status(levels.validate_deadline(DL), level, eta_s, now)
+
+
+def test_eta_to_level():
+    assert leveling.eta_to_level_s(58, 50.0, 10.0, 60) == 15 * 3600  # 150 pct at 10/h
+    assert leveling.eta_to_level_s(60, 0, None, 60) == 0  # already there, no rate needed
+    assert leveling.eta_to_level_s(58, 50.0, None, 60) is None
+    assert leveling.eta_to_level_s(None, None, 10.0, 60) is None
+
+
+def test_deadline_status_each_state():
+    assert _st(60, 0) == {"state": "done", "reach_utc": None, "margin_h": None}
+    assert _st(61, None)["state"] == "done"
+    assert _st(58, None) == {"state": "unknown", "reach_utc": None, "margin_h": None}
+    assert _st(None, None)["state"] == "unknown"
+    on = _st(58, 24 * 3600)  # reach in 1 day, 9 days of margin
+    assert on == {"state": "on_track", "reach_utc": (T0 + dt.timedelta(days=1)).isoformat(),
+                  "margin_h": 216.0}
+    tight = _st(58, 8 * 86400)  # 2 days margin < 72 h
+    assert tight["state"] == "tight" and tight["margin_h"] == 48.0
+    edge = _st(58, 7 * 86400)  # exactly 72 h is not tight
+    assert edge["state"] == "on_track" and edge["margin_h"] == 72.0
+    late = _st(58, 11 * 86400)
+    assert late["state"] == "late" and late["margin_h"] == -24.0
+    # enrolment already closed, level not reached: late even without a rate
+    after = ENROL + dt.timedelta(hours=1)
+    assert _st(58, None, now=after)["state"] == "late"
+
+
+def test_deadline_state_agrees_with_rounded_margin():
+    # verifier r1 minor 3: 71.96 h rounds to 72.0 and must not read tight
+    assert _st(58, int(7 * 86400 + 0.04 * 3600)) == {
+        "state": "on_track", "reach_utc": (T0 + dt.timedelta(seconds=int(7 * 86400 + 144))).isoformat(),
+        "margin_h": 72.0}
+    zero = _st(58, 10 * 86400 + 100)  # -0.03 h shows 0.0: tight, not late
+    assert zero["state"] == "tight" and zero["margin_h"] == 0.0
+    assert _st(58, 10 * 86400 + 200)["margin_h"] == -0.1
+
+
+def test_deadline_hidden_after_final_cutoff(store, clock):
+    # verifier r1 minor 5: past quests_by_utc (or enrol when null) the row
+    # leaves the view, so the overlay pill does not stay red forever.
+    quests = (ENROL + dt.timedelta(days=6)).isoformat()
+    svc = _dsvc(store, clock, deadlines=[dict(DL, quests_by_utc=quests),
+                                         dict(DL, id="no-quests")])
+    clock.t = (ENROL + dt.timedelta(days=1)).timestamp()
+    v = svc.view()
+    assert [(d["id"], d["state"]) for d in v["deadlines"]] == [("olvia-test", "late")]
+    clock.t = (ENROL + dt.timedelta(days=6)).timestamp()
+    assert svc.view()["deadlines"] == []
+    assert svc.deadline_del("olvia-test")["deadlines"] == []  # still deletable
+
+
+def test_view_deadlines_from_rate(store, clock):
+    svc = _dsvc(store, clock)
+    assert svc.view()["deadlines"][0]["state"] == "unknown"
+    svc.sample({"level": 58, "pct": 0})
+    clock.advance(3600)
+    v = svc.sample({"level": 58, "pct": 10})  # 10 pct/h -> 190 pct left = 19 h
+    d = v["deadlines"][0]
+    assert d["id"] == "olvia-test" and d["tracked"] is True and d["state"] == "on_track"
+    assert d["reach_utc"] == (T0 + dt.timedelta(hours=1 + 19)).isoformat()
+    assert d["enrol_in_s"] == int((ENROL - T0).total_seconds()) - 3600
+    assert v["deadline_error"] is None
+
+
+def test_view_deadline_late_from_slow_rate(store, clock):
+    svc = _dsvc(store, clock)
+    svc.sample({"level": 58, "pct": 0})
+    clock.advance(36000)
+    v = svc.sample({"level": 58, "pct": 1})  # 0.1 pct/h -> 1990 h, far past ENROL
+    assert v["deadlines"][0]["state"] == "late"
+
+
+def test_deadline_across_epoch_boundary(store, clock):
+    # Fast pre-patch samples say on_track; the plan 018 epoch drops them, so
+    # with one post-patch sample there is no rate (unknown), then the slow
+    # post-patch rate makes it late.
+    epoch = {"id": "patch", "starts_utc": (T0 + dt.timedelta(hours=2)).isoformat(),
+             "label": "XP rescale", "source": "test", "verified": False}
+    svc = _dsvc(store, clock, epochs=[epoch])
+    svc.sample({"level": 58, "pct": 0})
+    clock.advance(3600)
+    assert svc.sample({"level": 59, "pct": 0})["deadlines"][0]["state"] == "on_track"
+    clock.advance(3 * 3600)  # past the epoch
+    assert svc.sample({"level": 59, "pct": 10})["deadlines"][0]["state"] == "unknown"
+    clock.advance(10 * 3600)
+    v = svc.sample({"level": 59, "pct": 11})  # 0.1 pct/h post-patch
+    assert v["rate_pct_h"] == pytest.approx(0.1)
+    assert v["deadlines"][0]["state"] == "late"
+
+
+def test_tracked_deadlines_file_is_valid():
+    rows = levels.load_deadlines()
+    olvia = {r["id"]: r for r in rows}["olvia-class-3"]
+    assert olvia["needs_level"] == 60 and olvia["verified"] is False
+    assert olvia["enrol_by_utc"].startswith("2026-11-05")
+    assert olvia["quests_by_utc"].startswith("2026-11-11")
+    assert "official notice" in olvia["note"]
+
+
+def test_bad_tracked_deadlines_file_degrades(tmp_path, store, clock, monkeypatch):
+    bad = tmp_path / "deadlines.json"
+    bad.write_text("{", encoding="ascii")
+    monkeypatch.setattr(levels.load_deadlines, "__defaults__", (bad,))
+    v = leveling.LevelingService(store, clock=clock, epochs=[]).view()
+    assert v["deadlines"] == [] and "unreadable" in v["deadline_error"]
+
+
+@pytest.mark.parametrize("patch,msg", [
+    ({"id": "Bad Id"}, "id"), ({"label": ""}, "label"), ({"label": "x" * 41}, "label"),
+    ({"needs_level": 0}, "needs_level"), ({"needs_level": 76}, "needs_level"),
+    ({"needs_level": True}, "needs_level"), ({"enrol_by_utc": "2026-11-05"}, "enrol_by_utc"),
+    ({"enrol_by_utc": "x"}, "enrol_by_utc"), ({"quests_by_utc": "2026-10-01T00:00:00Z"}, "quests"),
+    ({"source": ""}, "source"), ({"verified": 1}, "verified"), ({"note": 5}, "note"),
+    ({"extra": 1}, "deadline must be")])
+def test_deadline_set_validation(store, clock, patch, msg):
+    svc = _dsvc(store, clock)
+    with pytest.raises(ValueError, match=msg):
+        svc.deadline_set(dict(DL, **patch))
+    missing = dict(DL)
+    del missing["quests_by_utc"]
+    with pytest.raises(ValueError, match="deadline must be"):
+        svc.deadline_set(missing)
+    with pytest.raises(ValueError):
+        svc.deadline_set("x")
+    assert store.get("leveling").get("deadlines_added", []) == []
+
+
+def test_deadline_set_overrides_and_tombstones(store, clock):
+    svc = _dsvc(store, clock)
+    # correct the tracked row by id: operator copy wins, still flagged tracked
+    fixed = dict(DL, enrol_by_utc="2026-10-20T14:00:00Z", verified=True, note="official")
+    v = svc.deadline_set(fixed)
+    d = v["deadlines"][0]
+    assert d["enrol_by_utc"] == "2026-10-20T14:00:00+00:00" and d["verified"] is True
+    assert d["tracked"] is True and d["note"] == "official"
+    # a new operator row sorts by enrolment
+    v = svc.deadline_set(dict(DL, id="season-end", label="Season end", needs_level=61,
+                              enrol_by_utc="2026-10-10T00:00:00Z"))
+    assert [x["id"] for x in v["deadlines"]] == ["season-end", "olvia-test"]
+    assert v["deadlines"][0]["tracked"] is False
+    # delete the operator row: gone, no tombstone
+    v = svc.deadline_del("season-end")
+    assert [x["id"] for x in v["deadlines"]] == ["olvia-test"]
+    assert store.get("leveling")["deadlines_deleted"] == []
+    # delete the tracked row: override dropped + tombstone
+    v = svc.deadline_del("olvia-test")
+    assert v["deadlines"] == [] and store.get("leveling")["deadlines_deleted"] == ["olvia-test"]
+    with pytest.raises(ValueError, match="unknown deadline"):
+        svc.deadline_del("olvia-test")
+    with pytest.raises(ValueError, match="deadline id"):
+        svc.deadline_del(5)
+    # set again revives it (tombstone lifted)
+    v = svc.deadline_set(dict(DL))
+    assert [x["id"] for x in v["deadlines"]] == ["olvia-test"]
+    assert store.get("leveling")["deadlines_deleted"] == []
+
+
+def test_deadline_cap_and_corrupt_rows(store, clock):
+    svc = _dsvc(store, clock, deadlines=[])
+    for i in range(leveling.MAX_DEADLINES):
+        svc.deadline_set(dict(DL, id=f"d{i}"))
+    with pytest.raises(ValueError, match="at most"):
+        svc.deadline_set(dict(DL, id="one-more"))
+    svc.deadline_set(dict(DL, id="d0", label="replaced"))  # replacing at the cap is fine
+    doc = store.get("leveling")
+    doc["deadlines_added"] = [{"id": "bad"}, "x", dict(DL, id="ok")]
+    doc["deadlines_deleted"] = ["ok-too", 5, "Bad Id"]
+    store.put("leveling", doc)
+    assert [x["id"] for x in svc.view()["deadlines"]] == ["ok"]
+
+
+def test_events_lists_deadline_within_14_days(store, clock):
+    rows = [dict(DL, id="near", state="late", reach_utc=None),
+            dict(DL, id="far", enrol_by_utc=(T0 + dt.timedelta(days=15)).isoformat(),
+                 state="on_track", reach_utc=None),
+            dict(DL, id="done", state="done", reach_utc=None),
+            dict(DL, id="past", enrol_by_utc=(T0 - dt.timedelta(hours=1)).isoformat(),
+                 state="late", reach_utc=None)]
+    ev = ewevents.EventsService(store, clock=clock, deadlines=lambda: rows)
+    v = ev.view()
+    assert [d["id"] for d in v["deadlines"]] == ["near"]
+    assert v["deadlines"][0]["left_s"] == 10 * 86400 and v["deadlines"][0]["state"] == "late"
+    assert v["items"] == []  # never stored as an event entry
+    assert ewevents.EventsService(store, clock=clock).view()["deadlines"] == []
+
+
+def test_route_deadline_ops_and_events(tmp_path, clock):
+    s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
+                          sse_interval=0.05, market_seed=[], grind_clock=clock,
+                          leveling_clock=clock, events_clock=clock, profile_cfg={})
+    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t.start()
+    try:
+        doc = _req(s, "GET", "/api/leveling")[1]
+        assert "olvia-class-3" in [d["id"] for d in doc["deadlines"]]
+        # Olvia closes 2026-11-05, > 14 days after T0: not on the Events tab yet
+        assert _req(s, "GET", "/api/events")[1]["deadlines"] == []
+        st, doc, _ = _req(s, "POST", "/api/leveling", {"deadline_set": dict(DL)})
+        assert st == 200 and "olvia-test" in [d["id"] for d in doc["deadlines"]]
+        ev = _req(s, "GET", "/api/events")[1]
+        assert [d["id"] for d in ev["deadlines"]] == ["olvia-test"]
+        st, doc, _ = _req(s, "POST", "/api/leveling", {"deadline_del": "olvia-class-3"})
+        assert st == 200 and [d["id"] for d in doc["deadlines"]] == ["olvia-test"]
+        st, doc, _ = _req(s, "POST", "/api/leveling", {"deadline_set": {"id": "x"}})
+        assert st == 400 and "error" in doc
+    finally:
+        s.shutdown()
+        s.server_close()

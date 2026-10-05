@@ -24,7 +24,11 @@ XP_PCT_RANGE = (0, 1000)  # matches grind / leveling XP_PCT_RANGE
 DATA_DIR = Path(__file__).resolve().parent / "data"
 EPOCHS_FILE = DATA_DIR / "xp_epochs.json"
 BUFFS_FILE = DATA_DIR / "xp_buffs.json"
+DEADLINES_FILE = DATA_DIR / "deadlines.json"
 EPOCH_FIELDS = ("id", "starts_utc", "label", "source", "verified")
+DEADLINE_FIELDS = ("id", "label", "needs_level", "enrol_by_utc", "quests_by_utc", "source",
+                   "verified")
+DEADLINE_OPTIONAL = ("note",)
 CAP_FIELDS = ("level_min", "level_max", "note")
 PRESET_FIELDS = ("id", "name", "xp_pct", "pre_patch_xp_pct", "notes", "source", "verified")
 ID_RE = re.compile(r"^[a-z0-9-]{1,40}$")
@@ -148,6 +152,80 @@ def outlevel_dr(level, monster_level):
     if not _ok_int(level, *LEVEL_RANGE) or not _ok_int(monster_level, *MONSTER_LEVEL_RANGE):
         return None
     return min(OUTLEVEL_DR_MAX, max(0, level - monster_level) * OUTLEVEL_DR_PER_LEVEL)
+
+
+# -- level-gated deadlines (plan 024) --------------------------------------------
+
+def _utc(v, rid, name):
+    when = _parse_iso(v)
+    if when is None:
+        raise ValueError(f"{rid}: {name} must be an ISO time with a UTC offset")
+    try:
+        return _iso(when)
+    except (OverflowError, ValueError, OSError):
+        raise ValueError(f"{rid}: {name} out of range") from None
+
+
+def validate_deadline(row):
+    """Normalised copy of one deadline row {id, label, needs_level,
+    enrol_by_utc, quests_by_utc (or null), source, verified[, note]}, or
+    ValueError. Tracked rows and operator overrides share the shape."""
+    if (not isinstance(row, dict) or not set(DEADLINE_FIELDS) <= set(row)
+            or not set(row) <= set(DEADLINE_FIELDS) | set(DEADLINE_OPTIONAL)):
+        raise ValueError(f"deadline must be {{{', '.join(DEADLINE_FIELDS)}}} (+ optional note)")
+    if not isinstance(row["id"], str) or not ID_RE.match(row["id"]):
+        raise ValueError("deadline id must match ^[a-z0-9-]{1,40}$")
+    rid = row["id"]
+    if not _ok_text(row["label"], MAX_LABEL):
+        raise ValueError(f"{rid}: label must be 1..{MAX_LABEL} printable ASCII")
+    if not _ok_int(row["needs_level"], *LEVEL_RANGE):
+        raise ValueError(f"{rid}: needs_level must be an int {LEVEL_RANGE[0]}..{LEVEL_RANGE[1]}")
+    enrol = _utc(row["enrol_by_utc"], rid, "enrol_by_utc")
+    quests = None
+    if row["quests_by_utc"] is not None:
+        quests = _utc(row["quests_by_utc"], rid, "quests_by_utc")
+        if _parse_iso(quests) < _parse_iso(enrol):
+            raise ValueError(f"{rid}: quests_by_utc must not be before enrol_by_utc")
+    if not _ok_text(row["source"], MAX_TEXT):
+        raise ValueError(f"{rid}: source must be 1..{MAX_TEXT} printable ASCII")
+    if not isinstance(row["verified"], bool):
+        raise ValueError(f"{rid}: verified must be true or false")
+    out = {"id": rid, "label": row["label"].strip(), "needs_level": row["needs_level"],
+           "enrol_by_utc": enrol, "quests_by_utc": quests, "source": row["source"].strip(),
+           "verified": row["verified"]}
+    if "note" in row:
+        if not _ok_text(row["note"], MAX_TEXT, allow_empty=True):
+            raise ValueError(f"{rid}: note must be printable ASCII")
+        if row["note"].strip():
+            out["note"] = row["note"].strip()
+    return out
+
+
+def sort_deadlines(rows):
+    return sorted(rows, key=lambda r: (_parse_iso(r["enrol_by_utc"]), r["id"]))
+
+
+def load_deadlines(path=DEADLINES_FILE):
+    rows = _read(path, "deadline table")
+    if not isinstance(rows, list):
+        raise ValueError("deadline table must be a list")
+    out, seen = [], set()
+    for r in rows:
+        c = validate_deadline(r)
+        if c["id"] in seen:
+            raise ValueError(f"duplicate deadline id: {c['id']}")
+        seen.add(c["id"])
+        out.append(c)
+    return sort_deadlines(out)
+
+
+def merge_deadlines(tracked, added, deleted):
+    """Effective deadlines: tracked rows minus deleted ids, an operator row of
+    the same id replacing a tracked one, plus new ones; soonest enrolment first."""
+    by_id = {r["id"]: dict(r) for r in tracked if r["id"] not in deleted}
+    for a in added:
+        by_id[a["id"]] = dict(a)
+    return sort_deadlines(by_id.values())
 
 
 # -- XP buff presets -------------------------------------------------------------

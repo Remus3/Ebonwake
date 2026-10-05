@@ -34,6 +34,8 @@ OLD_SEED_MILESTONES = [50, 56, 57, 58, 60, 61]
 MILESTONE_LABELS = {56: "main questline end", 60: "Rebirth of Darkness", 61: "Olvia course",
                     70: "AP/DR bonus starts", 75: "level cap"}
 MAX_EPOCHS = 20  # operator-added epochs
+MAX_DEADLINES = 20  # operator-set deadline rows (plan 024)
+DEADLINE_TIGHT_H = 72
 HOT_ID_RE = re.compile(r"^h[0-9]{1,9}$")
 HHMM_RE = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 _UTC = _dt.timezone.utc
@@ -108,6 +110,44 @@ def eta_next_s(pct, rate):
     if pct is None or rate is None or rate <= 0:
         return None
     return int((100 - pct) / rate * 3600)
+
+
+def eta_to_level_s(level, pct, rate, target):
+    """Whole seconds from (level, pct) to the start of `target` at `rate`
+    level-percent per hour; 0 when already there, None without a positive rate."""
+    if level is None or pct is None:
+        return None
+    left = target * 100 - (level * 100 + pct)
+    if left <= 0:
+        return 0
+    if rate is None or rate <= 0:
+        return None
+    return int(left / rate * 3600)
+
+
+def deadline_status(deadline, level_now, eta, now):
+    """Plan 024: {state, reach_utc, margin_h} for one deadline row. `eta` is
+    eta_to_level_s(..., deadline["needs_level"]) (None without a rate). done =
+    level reached; late = ETA lands after enrolment closes (or it closed with
+    the level not reached); tight = margin under DEADLINE_TIGHT_H hours;
+    unknown = no rate yet."""
+    if level_now is not None and level_now >= deadline["needs_level"]:
+        return {"state": "done", "reach_utc": None, "margin_h": None}
+    enrol = _parse_iso(deadline["enrol_by_utc"])
+    if eta is None:
+        return {"state": "late" if now >= enrol else "unknown", "reach_utc": None,
+                "margin_h": None}
+    reach = now + _dt.timedelta(seconds=eta)
+    # classify on the rounded value so the state agrees with the shown margin
+    margin_h = round((enrol - reach).total_seconds() / 3600, 1)
+    if margin_h < 0:
+        state = "late"
+    elif margin_h < DEADLINE_TIGHT_H:
+        state = "tight"
+    else:
+        state = "on_track"
+    return {"state": state, "reach_utc": _iso(reach.replace(microsecond=0)),
+            "margin_h": margin_h}
 
 
 def next_milestone(level, milestones):
@@ -253,6 +293,28 @@ def _clean_epoch(e):
         return None
 
 
+def _clean_deadline(d):
+    try:
+        return levels.validate_deadline(d)
+    except ValueError:
+        return None
+
+
+def _clean_ids(raw):
+    return sorted({d for d in (raw if isinstance(raw, list) else [])
+                   if isinstance(d, str) and levels.ID_RE.match(d)})
+
+
+def _clean_rows(raw, clean, most):
+    out, seen = [], set()
+    for r in raw if isinstance(raw, list) else []:
+        c = clean(r)
+        if c is not None and c["id"] not in seen:
+            seen.add(c["id"])
+            out.append(c)
+    return out[:most]
+
+
 class LevelingService:
     """Store domain `leveling`: {"samples": [{ts, level, pct}] (oldest first),
     "hot_windows": [{id, days, start, end, label, pct}], "milestones": [int],
@@ -261,20 +323,29 @@ class LevelingService:
     returns the grind view's buff list (plan 005) for the XP stack; `seq` bumps
     on every write (SSE). XP epochs (plan 018) are the tracked
     `data/xp_epochs.json` rows (`epochs`, injected for tests) merged with the
-    operator's added / deleted ones; a bad tracked file degrades to none."""
+    operator's added / deleted ones; a bad tracked file degrades to none.
+    Plan 024 deadlines work the same way: tracked `data/deadlines.json` rows
+    (`deadlines`, injected for tests) + "deadlines_added" / "deadlines_deleted"."""
 
-    def __init__(self, store, clock=time.time, buffs=None, epochs=None):
+    def __init__(self, store, clock=time.time, buffs=None, epochs=None, deadlines=None):
         self.store = store
         self.clock = clock
         self.buffs = buffs
         self.seq = 0
         self.epoch_error = None
+        self.deadline_error = None
         if epochs is None:
             try:
                 epochs = levels.load_epochs()
             except ValueError as e:
                 epochs, self.epoch_error = [], str(e)
         self.tracked_epochs = levels.sort_epochs(epochs)
+        if deadlines is None:
+            try:
+                deadlines = levels.load_deadlines()
+            except ValueError as e:
+                deadlines, self.deadline_error = [], str(e)
+        self.tracked_deadlines = levels.sort_deadlines(deadlines)
         self._lock = threading.Lock()  # read-modify-write; Store guards each file op
         with self._lock:
             if "milestones" not in store.get("leveling"):
@@ -312,23 +383,40 @@ class LevelingService:
         nxt = doc.get("next_id")
         top = max((int(w["id"][1:]) for w in windows), default=0) + 1
         nxt = max(nxt, top) if _ok_int(nxt, 1, 10 ** 9 - 1) else top
-        added, seen = [], set()
-        for e in doc.get("epochs_added") if isinstance(doc.get("epochs_added"), list) else []:
-            c = _clean_epoch(e)
-            if c is not None and c["id"] not in seen:
-                seen.add(c["id"])
-                added.append(c)
-        raw = doc.get("epochs_deleted")
-        deleted = sorted({d for d in (raw if isinstance(raw, list) else [])
-                          if isinstance(d, str) and levels.ID_RE.match(d)})
         return {"samples": samples, "hot_windows": windows, "milestones": ms, "next_id": nxt,
-                "epochs_added": added[:MAX_EPOCHS], "epochs_deleted": deleted}
+                "epochs_added": _clean_rows(doc.get("epochs_added"), _clean_epoch, MAX_EPOCHS),
+                "epochs_deleted": _clean_ids(doc.get("epochs_deleted")),
+                "deadlines_added": _clean_rows(doc.get("deadlines_added"), _clean_deadline,
+                                               MAX_DEADLINES),
+                "deadlines_deleted": _clean_ids(doc.get("deadlines_deleted"))}
 
     def epochs(self, doc=None):
         """Effective XP epochs, oldest first."""
         doc = self._load() if doc is None else doc
         return levels.merge_epochs(self.tracked_epochs, doc["epochs_added"],
                                    set(doc["epochs_deleted"]))
+
+    def deadlines(self, doc=None):
+        """Effective deadline rows, soonest enrolment first."""
+        doc = self._load() if doc is None else doc
+        return levels.merge_deadlines(self.tracked_deadlines, doc["deadlines_added"],
+                                      set(doc["deadlines_deleted"]))
+
+    def _deadline_rows(self, doc, now, level, pct, rate):
+        tracked = {d["id"] for d in self.tracked_deadlines}
+        out = []
+        for d in self.deadlines(doc):
+            enrol = _parse_iso(d["enrol_by_utc"])
+            if _parse_iso(d["quests_by_utc"] or d["enrol_by_utc"]) <= now:
+                continue  # final cut-off passed: nothing left to act on
+            eta = eta_to_level_s(level, pct, rate, d["needs_level"])
+            out.append(dict(d, **deadline_status(d, level, eta, now), tracked=d["id"] in tracked,
+                            enrol_in_s=int((enrol - now).total_seconds())))
+        return out
+
+    def deadline_rows(self):
+        """Decorated deadlines (the GET body's `deadlines`) for the Events tab."""
+        return self.view()["deadlines"]
 
     def active_epoch(self):
         """Newest started XP epoch or None (plan 012 spot re-verify badge)."""
@@ -378,6 +466,8 @@ class LevelingService:
                 "epochs": [dict(_epoch_brief(e, now), tracked=e["id"] in tracked)
                            for e in epochs],
                 "epoch_error": self.epoch_error,
+                "deadlines": self._deadline_rows(doc, now, level, pct, rate),
+                "deadline_error": self.deadline_error,
                 # the newest STARTED epoch that carries caps: a later operator
                 # epoch (no caps) does not hide them (refute r1 minor 2)
                 "kill_xp_cap": levels.kill_cap_note(levels.active_epoch(
@@ -489,6 +579,34 @@ class LevelingService:
             doc["epochs_added"] = [e for e in doc["epochs_added"] if e["id"] != eid]
             if eid in {e["id"] for e in self.tracked_epochs}:
                 doc["epochs_deleted"] = sorted(set(doc["epochs_deleted"]) | {eid})
+            self._save(doc)
+        return self.view()
+
+    def deadline_set(self, arg):
+        """{id, label, needs_level, enrol_by_utc, quests_by_utc, source,
+        verified[, note]}: a new deadline, or a correction of one by id (e.g.
+        the official enrolment date of the tracked Olvia row)."""
+        row = levels.validate_deadline(arg)
+        with self._lock:
+            doc = self._load()
+            added = [d for d in doc["deadlines_added"] if d["id"] != row["id"]]
+            if len(added) >= MAX_DEADLINES:
+                raise ValueError(f"at most {MAX_DEADLINES} set deadlines")
+            doc["deadlines_added"] = added + [row]
+            doc["deadlines_deleted"] = [d for d in doc["deadlines_deleted"] if d != row["id"]]
+            self._save(doc)
+        return self.view()
+
+    def deadline_del(self, did):
+        if not isinstance(did, str) or not levels.ID_RE.match(did):
+            raise ValueError("deadline_del must be a deadline id")
+        with self._lock:
+            doc = self._load()
+            if did not in {d["id"] for d in self.deadlines(doc)}:
+                raise ValueError(f"unknown deadline: {did}")
+            doc["deadlines_added"] = [d for d in doc["deadlines_added"] if d["id"] != did]
+            if did in {d["id"] for d in self.tracked_deadlines}:
+                doc["deadlines_deleted"] = sorted(set(doc["deadlines_deleted"]) | {did})
             self._save(doc)
         return self.view()
 
