@@ -280,5 +280,7 @@ test('overlay: GET-only grind widgets, opt-in from the query main passes', () =>
   assert.match(html, /id="ov-buff"/);
   const m = read('main.js');
   assert.match(m, /core\.overlayWidgets\(/);
-  assert.match(m, /query:\s*core\.widgetsQuery\(/);
+  // Plan 022: the overlay query also carries scale / opacity.
+  assert.match(m, /const query = Object\.assign\(core\.widgetsQuery\(/);
+  assert.match(m, /\{ query: query \}/);
 });

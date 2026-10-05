@@ -46,3 +46,56 @@ ToS check: separate transparent click-through Electron window toggled by
 `globalShortcut` only (CLAUDE.md overlay rule); no input to the game.
 
 Depends on: none.
+
+## As-built deviations
+
+Self-adjudicated in the build lane (no operator wait, CLAUDE.md order 6).
+
+1. Overlay preload invariant. Decision: item 3's one-way IPC needs a
+   renderer channel, so the overlay gets its own sandboxed
+   `app/overlay/preload.js` exposing only `ewOverlay.reportSize(number)`
+   (`ipcRenderer.send`, no invoke, no reply); three older tests that asserted
+   "exactly one preload / overlay has none" (grind, market, today) now assert
+   two preloads and that the overlay one carries no `ew:post` / invoke /
+   `ewApi`. Main checks `event.sender === overlay.webContents`; the overlay
+   also denies navigation and window.open like the dashboard.
+   Alternatives: Electron `enablePreferredSizeMode` + `preferred-size-changed`
+   (no preload at all) or main polling `executeJavaScript`. Why: the plan
+   names the IPC; preferred-size height semantics at a fixed width are not
+   documented tightly enough to bet the clip-free guarantee on; polling
+   wastes work. Reverses if: preferred-size mode is measured to report the
+   laid-out height at the window width - then drop the preload and restore
+   the one-preload tests.
+2. Measurement trigger. Decision: a `ResizeObserver` on the panel calls the
+   report, and only a changed body height is sent. Alternatives: measure
+   after every draw (once a second). Why: same result, no per-second IPC.
+   Reverses if: a render path is found that changes height without resizing
+   the panel.
+3. Height measure and rounding. Decision: the page reports the fractional
+   `document.body.getBoundingClientRect().height` (not `scrollHeight`, an
+   integer that can round down at 13 px x scale) and `overlayHeight` rounds
+   UP (ceil) before the 60-600 clamp. Why: a fractional last line must never
+   clip (verifier round 1). Reverses if: never (round-down can only clip).
+4. Width follows scale. Decision: window width = round(340 x scale), so a
+   scaled font does not wrap or clip. The plan was silent. Reverses if: the
+   operator wants a fixed width with scale (config key then).
+5. Quiet rows. Decision: `ovQuiet` treats `''`, `-`, `?`, `none`, `idle` as
+   nothing-to-say (initial unknown states included); `offline` always shows.
+   Leveling / Season rows now read `Leveling | <line>` and `Season | <line>`,
+   their placeholders shortened to `-` / `offline`. The Server row and a red
+   header dot (before "Game") show only when the server is not ok.
+   Reverses if: the operator wants placeholders visible while loading.
+6. Value column width. Decision: values are `flex: 0 0 auto` with
+   `min-width: 11ch`, right-aligned, tabular figures - a fixed 11ch column
+   for countdowns and short values that grows (never shrinks or wraps) for
+   longer ones (`daily 3/5  weekly 1/4` is ~21ch); free-text values
+   (Grind spot, Leveling, Season) may shrink with an ellipsis. Alternatives:
+   a hard `width`, which would clip the Today line. Why: no jitter, no clip.
+   Reverses if: the Today line is shortened below 11ch.
+7. Self-test minimap check. Decision: `selftest.run` takes
+   `overlayPlace: {workArea, defaultAnchor}` from main; `insideWorkArea` is
+   always required, `clearOfMinimap` only when the configured anchor equals
+   the default (`ml`, explicit or implied; `null` otherwise). The live
+   Electron self-test (7/7 + minimap) is run at merge per the acceptance
+   line, not in this lane (a second app instance would quit on the
+   single-instance lock while the operator's EW runs).

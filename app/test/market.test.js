@@ -163,7 +163,7 @@ test('validWatchBody accepts exactly add/remove with int fields', () => {
   assert.strictEqual(C.validWatchBody(r.body), true);
 });
 
-test('market POST goes through the dashboard preload only (overlay has none)', () => {
+test('market POST goes through the dashboard preload only (overlay has no POST path)', () => {
   const pre = read('preload.js');
   // Plan 003 generalised the plan 002 bridge: window.ewApi.post(route, body).
   assert.match(pre, /contextBridge\.exposeInMainWorld\('ewApi'/);
@@ -176,10 +176,13 @@ test('market POST goes through the dashboard preload only (overlay has none)', (
   assert.match(mk, /window\.ewApi/);
   assert.match(mk, /\.post\('\/api\/market\/watch'/);
   assert.doesNotMatch(mk, /ewMarket/);
-  assert.equal((m.match(/preload:/g) || []).length, 1, 'exactly one window has a preload');
+  // Plan 022: the overlay's own preload is a one-way size report, never a POST.
+  assert.equal((m.match(/preload:/g) || []).length, 2, 'dashboard + overlay size preload');
   const ov = m.slice(m.indexOf('function createOverlay'), m.indexOf('function toggleOverlay'));
-  assert.doesNotMatch(ov, /preload/);
-  assert.doesNotMatch(pre + m, /arsha\.io/);
+  assert.doesNotMatch(ov, /path\.join\(__dirname, 'preload\.js'\)/);
+  const ovPre = read('overlay/preload.js');
+  assert.doesNotMatch(ovPre, /ew:post|invoke|ewApi/);
+  assert.doesNotMatch(pre + m + ovPre, /arsha\.io/);
 });
 
 test('pollDue throttles to the interval', () => {

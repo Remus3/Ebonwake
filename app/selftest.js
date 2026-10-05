@@ -2,11 +2,13 @@
    clicks each dashboard tab via executeJavaScript, measures page overflow,
    captures both windows to PNG (each dashboard capture only after
    showInactive() plus one completed paint, plan 010), checks overlay transparency and hotkey
-   registration. Never touches any other window or the game. */
+   registration, and (plan 022) that the overlay sits inside its display's work
+   area and off the minimap. Never touches any other window or the game. */
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
+const core = require('./shared/ewcore');
 
 function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
@@ -106,9 +108,17 @@ async function run(o) {
       hwnd: o.overlay.getNativeWindowHandle().readBigUInt64LE(0).toString(),
       bounds: o.overlay.getBounds()
     };
+    // Plan 022: inside the chosen display's work area; on the default anchor
+    // also clear of BDO's top-right minimap zone (null = not checked).
+    const place = o.overlayPlace || {};
+    res.overlay.workArea = place.workArea || null;
+    res.overlay.insideWorkArea = core.rectInside(res.overlay.bounds, place.workArea);
+    res.overlay.clearOfMinimap = place.defaultAnchor && place.workArea
+      ? !core.rectsIntersect(res.overlay.bounds, core.minimapZone(place.workArea)) : null;
     res.ok = res.tabs.every(function (t) { return t.fits && t.switched && t.painted && t.captured; }) &&
       Object.keys(res.hotkeys).every(function (k) { return res.hotkeys[k].registered; }) &&
-      res.overlay.toggled && res.overlay.cornerAlpha === 0 && !res.overlay.focusable;
+      res.overlay.toggled && res.overlay.cornerAlpha === 0 && !res.overlay.focusable &&
+      res.overlay.insideWorkArea && res.overlay.clearOfMinimap !== false;
   } catch (e) {
     res.error = String(e && e.stack || e);
   }

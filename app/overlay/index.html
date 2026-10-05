@@ -8,17 +8,17 @@
 <link rel="stylesheet" href="../shared/ew.css">
 </head>
 <body>
-<div class="ew-ov">
-  <div class="ew-ov-row ew-ov-head" id="ov-game-row"><span class="ew-muted">Game</span><span><span id="ov-game-dot" class="ew-dot unknown"></span><span id="ov-game">-</span></span></div>
-  <div class="ew-ov-row"><span class="ew-muted">Daily reset</span><span id="ov-daily">-</span></div>
-  <div class="ew-ov-row"><span class="ew-muted">Weekly reset</span><span id="ov-weekly">-</span></div>
-  <div class="ew-ov-row"><span class="ew-muted">Today</span><span id="ov-today">-</span></div>
-  <div class="ew-ov-row" id="ov-grind-row" hidden><span class="ew-muted">Grind</span><span id="ov-grind">-</span></div>
-  <div class="ew-ov-row" id="ov-buff-row" hidden><span class="ew-muted" id="ov-buff-name">Buff</span><span id="ov-buff">-</span></div>
-  <div class="ew-ov-row" id="ov-events-row" hidden><span class="ew-muted ew-mname" id="ov-events-name">Event</span><span id="ov-events">-</span></div>
-  <div class="ew-ov-row" id="ov-leveling-row" hidden><span class="ew-mname" id="ov-leveling">-</span></div>
-  <div class="ew-ov-row" id="ov-season-row" hidden><span class="ew-mname" id="ov-season">-</span></div>
-  <div class="ew-ov-row"><span class="ew-muted">Server</span><span id="ov-server">?</span></div>
+<div class="ew-ov" id="ov-panel">
+  <div class="ew-ov-row ew-ov-head" id="ov-game-row"><span class="ew-ov-lab"><span id="ov-server-dot" class="ew-dot bad" title="EW server offline" hidden></span>Game</span><span class="ew-ov-val"><span id="ov-game-dot" class="ew-dot unknown"></span><span id="ov-game">-</span></span></div>
+  <div class="ew-ov-row"><span class="ew-ov-lab">Daily reset</span><span class="ew-ov-val" id="ov-daily">-</span></div>
+  <div class="ew-ov-row"><span class="ew-ov-lab">Weekly reset</span><span class="ew-ov-val" id="ov-weekly">-</span></div>
+  <div class="ew-ov-row" id="ov-today-row"><span class="ew-ov-lab">Today</span><span class="ew-ov-val" id="ov-today">-</span></div>
+  <div class="ew-ov-row" id="ov-grind-row" hidden><span class="ew-ov-lab">Grind</span><span class="ew-ov-val ew-mname" id="ov-grind">-</span></div>
+  <div class="ew-ov-row" id="ov-buff-row" hidden><span class="ew-ov-lab ew-mname" id="ov-buff-name">Buff</span><span class="ew-ov-val" id="ov-buff">-</span></div>
+  <div class="ew-ov-row" id="ov-events-row" hidden><span class="ew-ov-lab ew-mname" id="ov-events-name">Event</span><span class="ew-ov-val" id="ov-events">-</span></div>
+  <div class="ew-ov-row" id="ov-leveling-row" hidden><span class="ew-ov-lab">Leveling</span><span class="ew-ov-val ew-mname" id="ov-leveling">-</span></div>
+  <div class="ew-ov-row" id="ov-season-row" hidden><span class="ew-ov-lab">Season</span><span class="ew-ov-val ew-mname" id="ov-season">-</span></div>
+  <div class="ew-ov-row" id="ov-server-row" hidden><span class="ew-ov-lab">Server</span><span class="ew-ov-val" id="ov-server">?</span></div>
 </div>
 <script src="../shared/ewcore.js"></script>
 <script src="overlay.js"></script>

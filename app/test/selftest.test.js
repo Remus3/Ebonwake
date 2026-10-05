@@ -46,7 +46,8 @@ function fakes(log, opts) {
   let ovVisible = false;
   const ov = {
     isVisible: () => ovVisible, isFocusable: () => false, isAlwaysOnTop: () => true,
-    getNativeWindowHandle: () => Buffer.alloc(8), getBounds: () => ({}),
+    getNativeWindowHandle: () => Buffer.alloc(8),
+    getBounds: () => opts.bounds || { x: 16, y: 410, width: 340, height: 220 },
     webContents: { isLoading: () => false, capturePage: async () => fakeImage(false) }
   };
   return { dash, ov, toggle: () => { ovVisible = !ovVisible; } };
@@ -61,7 +62,9 @@ async function runFake(opts) {
   await selftest.run({
     app: { quit() {} }, dashboard: f.dash, overlay: f.ov, keys: { a: 'F9' },
     globalShortcut: { isRegistered: () => true }, toggleOverlay: f.toggle, out: out,
-    wait: () => Promise.resolve(), paintTimeoutMs: 20
+    wait: () => Promise.resolve(), paintTimeoutMs: 20,
+    overlayPlace: Object.assign({ workArea: { x: 0, y: 0, width: 1920, height: 1040 }, defaultAnchor: true },
+      (opts || {}).place)
   });
   delete process.env.EW_SELFTEST_STAY;
   return { log, res: JSON.parse(fs.readFileSync(out, 'utf8')) };
@@ -88,6 +91,30 @@ test('a paint that never comes is reported, not hung on', async () => {
   assert.strictEqual(res.tabs.length, 7);
   assert.ok(res.tabs.every((t) => t.painted === false));
   assert.strictEqual(res.ok, false);
+});
+
+// Plan 022 item 6: overlay inside its display's work area and, on the default
+// anchor, clear of the top-right 360x300 minimap zone.
+test('overlay placement: inside the work area and off the minimap', async () => {
+  const { res } = await runFake();
+  assert.strictEqual(res.overlay.insideWorkArea, true);
+  assert.strictEqual(res.overlay.clearOfMinimap, true);
+  assert.ok(res.ok, JSON.stringify(res));
+});
+
+test('overlay on the minimap with the default anchor fails the self-test', async () => {
+  const { res } = await runFake({ bounds: { x: 1564, y: 16, width: 340, height: 220 } });
+  assert.strictEqual(res.overlay.clearOfMinimap, false);
+  assert.strictEqual(res.ok, false);
+});
+
+test('a chosen top-right anchor skips the minimap check but not the work-area check', async () => {
+  const tr = await runFake({ bounds: { x: 1564, y: 16, width: 340, height: 220 }, place: { defaultAnchor: false } });
+  assert.strictEqual(tr.res.overlay.clearOfMinimap, null);
+  assert.ok(tr.res.ok, JSON.stringify(tr.res));
+  const off = await runFake({ bounds: { x: 1800, y: 16, width: 340, height: 220 }, place: { defaultAnchor: false } });
+  assert.strictEqual(off.res.overlay.insideWorkArea, false);
+  assert.strictEqual(off.res.ok, false);
 });
 
 test('selftest switches keep Chromium from treating an occluded window as hidden', () => {

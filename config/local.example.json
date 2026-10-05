@@ -13,6 +13,11 @@
     "_example_ocr_key": {"env": "EW_OCR_API_KEY"}
   },
   "overlay": {
+    "_doc": "Plan 022. anchor: tl|tr|bl|br|ml|mr or {\"x\": int, \"y\": int} (work-area relative); default ml keeps it off the top-right minimap. display: index into the display list, null = primary. scale 0.8-1.6. opacity (panel) 0.5-0.95.",
+    "anchor": "ml",
+    "display": null,
+    "scale": 1.0,
+    "opacity": 0.85,
     "widgets": {"grindSession": true, "grindBuff": true, "eventsSoon": true, "leveling": false, "season": false}
   },
   "ocr": {
