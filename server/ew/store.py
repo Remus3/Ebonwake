@@ -3,6 +3,7 @@
 import json
 import os
 import threading
+import time
 from pathlib import Path
 
 SCHEMA = 1
@@ -15,7 +16,16 @@ def atomic_write_json(path, data):
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n", encoding="utf-8",
                    newline="\n")
-    tmp.replace(path)
+    # Windows refuses a replace while another handle reads the target
+    # (PermissionError); readers hold handles for microseconds, so retry briefly.
+    for attempt in range(20):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.01 * (attempt + 1))
 
 
 class Store:
@@ -30,7 +40,8 @@ class Store:
     def get(self, domain, default=None):
         p = self._path(domain)
         try:
-            doc = json.loads(p.read_text(encoding="utf-8"))
+            with _LOCK:
+                doc = json.loads(p.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {} if default is None else default
         return doc.get("data", {})
