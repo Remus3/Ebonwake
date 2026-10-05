@@ -1,0 +1,16 @@
+{
+  "_doc": "Copy to config/local.json (gitignored). Secrets are REFERENCES resolved by ops/fleet_kit/fleet_secrets.py - never a literal value here.",
+  "region": "na",
+  "hotkeys": {
+    "toggleOverlay": "Control+Alt+E",
+    "showDashboard": "Control+Alt+D"
+  },
+  "bdo": {
+    "install_dir": "<steam library>/steamapps/common/Black Desert Online",
+    "documents_dir": "<documents>/Black Desert"
+  },
+  "secrets": {
+    "_example_ocr_key": {"env": "EW_OCR_API_KEY"}
+  },
+  "market_watch": [4901]
+}

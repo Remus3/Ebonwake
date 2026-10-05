@@ -1,0 +1,7 @@
+#!/bin/sh
+# EW pre-commit: leak sweep over staged added lines. 2 = HALT, 3 = FAULT.
+ROOT="$(git rev-parse --show-toplevel)"
+PY="${PYTHON:-py}"
+command -v "$PY" >/dev/null 2>&1 || PY=python
+command -v "$PY" >/dev/null 2>&1 || { echo "[leak-sweep] FAULT - no python" >&2; exit 3; }
+exec "$PY" "$ROOT/tools/leak_sweep.py" --staged

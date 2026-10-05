@@ -1,0 +1,6 @@
+#!/bin/sh
+# EW policy: no Co-Authored-By trailer. Strip it silently.
+MSG="$1"
+TMP="$MSG.ew.tmp"
+grep -v -i '^Co-Authored-By:' "$MSG" > "$TMP" && mv "$TMP" "$MSG"
+exit 0
