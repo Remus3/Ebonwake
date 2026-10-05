@@ -227,6 +227,8 @@ class GameWatch:
             state = classify(doc["Log"]) if doc else None
             if state is None:
                 continue
+            if self._log_state == TERMINAL:  # sticky until a new log file or the
+                continue                     # process is seen gone (refute r1)
             self._log_state = state
             self._last_event = {"date": _clean(doc.get("Date")), "type": _clean(doc.get("LogType")),
                                 "log": _clean(doc["Log"]), "state": state}

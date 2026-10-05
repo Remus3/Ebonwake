@@ -389,6 +389,30 @@ def test_exit_instance_line_is_terminal_even_while_process_lingers(dirs):
     assert w.view()["state"] == "running"
 
 
+def test_terminal_line_is_sticky_while_process_lingers(dirs):
+    # refute r1: shutdown chatter after ExitInstance must not revive the session
+    inst, _ = dirs
+    clk = Clock()
+    w = _watch(dirs, clk, listed=True)
+    log = inst / "Log" / LOGNAME
+    _write(log, _line("Login ok") + _line("terminating app: ExitInstance")
+           + _line("Disconnected from server") + _line("Logout") + _line("Client exit"),
+           mtime=clk.t)
+    w.poll()
+    v = w.view()
+    assert v["state"] == "not_running"
+    assert v["last_event"]["log"] == "terminating app: ExitInstance"
+
+
+def test_stale_log_process_definitely_gone_is_not_running(dirs):
+    inst, _ = dirs
+    clk = Clock()
+    w = _watch(dirs, clk, listed=False)
+    _write(inst / "Log" / LOGNAME, _line("Login ok"), mtime=clk.t - 121)
+    w.poll()
+    assert w.view()["state"] == "not_running"
+
+
 def test_poll_interval_meets_5s_exit_target():
     # state must flip within 5 s of exit: one poll + one tasklist (timeout 5 s cap
     # aside, ~0.1-0.3 s measured) must fit.
