@@ -22,7 +22,7 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import __version__, deadeye, events, gamewatch, grind, market, ocr, ports, progress, today
+from . import __version__, deadeye, events, gamewatch, grind, market, ocr, ports, progress, single, today
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -372,7 +372,10 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                     ocr_cache_dir=ocr_cache_dir)
 
 
-def main(argv=None):
+def main(argv=None, probe=None):
+    # Single instance (plan 010): an EW server already on the port wins.
+    if (probe or single.probe)() == "ew":
+        return 0
     srv = make_server(commit=read_commit(), game_poll=True,
                       game_cfg=gamewatch.config_bdo(REPO_ROOT))
     try:
