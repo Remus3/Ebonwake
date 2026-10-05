@@ -1,6 +1,6 @@
 # Plan 007 - Deadeye tab
 
-Status: open. Lanes: `build` (slice A), `data` (slice B).
+Status: done (2026-10-05); refute rounds 1/3 PASS. Lanes: `build` (slice A), `data` (slice B).
 
 ## Goal
 

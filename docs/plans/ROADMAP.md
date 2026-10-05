@@ -11,7 +11,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 004 | Progress tab: quest / season-pass / gear tracker, BDO-REST-API profile card | [x] done 2026-10-04 (refute 2/3 PASS; profile API base verified vs upstream openapi) |
 | 005 | Grind tab: grind session log, silver/h, buff timers (overlay widget) | [x] done 2026-10-04 (refute 2/3 PASS; self-test 7/7) |
 | 006 | Events tab: coupon + event + Twitch-drop tracker with expiries (seed from official pages) | [x] done 2026-10-04 (refute 1/3 PASS) |
-| 007 | Deadeye tab: build notes (markdown), enhancement plan | [ ] |
+| 007 | Deadeye tab: build notes (markdown), enhancement plan | [x] done 2026-10-05 (refute 1/3 PASS; self-test 7/7) |
 | 008 | Session-log tail (game running / logged in) + ScreenShot watcher | [ ] |
 | 009 | OCR of operator-taken screenshots (buff icons, silver) - adjudicate engine first | [ ] |
 | 010 | Packaging: start-on-login task, single-instance, tray | [ ] |
