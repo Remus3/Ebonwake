@@ -18,9 +18,9 @@ import loop_task  # noqa: E402
 NS = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
 ENV = {"USERDOMAIN": "HOST", "USERNAME": "op"}
 LIST = """
-Folder: \\Ebonwake
+Folder: \\EbonwakeOps
 HostName:                             HOST
-TaskName:                             \\Ebonwake\\LaneLoop
+TaskName:                             \\EbonwakeOps\\LaneLoop
 Next Run Time:                        10/5/2026 3:15:00 PM
 Status:                               {state}
 Logon Mode:                           Interactive only
@@ -104,7 +104,7 @@ def test_install_then_status_reads_back(tmp_path):
     assert st["state"] == "Ready" and st["last_result"] == "0"
     assert st["last_run"] == "10/5/2026 3:00:00 PM" and st["next_run"].endswith("PM")
     create = [a for a, _ in fake.calls if a[1] == "/Create"][0]
-    assert create[:4] == ["schtasks.exe", "/Create", "/TN", "\\Ebonwake\\LaneLoop"]
+    assert create[:4] == ["schtasks.exe", "/Create", "/TN", "\\EbonwakeOps\\LaneLoop"]
     assert "/F" in create
     nw = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     for _, kw in fake.calls:
@@ -118,7 +118,7 @@ def test_install_idempotent_run_now_remove(tmp_path):
     assert loop_task.run_now(run=fake)["exists"] is False
     loop_task.install(**c)
     loop_task.install(**c)
-    assert list(fake.tasks) == ["\\Ebonwake\\LaneLoop"]
+    assert list(fake.tasks) == ["\\EbonwakeOps\\LaneLoop"]
     doc = loop_task.run_now(run=fake)
     assert doc["started"] is True and doc["state"] == "Running"
     assert loop_task.remove(run=fake) == {"exists": False, "removed": True}
