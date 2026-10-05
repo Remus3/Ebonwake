@@ -31,6 +31,11 @@
     "max_new_plans_per_day": 2
   },
   "market_watch": [4901],
+  "market": {
+    "_doc": "Plan 027. Net proceeds after the 35 percent market tax. vp: true while a Value Pack is active (+30 percent of the after-tax amount). fame_pct: the Family Fame sale bonus shown in game, 0-1.5 (percent). Restart the server after editing.",
+    "vp": false,
+    "fame_pct": 0
+  },
   "profile": {
     "family": "",
     "base_url": "https://api.cutepap.us/community/v1"

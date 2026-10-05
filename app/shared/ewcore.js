@@ -325,6 +325,71 @@
     return { ok: true, body: { add: add } };
   }
 
+  // ---- plan 027: net proceeds after tax + pre-order queues ----
+
+  // Mirrors server/ew/market.py net_proceeds: rates in basis points, integer
+  // maths in BigInt so a 1 T sale floors exactly. opts = /api/market/watch
+  // `tax` {vp, fame_pct, tax, vp_bonus}; missing rates use the tracked defaults.
+  function netProceeds(price, opts) {
+    const o = opts || {};
+    if (!isInt(price, 0)) return null;
+    const fame = o.fame_pct === undefined || o.fame_pct === null ? 0 : o.fame_pct;
+    if (!isNum(fame) || fame < 0 || fame > 1.5) return null;
+    const bp = function (r) { return Math.round(r * 10000); };
+    const keep = 10000 - bp(isNum(o.tax) ? o.tax : 0.35);
+    const mult = 10000 + (o.vp === true ? bp(isNum(o.vp_bonus) ? o.vp_bonus : 0.30) : 0) +
+      Math.round(fame * 100);
+    return Number(BigInt(price) * BigInt(keep) * BigInt(mult) / 100000000n);
+  }
+
+  function fmtSilverExact(n) {
+    if (!isInt(n, -Number.MAX_SAFE_INTEGER)) return '-';
+    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  // Operator-typed silver: "84,500,000", "100m", "1.5b", "750k" -> int or null.
+  function parseSilver(s) {
+    if (s === null || s === undefined) return null;
+    const t = String(s).trim().toLowerCase();
+    let m = /^(\d{1,3}(?:,\d{3})+|\d+)$/.exec(t);
+    if (m) {
+      const v = Number(m[1].replace(/,/g, ''));
+      return Number.isSafeInteger(v) ? v : null;
+    }
+    m = /^(\d+(?:\.\d+)?)([kmb])$/.exec(t);
+    if (!m) return null;
+    const v = Math.round(Number(m[1]) * { k: 1e3, m: 1e6, b: 1e9 }[m[2]]);
+    return Number.isSafeInteger(v) ? v : null;
+  }
+
+  // Item-detail calculator: buy at X, sell at Y -> net and profit after tax.
+  function pairProfit(buyText, sellText, opts) {
+    const buy = parseSilver(buyText);
+    const sell = parseSilver(sellText);
+    if (buy === null) return { ok: false, error: 'buy: a silver amount like 80m or 80,000,000' };
+    if (sell === null) return { ok: false, error: 'sell: a silver amount like 100m or 100,000,000' };
+    const net = netProceeds(sell, opts);
+    if (net === null) return { ok: false, error: 'tax settings invalid' };
+    return { ok: true, buy: buy, sell: sell, net: net, profit: net - buy };
+  }
+
+  const PREORDER_NOTE = 'listing fills only from pre-orders at max; >= 20 B items fill at random';
+  const PREORDER_WHY = { capped: 'last sold at the max price', no_stock: 'no stock listed' };
+
+  // Server-sent `preorder` wins; otherwise the market.preorder_state rule.
+  function preorderState(it) {
+    if (!it || typeof it !== 'object') return null;
+    if ('preorder' in it) return PREORDER_WHY[it.preorder] ? it.preorder : null;
+    if (isInt(it.lastSoldPrice, 1) && it.lastSoldPrice === it.priceMax) return 'capped';
+    if (it.currentStock === 0) return 'no_stock';
+    return null;
+  }
+
+  function preorderBadge(state) {
+    if (!Object.prototype.hasOwnProperty.call(PREORDER_WHY, state)) return null;
+    return { label: 'pre-order', cls: 'preorder', title: PREORDER_WHY[state] + ' - ' + PREORDER_NOTE };
+  }
+
   function pollDue(lastMs, nowMs, intervalMs) {
     return lastMs === null || lastMs === undefined || nowMs - lastMs >= intervalMs;
   }
@@ -2262,6 +2327,12 @@
     validWatchBody: validWatchBody,
     parseWatchForm: parseWatchForm,
     pollDue: pollDue,
+    netProceeds: netProceeds,
+    fmtSilverExact: fmtSilverExact,
+    parseSilver: parseSilver,
+    pairProfit: pairProfit,
+    preorderState: preorderState,
+    preorderBadge: preorderBadge,
     nextDailyReset: nextDailyReset,
     nextWeeklyReset: nextWeeklyReset,
     fmtDuration: fmtDuration,

@@ -224,6 +224,92 @@ test('itemFreshness flattens the nested /api/market/item shape', () => {
   assert.strictEqual(C.itemFreshness(ok), ok);
 });
 
+// ---- plan 027: net proceeds after tax + pre-order badge ----
+
+const HOT = JSON.parse(fs.readFileSync(
+  path.join(__dirname, '..', '..', 'tests', 'fixtures', 'market', 'hot_preorder.json'), 'utf8'));
+
+test('netProceeds matches the server fixtures (floor, basis points)', () => {
+  const off = { vp: false, fame_pct: 0 };
+  const on = { vp: true, fame_pct: 0 };
+  assert.strictEqual(C.netProceeds(100000000, off), 65000000);
+  assert.strictEqual(C.netProceeds(100000000, on), 84500000);
+  assert.strictEqual(C.netProceeds(100000000, { vp: true, fame_pct: 1.5 }), 85475000);
+  assert.strictEqual(C.netProceeds(100000000, { vp: false, fame_pct: 0.5 }), 65325000);
+  assert.strictEqual(C.netProceeds(210, off), 136);
+  assert.strictEqual(C.netProceeds(1, on), 0);
+  assert.strictEqual(C.netProceeds(999999999999, { vp: true, fame_pct: 1.5 }), 854749999999);
+  // half basis points: same values as tests/test_market.py (half up, same double)
+  assert.strictEqual(C.netProceeds(100000000, { vp: false, fame_pct: 0.125 }), 65084500);
+  assert.strictEqual(C.netProceeds(100000000, { vp: false, fame_pct: 0.005 }), 65006500);
+  assert.strictEqual(C.netProceeds(100000000, { vp: false, fame_pct: 0.145 }), 65091000);
+  // server-sent rates win over the defaults
+  assert.strictEqual(C.netProceeds(100, { vp: false, fame_pct: 0, tax: 0.5 }), 50);
+  assert.strictEqual(C.netProceeds(100000000), 65000000);
+  for (const bad of [null, -1, 1.5, '100', NaN, Infinity]) {
+    assert.strictEqual(C.netProceeds(bad, on), null, String(bad));
+  }
+  assert.strictEqual(C.netProceeds(100, { vp: false, fame_pct: 9 }), null);
+});
+
+test('fmtSilverExact groups digits for the hover title', () => {
+  assert.strictEqual(C.fmtSilverExact(84500000), '84,500,000');
+  assert.strictEqual(C.fmtSilverExact(950), '950');
+  assert.strictEqual(C.fmtSilverExact(-1234567), '-1,234,567');
+  assert.strictEqual(C.fmtSilverExact(null), '-');
+  assert.strictEqual(C.fmtSilverExact(1.5), '-');
+});
+
+test('parseSilver reads digits, commas and k/m/b suffixes', () => {
+  assert.strictEqual(C.parseSilver('84,500,000'), 84500000);
+  assert.strictEqual(C.parseSilver(' 100m '), 100000000);
+  assert.strictEqual(C.parseSilver('1.5B'), 1500000000);
+  assert.strictEqual(C.parseSilver('2.95M'), 2950000);
+  assert.strictEqual(C.parseSilver('750k'), 750000);
+  assert.strictEqual(C.parseSilver('0'), 0);
+  for (const bad of ['', '  ', 'abc', '-5', '1.5', '1e9', '1..5m', 'm', null, undefined, '1,5,0']) {
+    assert.strictEqual(C.parseSilver(bad), null, String(bad));
+  }
+});
+
+test('pairProfit: buy X, sell Y -> profit after tax', () => {
+  const on = { vp: true, fame_pct: 0 };
+  assert.deepStrictEqual(C.pairProfit('80m', '100m', on),
+    { ok: true, buy: 80000000, sell: 100000000, net: 84500000, profit: 4500000 });
+  assert.deepStrictEqual(C.pairProfit('70m', '100m', { vp: false, fame_pct: 0 }),
+    { ok: true, buy: 70000000, sell: 100000000, net: 65000000, profit: -5000000 });
+  assert.strictEqual(C.pairProfit('', '100m', on).ok, false);
+  assert.strictEqual(typeof C.pairProfit('x', '100m', on).error, 'string');
+  assert.strictEqual(C.pairProfit('1m', 'zz', on).ok, false);
+});
+
+test('preorderBadge: states from the recorded hot fixture', () => {
+  const b = HOT.map(function (x) { return C.preorderBadge(C.preorderState(x)); });
+  assert.strictEqual(b[0].label, 'pre-order');
+  assert.match(b[0].title, /last sold at the max price/);
+  assert.match(b[0].title, /listing fills only from pre-orders at max; >= 20 B items fill at random/);
+  assert.strictEqual(b[1].label, 'pre-order');
+  assert.match(b[1].title, /no stock listed/);
+  assert.strictEqual(b[2], null);
+  assert.strictEqual(C.preorderBadge(null), null);
+  assert.strictEqual(C.preorderBadge('bogus'), null);
+  // server-sent preorder wins; local fallback mirrors market.preorder_state
+  assert.deepStrictEqual(HOT.map(C.preorderState), ['capped', 'no_stock', null]);
+  assert.strictEqual(C.preorderState({ currentStock: 0, preorder: null }), null);
+  assert.strictEqual(C.preorderState(null), null);
+});
+
+test('market.js shows net column, pair calculator and pre-order badge (L6)', () => {
+  const src = read('dashboard/market.js');
+  assert.match(src, /C\.netProceeds\(|it\.net/);
+  assert.match(src, /C\.fmtSilverExact\(/);
+  assert.match(src, /C\.pairProfit\(/);
+  assert.match(src, /C\.preorderBadge\(/);
+  // bare "stock 0" is never printed without the badge path
+  assert.match(src, /preorderBadge[\s\S]*'stock '/);
+  assert.doesNotMatch(src, /\.post\('\/api\/market\/(buy|sell|register)/);
+});
+
 test('fmtSilver never prints -0', () => {
   assert.strictEqual(C.fmtSilver(-0.4), '0');
   assert.strictEqual(C.fmtSilver(-1500), '-1.5K');

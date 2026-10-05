@@ -1,0 +1,11 @@
+[
+  {"name": "Essence of Dawn", "id": 44364, "sid": 0, "minEnhance": 0, "maxEnhance": 0,
+   "basePrice": 100000000, "currentStock": 0, "totalTrades": 51234, "priceMin": 50000000,
+   "priceMax": 100000000, "lastSoldPrice": 100000000, "lastSoldTime": 1791158400},
+  {"name": "Caphras Stone", "id": 721003, "sid": 0, "minEnhance": 0, "maxEnhance": 0,
+   "basePrice": 2950000, "currentStock": 0, "totalTrades": 98765432, "priceMin": 1250000,
+   "priceMax": 4150000, "lastSoldPrice": 2950000, "lastSoldTime": 1791158000},
+  {"name": "Black Stone", "id": 4901, "sid": 0, "minEnhance": 0, "maxEnhance": 0,
+   "basePrice": 200000, "currentStock": 812345, "totalTrades": 912345678, "priceMin": 100000,
+   "priceMax": 300000, "lastSoldPrice": 210000, "lastSoldTime": 1791157000}
+]

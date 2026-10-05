@@ -1,5 +1,6 @@
 /* EW Market tab (plan 002 slice B): watchlist, item detail (sparkline + order
-   book depth), add/edit, hot list. Reads only the local EW server; writes go
+   book depth), add/edit, hot list. Plan 027: net-after-tax column, buy/sell
+   pair calculator and a pre-order badge for capped / stock-0 queues. Reads only the local EW server; writes go
    through the dashboard preload (window.ewApi) because the server refuses
    renderer POSTs. Every node is built with DOM APIs - no HTML from data. */
 (function () {
@@ -55,6 +56,24 @@
   }
 
   function note(body, cls, text) { body.appendChild(el('div', cls, text)); }
+
+  // Plan 027: rates from /api/market/watch `tax`; defaults until it loads.
+  function taxOpts() { return S.watch && S.watch.tax ? S.watch.tax : { vp: false, fame_pct: 0 }; }
+
+  function netEl(it) {
+    const n = 'net' in it ? it.net : C.netProceeds(it.price, taxOpts());
+    const s = el('span', 'ew-mprice ew-mnet', C.fmtSilver(n));
+    s.title = n === null || n === undefined ? 'no price' : 'net after tax ' + C.fmtSilverExact(n);
+    return s;
+  }
+
+  function badgeEl(it) {
+    const b = C.preorderBadge(C.preorderState(it));
+    if (!b) return null;
+    const s = el('span', 'ew-badge ' + b.cls, b.label);
+    s.title = b.title;
+    return s;
+  }
 
   // ---- data ----
 
@@ -141,13 +160,18 @@
     items.forEach(function (it) {
       if (!it) return;
       const p = C.marketPill(it.freshness);
-      const row = el('div', 'ew-mrow' + (p.stale ? ' ew-stale' : '') + (key(it) === key(S.sel) ? ' sel' : ''));
+      const row = el('div', 'ew-mrow ew-wrow' + (p.stale ? ' ew-stale' : '') + (key(it) === key(S.sel) ? ' sel' : ''));
       row.tabIndex = 0;
       row.setAttribute('role', 'button');
       row.appendChild(el('span', 'ew-mname', label(it)));
       row.appendChild(el('span', 'ew-mprice', C.fmtSilver(it.price)));
+      row.appendChild(netEl(it));
       const a = alertOf(it);
-      row.appendChild(el('span', a ? 'ew-badge ' + a : 'ew-badge', a || ''));
+      const badges = el('span', 'ew-badges');
+      badges.appendChild(el('span', a ? 'ew-badge ' + a : 'ew-badge', a || ''));
+      const pre = badgeEl(it);
+      if (pre) badges.appendChild(pre);
+      row.appendChild(badges);
       row.appendChild(pillEl(it.freshness));
       row.addEventListener('click', function () { choose(it); });
       row.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') choose(it); });
@@ -235,7 +259,9 @@
       row.appendChild(el('span', 'ew-mname', label(it)));
       const price = typeof it.lastSoldPrice === 'number' ? it.lastSoldPrice : it.basePrice;
       row.appendChild(el('span', 'ew-mprice', C.fmtSilver(price)));
-      row.appendChild(el('span', 'ew-muted', 'stock ' + C.fmtSilver(it.currentStock)));
+      // L6: a pre-order queue gets the badge instead of a bare "stock 0".
+      const pre = badgeEl(it);
+      row.appendChild(pre || el('span', 'ew-muted', 'stock ' + C.fmtSilver(it.currentStock)));
       row.addEventListener('click', function () {
         const f = S.ui.form;
         f.id.value = it.id;
@@ -253,6 +279,7 @@
     drawWatch(ui.watch);
     drawItem(ui.item);
     drawHot(ui.hot, ui.hotPill);
+    ui.calc(); // tax settings may have arrived with the watch poll
   }
 
   // ---- mount ----
@@ -265,6 +292,40 @@
     const b = el('div', 'ew-cbody');
     c.appendChild(b);
     return { card: c, body: b };
+  }
+
+  // Plan 027 pair calculator. Built once (outside the redrawn detail body) so
+  // a 60 s poll never wipes what the operator is typing.
+  function calcBox() {
+    const box = el('div', 'ew-calc');
+    box.appendChild(el('div', 'ew-muted', 'buy at X, sell at Y -> profit after tax'));
+    const f = {};
+    [['buy', 'buy at'], ['sell', 'sell at']].forEach(function (x) {
+      const lab = el('label', null);
+      lab.appendChild(el('span', 'ew-muted', x[1] + ' '));
+      const inp = el('input');
+      inp.type = 'text';
+      inp.autocomplete = 'off';
+      inp.placeholder = x[0] === 'buy' ? '80m' : '100m';
+      inp.name = 'calc-' + x[0];
+      lab.appendChild(inp);
+      box.appendChild(lab);
+      f[x[0]] = inp;
+    });
+    const out = el('div', 'ew-calc-out ew-muted', '');
+    box.appendChild(out);
+    const update = function () {
+      if (!f.buy.value.trim() && !f.sell.value.trim()) { out.textContent = ''; out.title = ''; return; }
+      const opts = taxOpts();
+      const r = C.pairProfit(f.buy.value, f.sell.value, opts);
+      if (!r.ok) { out.textContent = r.error; out.title = ''; return; }
+      out.textContent = 'net ' + C.fmtSilver(r.net) + ' -> profit ' + C.fmtSilver(r.profit);
+      out.title = 'net ' + C.fmtSilverExact(r.net) + ', profit ' + C.fmtSilverExact(r.profit) +
+        ' (tax ' + Math.round((typeof opts.tax === 'number' ? opts.tax : 0.35) * 100) + '%' + (opts.vp ? ', Value Pack' : '') + (opts.fame_pct ? ', fame +' + opts.fame_pct + '%' : '') + ')';
+    };
+    f.buy.addEventListener('input', update);
+    f.sell.addEventListener('input', update);
+    return { box: box, update: update };
   }
 
   function formCard() {
@@ -304,11 +365,14 @@
     panel.classList.add('ew-market');
     const w = card('Watchlist');
     const it = card('Item detail');
+    const calc = calcBox();
+    it.card.appendChild(calc.box);
     const fm = formCard();
     const hotPill = el('span', 'ew-hpill');
     const hot = card('Hot list', hotPill);
     [w, it, fm, hot].forEach(function (c) { panel.appendChild(c.card); });
-    S.ui = { watch: w.body, item: it.body, hot: hot.body, hotPill: hotPill, form: fm.form };
+    S.ui = { watch: w.body, item: it.body, hot: hot.body, hotPill: hotPill, form: fm.form,
+      calc: calc.update };
     if (!S.timer) poll(false);
     else draw();
   }

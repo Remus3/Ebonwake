@@ -95,6 +95,15 @@ def config_market_watch(root=REPO_ROOT):
     return ids if isinstance(ids, list) else []
 
 
+def config_market(root=REPO_ROOT):
+    """`market` {vp, fame_pct} from gitignored config/local.json (plan 027)."""
+    try:
+        doc = json.loads((Path(root) / "config" / "local.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        doc = None
+    return market.settings_from(doc)
+
+
 class EWServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -112,7 +121,8 @@ class EWServer(ThreadingHTTPServer):
         self.sse_interval = sse_interval
         seed = config_market_watch() if market_seed is None else market_seed
         self.market = market.MarketService(market_client or market.ArshaClient(),
-                                           market.Watchlist(self.store, seed=seed))
+                                           market.Watchlist(self.store, seed=seed),
+                                           settings=config_market())
         self.today = today.TodayService(self.store, clock=today_clock or time.time)
         if profile_client is None:
             cfg = progress.config_profile(REPO_ROOT) if profile_cfg is None else profile_cfg
