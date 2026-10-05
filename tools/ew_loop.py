@@ -8,9 +8,12 @@
 One tick, under ops/loop/control/loop.lock (fleet_watch.watch_lock):
   a. HALT file -> status "halted", exit 0. A busy lock -> exit 0, nothing written.
   b. Inbox (config loop.inbox_dir / loop.outbox_dir): new notes by mtime through
-     fleet_watch.run_source (baseline first); each note the kit's should_skip
-     passes gets ONE headless answer (sonnet, pick_effort, no governor slot -
-     kit ruling: acknowledgements stay outside the slots).
+     fleet_watch.run_source (baseline first), then kit v8 fleet_inbox (FLEET
+     item 14): classify() free; skip / ack = a seen-ledger line, no note;
+     ORDER / FIX / RULING escalate to a lane item, answered after merge; else
+     ONE triage spawn (TRIAGE_SPAWN: sonnet, low, bare; kind triage). Answers
+     to one destination go in ONE batch note, HOP lines, OutboundCap (6 a
+     day). No governor slot (kit ruling: acknowledgements stay outside).
   d. Finished lane worktrees (before c, so a dirty worktree never blocks a
      claim): gates, review-lane verifier (refute rounds capped at 3, then
      accept and record), commit, merge --no-ff into main, flip the ROADMAP row.
@@ -22,7 +25,9 @@ One tick, under ops/loop/control/loop.lock (fleet_watch.watch_lock):
   f. Spawning stops at RUNS_CAP - 3 and during a usage-limit backoff
      (ops/loop/control/backoff.json, 30 min doubling, cap 6 h).
   g. inbox_status.json (kit write_status, next_tick) and
-     ops/loop/control/progress/loop.json with a "checklist" array.
+     ops/loop/control/progress/loop.json with a "checklist" array (FLEET item
+     13 d: remaining tasks as kit rows {id, task, state, eta_s}, at most 20;
+     "fire" = this tick's run count, the item-13 session number).
   Push (unless --no-push): main clean, gates green, leak_sweep --pre-push
   clean, local main ahead of origin/main; at most one push per tick.
 
@@ -31,6 +36,7 @@ remote and never call schtasks. Paths are resolved at run time.
 """
 
 import argparse
+import contextlib
 import datetime as _dt
 import hashlib
 import json
@@ -46,7 +52,6 @@ INBOX_REL = "moon_sync_inbox"
 OUTBOX_REL = "moon_sync_outbox"
 sys.path.insert(0, str(ROOT / "tools"))
 import eta  # noqa: E402
-import ew_inbox  # noqa: E402
 import ew_lane  # noqa: E402
 
 CODE = "EW"
@@ -57,14 +62,14 @@ BACKOFF_REL = CONTROL_REL / "backoff.json"
 ITEMS_REL = CONTROL_REL / "loop_items"
 WATCH_REL = CONTROL_REL / "loop_inbox_watch.json"
 ORDERS_REL = CONTROL_REL / "loop_orders.json"
-# Responder diet (operator 2026-10-05): an ORDER / FIX / RULING note escalates
-# to a lane work item (a lane does the work, the loop answers after merge);
-# any other note gets one sonnet low-effort bare triage spawn (kit v8 item 14:
-# NOREPLY / ACK are ledger lines, only ANSWER writes a note). At most
-# ew_inbox.CAP (6) notes per local day (config may lower it), escalated-order
-# answers exempt; several answers to one destination go in ONE note.
-ESCALATE_RX = re.compile(r"-(ORDER|FIX|RULING)-", re.I)
-DEFAULT_MAX_NOTES = ew_inbox.CAP
+LEGACY_LEDGER_REL = CONTROL_REL / "inbox_ledger.jsonl"  # pre-kit-v8 shim (deviation 13)
+# Responder diet (operator 2026-10-05) + kit v8 item 14: an ORDER / FIX /
+# RULING note escalates to a lane work item (a lane does the work, the loop
+# answers after merge); any other note is classified for free and only what
+# classify() cannot settle gets one sonnet low-effort bare triage spawn. At
+# most loop.max_notes_per_day (kit OUTBOUND_CAP 6; config may lower it, never
+# raise it) outbound notes per local day.
+DEFAULT_MAX_NOTES = 6
 PROGRESS_TASK = "loop"
 TICK_S = 900
 HEADROOM = 3
@@ -115,6 +120,32 @@ def atomic_write(path, text):
     tmp.replace(path)
 
 
+HOP_RX = re.compile(r"^\s*HOP:\s*\d+\s*$")
+
+
+def with_hop(body, n):
+    """`HOP: n` under the title line (FLEET item 14 d), replacing any HOP line."""
+    lines = [ln for ln in (body or "").splitlines() if not HOP_RX.match(ln)]
+    at = 1 if lines and lines[0].lstrip().startswith("#") else 0
+    lines.insert(at, f"HOP: {n}")
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def read_jsonl(path):
+    """Dict lines of a JSON-lines file; [] when absent; bad lines skipped."""
+    try:
+        raw = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    out = []
+    for line in raw.splitlines():
+        with contextlib.suppress(ValueError):
+            doc = json.loads(line)
+            if isinstance(doc, dict):
+                out.append(doc)
+    return out
+
+
 def read_json(path, default=None):
     try:
         doc = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -140,7 +171,8 @@ def load_config(root):
             "outbox_dir": loop.get("outbox_dir") or str(Path(root) / OUTBOX_REL),
             "max_new_plans_per_day": int(loop.get("max_new_plans_per_day",
                                                   DEFAULT_MAX_PLANS)),
-            "max_notes_per_day": int(loop.get("max_notes_per_day", DEFAULT_MAX_NOTES)),
+            "max_notes_per_day": min(int(loop.get("max_notes_per_day", DEFAULT_MAX_NOTES)),
+                                     DEFAULT_MAX_NOTES),
             "lane_timeout_s": int(loop.get("lane_timeout_s", LANE_TIMEOUT_S)),
             "tick_s": int(loop.get("tick_s", TICK_S))}
 
@@ -241,10 +273,10 @@ GATES = ("Gates before you finish: `python -m pytest -q` and `npm test --prefix 
          "NOT edit CLAUDE.md, EW-NEXT-SESSION.txt or ops/fleet_kit/. Any deviation "
          "from the plan goes into an 'As-built deviations' section of the plan doc "
          "(decision, alternatives, why, reverses if) - adjudicate it yourself, never "
-         "wait. Write the v7 checklist into your progress JSON "
+         "wait. Write the v7 checklist (FLEET item 13 d) into your progress JSON "
          "ops/loop/control/progress/{task}.json: the FLEET item 12 fields plus "
-         "\"checklist\": [\"[ ] ID: step (state, ~ETA)\", ..., \"[ ] /done\"] "
-         "(ASCII), updated after each step.")
+         "\"checklist\": [{{\"id\", \"task\", \"state\", \"eta_s\"}}, ...] - "
+         "remaining steps only, ASCII, updated after each step.")
 
 
 def plan_prompt(item):
@@ -411,6 +443,8 @@ class Deps:
         self.root = Path(root)
         k, fw, fl = ew_lane.kit(), _load_watch(), ew_lane.lanes()
         self.kit, self.watch = k, fw
+        self.inbox = ew_lane._load("fleet_inbox", "ops/fleet_kit/fleet_inbox.py")
+        self.checklist = ew_lane._load("fleet_checklist", "ops/fleet_kit/fleet_checklist.py")
         self.budget = k.RunBudget(self.root / k.BUDGET_REL)
         self.spawn = k.spawn
         self.should_skip = k.should_skip
@@ -468,8 +502,10 @@ class Tick:
         self.items = Items(self.root)
         self.log = []
         self.pushed = None
-        self.cap = ew_inbox.OutboundCap(self.root, self.cfg["max_notes_per_day"])
-        self.ledger = ew_inbox.Ledger(self.root)
+        self.fi = deps.inbox
+        self.cap = self.fi.OutboundCap(self.root, cap=self.cfg["max_notes_per_day"],
+                                       clock=deps.clock)
+        self.awaiting = self.capped = self.paused = 0
 
     # -- gates on spawning (item f)
     def blocked(self):
@@ -486,10 +522,9 @@ class Tick:
 
     def spawn(self, prompt, kind="build", **kw):
         """kit spawn + backoff bookkeeping. Returns the usage line or None.
-        kind (build / inbox / triage) reaches the usage line on kit v8."""
-        kw = ew_inbox.with_kind(self.d.spawn, kw, kind)
+        kind (kit v8: build / inbox / triage) labels the usage line."""
         try:
-            line = self.d.spawn(self.root, CODE, prompt, stdin=True, **kw)
+            line = self.d.spawn(self.root, CODE, prompt, stdin=True, kind=kind, **kw)
         except self.d.kit.Refused as exc:
             self.step(f"spawn refused: {exc}")
             if is_limit(str(exc)):
@@ -530,7 +565,7 @@ class Tick:
             return
 
         def deliver(names):
-            batch = {}  # destination -> [(note, reply body, hop)]: ONE note each
+            batch = {}  # destination -> [(note, answer text, incoming hop)]
             pending = [n for n in names if not self.answer(inbox / n, outbox, batch)]
             pending += self.send_batches(batch, outbox)
             if pending:  # left unseen: run_source re-offers them next tick
@@ -539,115 +574,131 @@ class Tick:
 
         res = self.d.watch.run_source(state, "inbox", fetch, deliver,
                                       lambda s, n, d: {"delivered": True})
-        self.step(f"inbox: {res['outcome']} {len(res['new'])} {res['detail']}"[:200])
+        outcome, detail = res["outcome"], res["detail"]
+        if outcome == "deliver-failed":
+            # Pending by design is not a delivery failure (2026-10-05 loop.json
+            # read "deliver-failed 2 2 pending": two ORDERs awaiting lanes).
+            n = int(detail.split()[0]) if detail[:1].isdigit() else -1
+            failed = n - self.awaiting - self.capped - self.paused
+            if n >= 0 and failed <= 0:
+                outcome = "pending"
+            detail = (f"pending: {self.awaiting} order(s) awaiting lane, {self.capped} "
+                      f"capped, {self.paused} paused, {max(failed, 0)} failed")
+        self.step(f"inbox: {outcome} {len(res['new'])} new; {detail}"[:200])
 
-    def answer(self, path, outbox, batch):
-        """True when the note needs nothing more (answered now or before, acked,
-        skipped, or its reply joined this tick's batch); False = pending.
-        FLEET item 14: skip / ack cost nothing, ORDER / FIX / RULING escalate to
-        a lane, everything else gets ONE sonnet-low bare triage spawn."""
-        name = path.name
-        text = path.read_text(encoding="utf-8", errors="replace")
-        head = text[:NOTE_HEAD]
-        skip = self.d.should_skip(name, CODE, head)
-        cls = "skip" if skip else ew_inbox.classify(name, CODE, head)
-        if cls == "skip":
-            self.step(f"inbox skip {skip or 'terminal'}: {name}")
+    def handled(self, name, outbox):
+        """Already settled: in the kit seen ledger, or answered by a pre-v8 tick."""
+        if name in self.fi.seen(self.root):
+            return True
+        legacy = read_jsonl(self.root / LEGACY_LEDGER_REL)  # plan 015 deviation 14e
+        if any(d.get("note") == name for d in legacy):
             return True
         stem = Path(name).stem
-        if self.ledger.answered(name) or (outbox.is_dir() and any(
-                p.name.endswith(f"-re-{stem}.md") for p in outbox.iterdir())):
+        return outbox.is_dir() and any(p.name.endswith(f"-re-{stem}.md")
+                                       for p in outbox.iterdir())
+
+    def answer(self, path, outbox, batch):
+        """True when the note needs nothing more (handled now or before); False =
+        pending (re-offered next tick). FLEET item 14: skip / ack are ledger
+        lines, ORDER / FIX / RULING escalate, anything else is triaged once."""
+        name = path.name
+        if self.handled(name, outbox):
             return True
-        now = self.d.clock()
-        if cls == "ack":  # mechanical ack: a ledger line, never a note
-            self.ledger.mark(name, "ack", now, ew_inbox.note_class(name, head) or "hop")
-            self.step(f"inbox ack (ledger, no note): {name}")
+        text = path.read_text(encoding="utf-8", errors="replace")
+        head = text[:NOTE_HEAD]
+        dec = self.fi.classify(name, CODE, head)
+        skip = self.d.should_skip(name, CODE, head)
+        # classify() decides escalation (class ORDER / FIX / RULING by the
+        # note's own sender-class token); a filename that merely QUOTES an
+        # order's name (an ACK or ANSWER re- it) is never escalated.
+        if dec.action == self.fi.WORK:
+            return self.answer_order(name, text, dec, outbox, batch)
+        if skip or dec.action in (self.fi.SKIP, self.fi.ACK):
+            self.fi.mark_seen(self.root, name, dec, clock=self.d.clock)
+            self.step(f"inbox {dec.action} ({skip or dec.reason}): {name}")
             return True
-        if cls == "work" or ESCALATE_RX.search(name):
-            return self.answer_order(path, name, text, outbox)
-        to = ew_inbox.sender(name, head) or "MAIN"
-        extra = 0 if to in batch else 1
-        if not self.cap.allow("ANSWER", now, pending=len(batch) + extra - 1):
+        to = dec.sender or "MAIN"
+        if to not in batch and self.cap.used() + len(batch) >= self.cap.cap:
+            self.capped += 1
             self.step(f"inbox: daily note cap {self.cap.cap} reached")
             return False
         if self.blocked():
+            self.paused += 1
             return False
-        kw = dict(ew_inbox.TRIAGE_SPAWN, note=name, writes_code=False, timeout=1800)
-        line = self.spawn(ew_inbox.triage_prompt(name, text, CODE, NOTE_MAX),
-                          kind="triage", **kw)
-        if not line or line.get("rc") != 0 or not line.get("result"):
+        line = self.spawn(self.fi.triage_prompt(name, text[:NOTE_MAX]), note=name,
+                          writes_code=False, kind="triage", **self.fi.TRIAGE_SPAWN)
+        if not line or line.get("rc") != 0 or line.get("result") is None:
             return False
-        verdict, body = ew_inbox.parse_verdict(ascii_text(line["result"]))
+        verdict, body = self.fi.parse_verdict(ascii_text(line["result"]))
         if verdict != "ANSWER":
-            self.ledger.mark(name, verdict.lower(), now, "triage")
-            self.step(f"inbox triage {verdict}: {name}")
+            self.fi.mark_seen(self.root, name, dec, verdict=verdict, clock=self.d.clock)
+            self.step(f"inbox triage {verdict} (ledger, no note): {name}")
             return True
-        batch.setdefault(to, []).append((name, body, ew_inbox.next_hop(text)))
+        batch.setdefault(to, []).append((name, body, dec))
         return True
 
-    def answer_order(self, path, name, text, outbox):
+    def send_batches(self, batch, outbox):
+        """ONE note per destination (kit batch_note); returns notes left pending."""
+        pending = []
+        stamp = _dt.datetime.fromtimestamp(self.d.clock()).strftime("%Y-%m-%d-%H%M")
+        for to, parts in batch.items():
+            hop_n = self.fi.next_hop(max(dec.hop for _, _, dec in parts))
+            fname, body, names = self.fi.batch_note(CODE, to, [(n, b) for n, b, _ in parts],
+                                                    hop_n=hop_n, stamp=stamp)
+            if not self.cap.allow("ANSWER"):
+                self.capped += len(names)
+                pending += names
+                continue
+            if not self.write_note(outbox / fname, body):
+                pending += names
+                continue
+            self.cap.record(fname, "ANSWER", to, parts=len(parts))
+            for n, _, dec in parts:
+                self.fi.mark_seen(self.root, n, dec, verdict="ANSWER", clock=self.d.clock)
+            self.step(f"inbox answered: {', '.join(names)} -> {to} (1/1 reached)"[:200])
+        return pending
+
+    def write_note(self, dest, body):
+        body = ascii_text(body).rstrip("\n") + "\n"
+        atomic_write(dest, body)
+        return hashlib.sha256(dest.read_bytes()).hexdigest() == \
+            hashlib.sha256(body.encode("ascii")).hexdigest()
+
+    def answer_order(self, name, text, dec, outbox, batch):
         """An escalated ORDER / FIX / RULING: queued as a lane item, answered
-        once the item is done. The closing answer is exempt from the daily cap
-        (plan 015 deviation 13)."""
+        (one note, HOP incoming + 1, counted by OutboundCap) once it is done."""
         oid = order_id(name)
         rec = self.items.get(oid)
         if not rec or rec.get("state") not in DONE_STATES + ("adjudicate",):
             self.queue_order(oid, name, text)
+            self.awaiting += 1
             return False  # answered after the lane item is done
         context = (f"EW's loop carried this order out as lane item {oid}: state "
                    f"{rec.get('state')}, verdict {rec.get('verdict', 'none')}, "
                    f"refute-rounds {rec.get('rounds', 0)}/{MAX_ROUNDS}, commit "
                    f"{rec.get('commit', 'none')}. Mark each item DONE in that commit, "
                    "or BLOCKED / NOT-APPLICABLE with the reason.")
-        if self.blocked():
+        if self.cap.used() + len(batch) >= self.cap.cap:  # batches hold their slots
+            self.capped += 1
+            self.step(f"inbox: daily note cap {self.cap.cap} reached")
             return False
-        kw = dict(note=name, writes_code=False, model="sonnet",
-                  effort=self.d.pick_effort(name), timeout=1800)
-        line = self.spawn(inbox_prompt(name, text, context), kind="inbox", **kw)
+        if self.blocked():
+            self.paused += 1
+            return False
+        line = self.spawn(inbox_prompt(name, text, context), note=name, writes_code=False,
+                          model="sonnet", effort=self.d.pick_effort(name), timeout=1800,
+                          kind="inbox")
         reply = (line or {}).get("result")
         if not line or line.get("rc") != 0 or not reply:
             return False
-        stem = Path(name).stem
-        body = ew_inbox.with_hop(ascii_text(reply), ew_inbox.next_hop(text))
-        to = ew_inbox.sender(name, text[:NOTE_HEAD]) or "MAIN"
-        if not self.deliver_note(outbox, f"re-{stem}", body):
+        stamp = _dt.datetime.fromtimestamp(self.d.clock()).strftime("%Y%m%d-%H%M")
+        dest = outbox / f"{stamp}-from-{CODE}-ANSWER-re-{Path(name).stem}.md"
+        if not self.write_note(dest, with_hop(ascii_text(reply), self.fi.next_hop(dec.hop))):
             return False
-        now = self.d.clock()
-        self.cap.record("ANSWER", to, name, now, exempt=True)
-        self.ledger.mark(name, "answered", now, "order")
+        self.cap.record(dest.name, "ANSWER", dec.sender or "MAIN")
+        self.fi.mark_seen(self.root, name, dec, verdict="ANSWER", clock=self.d.clock)
         self.step(f"inbox answered: {name} (1/1 reached)")
         return True
-
-    def send_batches(self, batch, outbox):
-        """Write ONE note per destination; returns the notes left pending."""
-        pending = []
-        for to, pairs in batch.items():
-            names = [n for n, _, _ in pairs]
-            hop_n = max(h for _, _, h in pairs)
-            if len(pairs) == 1:
-                tail = f"re-{Path(names[0]).stem}"
-                body = ew_inbox.with_hop(pairs[0][1], hop_n)
-            else:
-                tail = f"to-{to}-batch-" + hashlib.sha1(
-                    "\n".join(names).encode("utf-8")).hexdigest()[:6]
-                body = ew_inbox.batch_note(CODE, to, [(n, b) for n, b, _ in pairs], hop_n)
-            if not self.deliver_note(outbox, tail, body):
-                pending += names
-                continue
-            now = self.d.clock()
-            self.cap.record("ANSWER", to, ",".join(names)[:400], now)
-            for n in names:
-                self.ledger.mark(n, "answered", now, tail)
-            self.step(f"inbox answered: {', '.join(names)} -> {to} (1/1 reached)"[:200])
-        return pending
-
-    def deliver_note(self, outbox, tail, body):
-        stamp = _dt.datetime.fromtimestamp(self.d.clock()).strftime("%Y%m%d-%H%M")
-        dest = outbox / f"{stamp}-from-{CODE}-ANSWER-{tail}.md"
-        body = ascii_text(body).rstrip("\n") + "\n"
-        atomic_write(dest, body)
-        return hashlib.sha256(dest.read_bytes()).hexdigest() == \
-            hashlib.sha256(body.encode("ascii")).hexdigest()
 
     def orders(self):
         doc = read_json(self.root / ORDERS_REL, {}) or {}
@@ -701,7 +752,7 @@ class Tick:
                 if self.blocked():
                     return  # retry next tick
                 line = self.spawn(verify_prompt(rec, rounds + 1), note=f"lane-review-{rec['id']}",
-                                  writes_code=False, cwd=wt, extra=VERIFY_EXTRA,
+                                  writes_code=False, cwd=wt, extra=VERIFY_EXTRA, kind="build",
                                   governor="queued", governor_timeout=GATE_TIMEOUT_S,
                                   timeout=GATE_TIMEOUT_S)
                 if not line or line.get("rc") != 0:
@@ -722,7 +773,7 @@ class Tick:
             rec["rounds"] = rounds
             self.items.put(rec)
             line = self.spawn(fix_prompt(rec, rounds, findings), note=f"lane-build-{rec['id']}",
-                              writes_code=True, cwd=wt, extra=ew_lane.CODE_EXTRA,
+                              writes_code=True, cwd=wt, extra=ew_lane.CODE_EXTRA, kind="build",
                               governor="queued", governor_timeout=self.cfg["lane_timeout_s"],
                               timeout=self.cfg["lane_timeout_s"])
             if not line:
@@ -898,32 +949,32 @@ class Tick:
         self.pushed = r.returncode == 0
         self.step(f"push {'ok' if self.pushed else 'failed'}: {ahead} commit(s)")
 
-    # -- g. checklist
+    # -- g. checklist (FLEET item 13 d: remaining tasks only, kit rows)
     def checklist(self, rows, work, skipped):
         recs = self.items.all()
         est = self.d.estimate
-        lines, listed = [], set()
+        out, listed = [], set()
+
+        def add(iid, title, state, eta_s):
+            if len(out) < self.d.checklist.ROWS_MAX:
+                out.append(self.d.checklist.item(iid, ascii_text(" ".join(str(title).split()), 70)
+                                                 or iid, state, eta_s))
+
         for item in work:
             rec = recs.get(item["id"]) or {}
             state = rec.get("state", "open")
-            if state in ("ran", "committed"):
-                e = est("loop-review")
-            elif state in DONE_STATES + ATTENTION_STATES:
-                e = 0
-            else:
-                e = est("lane-build-code")
-            mark = "x" if state in DONE_STATES else " "
-            lines.append(f"[{mark}] {item['id']}: {ascii_text(item['title'], 70)} "
-                         f"({state}, {eta_label(e)})")
             listed.add(item["id"])
+            if state in DONE_STATES:
+                continue
+            e = est("loop-review") if state in ("ran", "committed") else \
+                0 if state in ATTENTION_STATES else est("lane-build-code")
+            add(item["id"], item["title"], None if state == "open" else state, e)
         for iid, rec in sorted(recs.items()):
             if iid not in listed and rec.get("state") not in DONE_STATES:
-                lines.append(f"[ ] {iid}: {ascii_text(rec.get('title', ''), 70)} "
-                             f"({rec.get('state')}, {eta_label(est('lane-build-code'))})")
+                add(iid, rec.get("title", ""), rec.get("state"), est("lane-build-code"))
         for h in skipped:
-            lines.append(f"[ ] {h['id']}: {ascii_text(h['text'], 70)} ({h['skip']}-only, skipped)")
-        lines.append("[ ] /done")
-        return lines
+            add(h["id"], h["text"], f"{h['skip']}-only, skipped", None)
+        return out
 
     def write(self, state, task, lines, started):
         now = self.d.clock()
@@ -932,9 +983,11 @@ class Tick:
                                 task_eta_s=None, next_tick=now + self.cfg["tick_s"])
         except OSError:
             pass
+        prev = read_json(self.root / self.d.kit.PROGRESS_REL / f"{PROGRESS_TASK}.json", {}) or {}
+        fire = int(prev.get("fire", 0) or 0) + 1 if isinstance(prev, dict) else 1
         doc = {"task": PROGRESS_TASK, "pct": 100, "step": "; ".join(self.log)[-200:] or state,
                "eta_s": self.cfg["tick_s"], "status": "done", "updated": iso(now),
-               "state": state, "log": self.log[-40:], "checklist": lines}
+               "state": state, "fire": fire, "log": self.log[-40:], "checklist": lines}
         atomic_write(self.root / self.d.kit.PROGRESS_REL / f"{PROGRESS_TASK}.json",
                      json.dumps(doc, indent=1))
         return doc
@@ -969,13 +1022,21 @@ class Tick:
         return self.write(state, task, lines, started)
 
 
+def render_checklist(doc):
+    """The item-13 block for a loop.json doc: `Session <fire> checklist`, one
+    line per remaining task, then the /done line (kit fleet_checklist.render)."""
+    cl = ew_lane._load("fleet_checklist", "ops/fleet_kit/fleet_checklist.py")
+    rows = [r for r in (doc.get("checklist") or []) if isinstance(r, dict)]
+    return cl.render(int(doc.get("fire", 0) or 0), rows)
+
+
 def tick(dry_run=False, no_push=False, deps=None):
     d = deps or Deps()
     t = Tick(d, dry_run, no_push)
     t0 = d.clock()
     if (d.root / HALT_REL).exists():
         t.step("HALT file present")
-        return t.write("halted", "Halted", ["[ ] /done"], t0)
+        return t.write("halted", "Halted", [], t0)
     try:
         with d.lock(d.root / LOCK_REL):
             doc = t.run()
@@ -1001,8 +1062,7 @@ def lane_worker(iid, deps=None, run_lane=None):
     if rec.get("kind") == "deep-dive":
         def spawn(root, code, prompt, **kw):
             kw["extra"] = DEEP_EXTRA
-            kind = kw.pop("kind", "build")
-            return d.spawn(root, code, prompt, **ew_inbox.with_kind(d.spawn, kw, kind))
+            return d.spawn(root, code, prompt, **kw)
     try:
         line = run_lane(rec["lane"], rec["prompt"], writes_code=True, timeout=timeout,
                         root=d.root, spawn=spawn)
@@ -1039,7 +1099,7 @@ def main(argv=None):
     if a.cmd == "lane":
         return lane_worker(a.item)
     doc = read_json(ROOT / "ops/loop/control/progress/loop.json", {}) or {}
-    print("\n".join(doc.get("checklist") or ["[ ] /done"]))
+    sys.stdout.buffer.write((render_checklist(doc) + "\n").encode("utf-8"))
     return 0
 
 

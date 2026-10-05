@@ -60,6 +60,7 @@ def test_run_lane_claims_lane_one_governor_slot_at_spawn(tmp_path):
     assert seen["lane"] == [("EW", "data", "lane-data", 3)]
     code, kw = seen["spawn"][0]
     assert code == "EW" and kw["cwd"] == wt and kw["governor"] == "queued"
+    assert kw["kind"] == "build"
     assert seen["record"] == [("lane-data-read", True)]
     assert seen["progress"][-1] == ("lane-data", 100, "done")
 

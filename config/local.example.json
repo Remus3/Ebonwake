@@ -20,6 +20,11 @@
     "engine": "auto",
     "tesseract": ""
   },
+  "loop": {
+    "_doc": "tools/ew_loop.py tick. inbox_dir / outbox_dir default to <root>/moon_sync_inbox and moon_sync_outbox. max_notes_per_day: kit v8 item 14 cap 6 (may lower, never raise; only ORDER/FIX/RULING-class notes are exempt, order-closing ANSWERs count).",
+    "max_notes_per_day": 6,
+    "max_new_plans_per_day": 2
+  },
   "market_watch": [4901],
   "profile": {
     "family": "",

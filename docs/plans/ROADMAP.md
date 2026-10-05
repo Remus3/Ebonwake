@@ -40,9 +40,7 @@ Done in-lane: item-14 inbox rules folded into the loop tick (`tools/ew_inbox.py`
 HOP lines, batch notes, kind build/inbox/triage); plan 015 deviation 13. No
 responder task existed, none disabled.
 
-- BLOCKED: vendor kit v8 into `ops/fleet_kit/` (all files, one commit) - the bundle sits in the main tree's inbox, outside this lane's read allow list, and the lane may not edit `ops/fleet_kit/`; main session vendors it and verifies the 12 hashes.
-- BLOCKED: re-embed the v8 FLEET-COMMON block (item 14) in CLAUDE.md - lane may not edit CLAUDE.md; rides with the vendoring commit.
-- BLOCKED: kit conformance test green on v8 - `tests/test_fleet_kit_conformance.py` stays on v6 until the vendoring commit; then switch the tick to the kit's `fleet_inbox` (plan 015 deviation 13a).
+- DONE (kit-v8 branch, main session): kit v8 vendored into `ops/fleet_kit/` (12/12 hashes vs MAIN outbox, one commit), FLEET-COMMON block re-embedded, conformance test pinned to v8; the tick now calls the kit's `fleet_inbox` directly and `tools/ew_inbox.py` is removed (plan 015 deviation 14).
 
 ## Order Nfa7953 - blocked items
 

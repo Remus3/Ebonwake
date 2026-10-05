@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""EW laned headless driver (operator standing order 10, fleet kit v6).
+"""EW laned headless driver (operator standing order 10, fleet kit v8).
 
     ew_lane.py status
     ew_lane.py run <lane> --prompt-file F [--writes-code] [--timeout S] [--dry-run]
@@ -41,7 +41,6 @@ CODE_EXTRA = ("--permission-mode", "acceptEdits", "--allowedTools",
               "Bash(python tools/ocr_bench.py:*)")
 sys.path.insert(0, str(ROOT / "tools"))
 import eta  # noqa: E402
-import ew_inbox  # noqa: E402
 
 
 def _load(name, rel):
@@ -103,11 +102,10 @@ def run_lane(lane, prompt, writes_code=False, timeout=3600, dry_run=False, root=
             wt = Path(claim["worktree"])
             seed_config(wt, root)
             progress(root, task, 20, f"running headless in {wt.name}", eta_s, "running")
-            kw = dict(note=task, writes_code=writes_code, timeout=timeout, cwd=wt,
-                      stdin=True, extra=CODE_EXTRA if writes_code else (),
-                      governor="queued", governor_timeout=timeout)
-            # kit v8 usage line carries kind; a v6 spawn never sees it
-            line = spawn(root, CODE, prompt, **ew_inbox.with_kind(spawn, kw, "build"))
+            line = spawn(root, CODE, prompt, note=task, writes_code=writes_code,
+                         timeout=timeout, cwd=wt, stdin=True,
+                         extra=CODE_EXTRA if writes_code else (),
+                         governor="queued", governor_timeout=timeout, kind="build")
         line = dict(line, worktree=str(wt))
         ok = line.get("rc") == 0 and not line.get("error")
         return line

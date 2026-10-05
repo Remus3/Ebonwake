@@ -20,6 +20,9 @@ run finishes the remaining steps and repeats nothing destructive.
 
 ### 0. Local gate - commit only when green
 
+- Pre-flight (FLEET item 13): every session-checklist task is done or carried
+  into the hand-off. /done runs unprompted once no checklist task remains.
+
 - `git -C <repo> status -s` - identify this session's files.
 - `python tools/eta.py run pytest -- python -m pytest -q` (records its own time).
 - `python tools/eta.py run nodetest -- npm test --prefix app`.
@@ -89,6 +92,7 @@ run finishes the remaining steps and repeats nothing destructive.
 ```
 EW NEXT SESSION
 ---------------
+SESSION: <n+1>   (FLEET item 13 counter: the previous SESSION line plus one)
 Next action: <the one thing "continue" should work on>
 Carried forward (not acted on yet): <every unacted item>
 Context: <files / endpoints / live state to probe first>
