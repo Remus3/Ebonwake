@@ -123,3 +123,22 @@ tests; self-test 7/7; verifier PASS within 3 refute rounds; one push; CI green.
    logged in = ok, disconnected = bad; unconfigured / unknown / offline =
    status-unknown. Dashboard shows the newest 10 screenshots (+N more) of the
    up-to-50 the server returns; card polls every 10 s, "since" ticks each second.
+
+## Hotfix 2026-10-05: exit lag (operator QA)
+
+Operator closed BDO to the desktop; the System tab kept "running" for minutes
+with last event "terminating app: ExitInstance". Cause: `poll()` treated a log
+written in the last `RECENT_LOG_S` (120 s) as proof of life before asking the
+process list, and "ExitInstance" classified as `running` via the `exit` row.
+Fix: a definite tasklist answer wins (not listed => not_running at once); the
+log-recency fallback runs only when tasklist fails (`process_listed` now
+returns None on failure / nonzero exit). "terminating app" and "ExitInstance"
+are a terminal classifier state `exited` (shown as not_running even while the
+process lingers). Server poll 5 s -> 2 s (tasklist measured 0.06 s), dashboard
+game card poll 10 s -> 2 s. Measured with a real-thread harness (fake process
+probe, real log file): exit -> not_running lag BEFORE 124.9 s (log grace + 5 s poll),
+AFTER 1.6 s server-side (worst case dashboard ~4 s; target 5 s).
+Alternatives: shorten RECENT_LOG_S only (still log-driven, rejected); a WMI
+process-exit event (new dependency surface, rejected). Reverses if: tasklist
+proves flaky on the operator's box (fallback already covers outright failure).
+Operator QA recorded: Ctrl+Alt+E overlay toggle PASS; profile.family SET.

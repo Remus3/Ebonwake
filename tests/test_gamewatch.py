@@ -68,7 +68,7 @@ def dirs(tmp_path):
     return inst, docs
 
 
-def _watch(dirs, clock=None, listed=False):
+def _watch(dirs, clock=None, listed=None):
     inst, docs = dirs
     return gamewatch.GameWatch(install_dir=str(inst), documents_dir=str(docs),
                                clock=clock or Clock(), tasklist=Tasklist(listed))
@@ -124,7 +124,8 @@ def test_bad_config_values_unconfigured(cfg):
 # -- classifier table: one test per row ---------------------------------------
 
 # One positive sample per row (same order as CLASSIFIERS).
-ROW_SAMPLES = ("Session disconnected", "Reconnect failed (3)", "Connection lost to host",
+ROW_SAMPLES = ("terminating app: ExitInstance", "CApp::ExitInstance done",
+               "Session disconnected", "Reconnect failed (3)", "Connection lost to host",
                "Logout requested", "Client exit", "Login success", "Server select done",
                "SelectServer ok")
 
@@ -144,7 +145,7 @@ def test_classifier_row(i):
 
 def test_classifier_table_is_data_and_complete():
     states = {s for _, s in gamewatch.CLASSIFIERS}
-    assert states == {"logged_in", "running", "disconnected"}
+    assert states == {"logged_in", "running", "disconnected", "exited"}
     assert all(p == p.lower() and p for p, _ in gamewatch.CLASSIFIERS)
 
 
@@ -337,13 +338,61 @@ def test_stale_log_without_process_is_not_running(dirs):
     assert w.view()["state"] == "not_running"
 
 
-def test_recent_log_within_120s_is_running(dirs):
+def test_recent_log_within_120s_is_running_only_when_tasklist_fails(dirs):
     inst, _ = dirs
     clk = Clock()
-    w = _watch(dirs, clk)
+    w = _watch(dirs, clk, listed=None)  # probe failed -> log-recency fallback
     _write(inst / "Log" / LOGNAME, _line("boot"), mtime=clk.t - 119)
     w.poll()
     assert w.view()["state"] == "running"
+
+
+def test_recent_log_but_process_gone_is_not_running(dirs):
+    # operator QA 2026-10-05: closed to desktop, log written seconds ago, the old
+    # 120 s grace kept "running" for ~2 min. A definite "not listed" wins.
+    inst, _ = dirs
+    clk = Clock()
+    w = _watch(dirs, clk, listed=False)
+    _write(inst / "Log" / LOGNAME, _line("Login ok"), mtime=clk.t - 1)
+    w.poll()
+    assert w.view()["state"] == "not_running"
+
+
+def test_exit_instance_line_is_terminal_even_while_process_lingers(dirs):
+    # The exact operator log line. Process still listed while it shuts down.
+    inst, _ = dirs
+    clk = Clock()
+    tl = Tasklist(True)
+    inst_, docs = dirs
+    w = gamewatch.GameWatch(install_dir=str(inst_), documents_dir=str(docs), clock=clk,
+                            tasklist=tl)
+    log = inst / "Log" / LOGNAME
+    _write(log, _line("Login ok"), mtime=clk.t)
+    w.poll()
+    assert w.view()["state"] == "logged_in"
+    clk.t += 2
+    _append(log, _line("terminating app: ExitInstance"), mtime=clk.t)
+    w.poll()
+    v = w.view()
+    assert v["state"] == "not_running"
+    assert v["last_event"]["log"] == "terminating app: ExitInstance"
+    assert v["last_event"]["state"] == "exited"
+    tl.listed = False
+    clk.t += 2
+    w.poll()
+    assert w.view()["state"] == "not_running"
+    # relaunch: a new session log + process listed -> running again
+    tl.listed = True
+    clk.t += 60
+    _write(inst / "Log" / "Client_2026-10-05_130000.json", _line("boot"), mtime=clk.t)
+    w.poll()
+    assert w.view()["state"] == "running"
+
+
+def test_poll_interval_meets_5s_exit_target():
+    # state must flip within 5 s of exit: one poll + one tasklist (timeout 5 s cap
+    # aside, ~0.1-0.3 s measured) must fit.
+    assert gamewatch.POLL_S <= 2.5
 
 
 def test_process_listed_keeps_logged_in_with_idle_log(dirs):
@@ -434,14 +483,18 @@ def test_tasklist_not_listed(out):
     assert gamewatch.process_listed(run=run) is False
 
 
-def test_tasklist_failure_is_not_listed():
+def test_tasklist_failure_is_unknown():
     def run(args, **kw):
         raise OSError("no tasklist")
-    assert gamewatch.process_listed(run=run) is False
+    assert gamewatch.process_listed(run=run) is None
 
     def slow(args, **kw):
         raise subprocess.TimeoutExpired(args, 5)
-    assert gamewatch.process_listed(run=slow) is False
+    assert gamewatch.process_listed(run=slow) is None
+
+    def bad(args, **kw):
+        return subprocess.CompletedProcess(args, 1, stdout="")
+    assert gamewatch.process_listed(run=bad) is None
 
 
 def test_module_never_touches_game_process():
