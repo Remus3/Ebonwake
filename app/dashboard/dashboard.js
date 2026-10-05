@@ -1,6 +1,6 @@
 /* EW dashboard shell: tabs from /api/state, server pill, reset clocks.
    Plan 001 renders placeholders; plans 002+ fill each tab (market.js, today.js,
-   progress.js, grind.js, events.js, deadeye.js). */
+   progress.js, grind.js, events.js, deadeye.js; game.js on System). */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -36,6 +36,7 @@
     if (id === 'grind' && window.EWGrind) window.EWGrind.show();
     if (id === 'events' && window.EWEvents) window.EWEvents.show();
     if (id === 'deadeye' && window.EWDeadeye) window.EWDeadeye.show();
+    if (id === 'system' && window.EWGame) window.EWGame.show();
   }
 
   function render(state) {
@@ -72,6 +73,7 @@
       } else if (t.id === 'system') {
         const v = el('pre', 'ew-muted', JSON.stringify({ version: state && state.version }, null, 1));
         p.appendChild(card('Server', v));
+        if (window.EWGame) window.EWGame.mount(p);
       } else {
         p.appendChild(card(t.title, el('p', 'ew-muted', 'Arrives in plan ' + (t.plan || '?') + '.')));
       }

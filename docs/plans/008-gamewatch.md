@@ -91,3 +91,31 @@ tests; self-test 7/7; verifier PASS within 3 refute rounds; one push; CI green.
    last CLASSIFIED line; `/api/state` `sources.game` = {updated, status}.
    tasklist is resolved from `%SystemRoot%\System32` first (no cwd hijack).
    Reads are capped at 4 MiB per poll; a larger backlog drains over polls.
+
+### Slice B deviations (adjudicated in-lane, 2026-10-05)
+
+1. Game card lives in a new `app/dashboard/game.js` (`window.EWGame`), mounted
+   from `dashboard.js` on the System tab, not inline in `dashboard.js`.
+   Alternatives: inline card in `dashboard.js`. Why: mirrors every other tab
+   module (events.js etc.) and keeps the shell small. Reverses if: the System
+   tab gets its own module that should own the card.
+2. Time fields (`since`, screenshot `mtime`) accepted as epoch seconds (number
+   below 1e12), epoch millis, or ISO string (`C.gameTimeMs`); `last_event`
+   accepted as a string or a `{Date, LogType, Log}` object (the `Log` text is
+   shown, control chars collapsed, capped at 200). Alternatives: pin one shape.
+   Why: slice A was built in parallel and the contract does not fix the type.
+   Reverses if: slice A pins a shape - then drop the other branches.
+3. `configured: false` forces the `unconfigured` view whatever `state` says;
+   an unknown `state` string shows grey "unknown". The unconfigured hint names
+   `bdo.install_dir`, `bdo.documents_dir` and `config/local.json`.
+4. Overlay "header": the overlay had no header row, so the game dot is a new
+   first row (`#ov-game-row`), always shown (no widget toggle). Refreshed on
+   the existing 60 s / heartbeat cadence and re-fetched (GET) on each SSE
+   `game` event; the event payload is not parsed. Alternatives: a fourth
+   `overlay.widgets` toggle; parsing the SSE payload. Why: the plan calls it a
+   header, not a widget; a GET keeps one parse path. Reverses if: the operator
+   wants it hideable - add `gameState` to `WIDGETS`.
+5. Dot colours: not running = muted text tone (`off`), running = warn,
+   logged in = ok, disconnected = bad; unconfigured / unknown / offline =
+   status-unknown. Dashboard shows the newest 10 screenshots (+N more) of the
+   up-to-50 the server returns; card polls every 10 s, "since" ticks each second.

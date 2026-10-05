@@ -227,4 +227,21 @@ html.ew-overlay, html.ew-overlay body { background: transparent; }
 .ew-ov-row { display: flex; justify-content: space-between; gap: 12px; }
 .ew-ov-row .ew-stale { color: var(--fk-text-muted); }
 .ew-ov-row .ew-mname { min-width: 0; }
+.ew-ov-head { margin-bottom: 2px; }
+
+/* Game state (plan 008): dot grey not running, amber running, green logged in,
+   red disconnected; unknown / unconfigured / offline use the unknown tone. */
+.ew-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px;
+  vertical-align: middle; background: var(--fk-status-unknown);
+}
+.ew-dot.ok { background: var(--fk-status-ok); }
+.ew-dot.warn { background: var(--fk-status-warn); }
+.ew-dot.bad { background: var(--fk-status-bad); }
+.ew-dot.off { background: var(--fk-text-muted); }
+.ew-pill.off { color: var(--fk-text-muted); }
+.ew-game .ew-grow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 1px 4px; }
+.ew-game .ew-grow .ew-mname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ew-game .ew-ghint { padding: 2px 4px; overflow-wrap: anywhere; }
+.ew-game .ew-gshots { margin-top: 8px; }
 .ew-card h2 .ew-pill { text-transform: none; letter-spacing: 0; font-weight: 400; }
