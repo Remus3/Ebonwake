@@ -117,6 +117,18 @@ html, body {
 }
 .ew-form input[type="text"], .ew-form input[type="date"] { width: 120px; }
 
+/* Progress tab (plan 004): many tracks scroll the panel, steps scroll per card. */
+.ew-panel.active.ew-progress { overflow: auto; grid-auto-rows: minmax(200px, 1fr); }
+.ew-track h2 .ew-mname { min-width: 0; }
+.ew-bar { height: 6px; border-radius: 3px; background: var(--fk-surface); margin-bottom: 6px; overflow: hidden; }
+.ew-bar-fill { height: 100%; background: var(--fk-accent); }
+.ew-cform input[type="text"] { width: 70px; }
+.ew-kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; }
+.ew-steps {
+  font: inherit; color: var(--fk-text); background: var(--fk-surface); resize: none;
+  border: 1px solid var(--fk-border); border-radius: var(--ew-radius); padding: 3px 6px;
+}
+
 /* Overlay: glanceable, corner-anchored, translucent. */
 html.ew-overlay, html.ew-overlay body { background: transparent; }
 .ew-ov {
