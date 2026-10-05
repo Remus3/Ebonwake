@@ -38,12 +38,21 @@ async function run(o) {
       await o.dashboard.webContents.executeJavaScript(
         'document.querySelector(\'.ew-tab[data-tab="' + id + '"]\').click()');
       await wait(250);
+      // An occluded window may not paint (no rAF): force a repaint, never wait
+      // on rAF. `captured` reports whether a frame came back.
+      o.dashboard.webContents.invalidate();
+      await wait(150);
       const m = await o.dashboard.webContents.executeJavaScript(MEASURE);
       m.id = id;
       m.fits = m.scrollH <= m.clientH && m.scrollW <= m.clientW;
       m.switched = m.active === id && m.activeH > 0;
       res.tabs.push(m);
-      const img = await o.dashboard.webContents.capturePage();
+      let img = await o.dashboard.webContents.capturePage();
+      for (let i = 0; i < 5 && img.isEmpty(); i++) {
+        await wait(300);
+        img = await o.dashboard.webContents.capturePage();
+      }
+      m.captured = !img.isEmpty();
       fs.writeFileSync(path.join(outDir, 'ew-dash-' + id + '.png'), img.toPNG());
     }
     res.hotkeys = {};
