@@ -123,19 +123,35 @@ def test_bad_config_values_unconfigured(cfg):
 
 # -- classifier table: one test per row ---------------------------------------
 
-@pytest.mark.parametrize("needle,state", gamewatch.CLASSIFIERS)
-def test_classifier_row(needle, state):
-    assert gamewatch.classify(f"xx {needle.upper()} yy") == state
-    assert gamewatch.classify(f"xx {needle} yy") == state
+# One positive sample per row (same order as CLASSIFIERS).
+ROW_SAMPLES = ("Session disconnected", "Reconnect failed (3)", "Connection lost to host",
+               "Logout requested", "Client exit", "Login success", "Server select done",
+               "SelectServer ok")
+
+
+def test_samples_cover_every_row():
+    assert len(ROW_SAMPLES) == len(gamewatch.CLASSIFIERS)
+
+
+@pytest.mark.parametrize("i", range(len(gamewatch.CLASSIFIERS)))
+def test_classifier_row(i):
+    _, state = gamewatch.CLASSIFIERS[i]
+    sample = ROW_SAMPLES[i]
+    assert gamewatch.classify(sample) == state
+    assert gamewatch.classify(sample.upper()) == state
+    assert gamewatch.classify(f"xx {sample.lower()} yy") == state
 
 
 def test_classifier_table_is_data_and_complete():
     states = {s for _, s in gamewatch.CLASSIFIERS}
     assert states == {"logged_in", "running", "disconnected"}
-    assert all(n == n.lower() and n for n, _ in gamewatch.CLASSIFIERS)
+    assert all(p == p.lower() and p for p, _ in gamewatch.CLASSIFIERS)
 
 
-@pytest.mark.parametrize("text", ["UI debug: panel opened", "", "auth host resolved"])
+@pytest.mark.parametrize("text", ["UI debug: panel opened", "", "auth host resolved",
+                                  "Catalog index built", "Dialog initialized",
+                                  "Load CatalogInfo table", "blogin", "texit code",
+                                  "ExitGames sdk", "prologout"])
 def test_unknown_lines_classify_none(text):
     assert gamewatch.classify(text) is None
 
@@ -637,5 +653,16 @@ def test_server_game_cfg_injection_never_reads_real_config(tmp_path):
                           profile_cfg={}, game_cfg={})
     try:
         assert s.game.view()["state"] == "unconfigured"
+    finally:
+        s.server_close()
+
+
+def test_bare_make_server_never_reads_real_config(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(gamewatch, "config_bdo", lambda root: calls.append(root) or {})
+    s = ewapp.make_server(port=0, store_root=tmp_path / "store", market_seed=[],
+                          profile_cfg={})
+    try:
+        assert calls == [] and s.game.view()["state"] == "unconfigured"
     finally:
         s.server_close()

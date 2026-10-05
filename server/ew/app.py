@@ -111,7 +111,9 @@ class EWServer(ThreadingHTTPServer):
         self.events = events.EventsService(self.store, clock=events_clock or time.time)
         self.deadeye = deadeye.DeadeyeService(self.store, clock=deadeye_clock or time.time)
         if game_watch is None:
-            cfg = gamewatch.config_bdo(REPO_ROOT) if game_cfg is None else game_cfg
+            # Only main() passes the real config; a bare make_server (every test)
+            # never reads config/local.json (plan 008 refute round 1).
+            cfg = {} if game_cfg is None else game_cfg
             game_watch = gamewatch.GameWatch.from_config(cfg)
         self.game = game_watch
         if game_poll:  # off by default so tests never probe processes; main() turns it on
@@ -352,7 +354,8 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
 
 
 def main(argv=None):
-    srv = make_server(commit=read_commit(), game_poll=True)
+    srv = make_server(commit=read_commit(), game_poll=True,
+                      game_cfg=gamewatch.config_bdo(REPO_ROOT))
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

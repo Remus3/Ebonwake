@@ -81,11 +81,15 @@ tests; self-test 7/7; verifier PASS within 3 refute rounds; one push; CI green.
 4. Classifier substrings beyond the spec's words: `connection lost`, `log out`,
    `log in`, `selectserver`; disconnect rows are first so they win. Data only,
    to be confirmed by the operator check.
+   Revised after refute round 1: patterns are word-bounded regexes (plain
+   substrings read "catalog index" / "CatalogInfo" as a login); each row has a
+   positive sample and the unknown-line list carries the near misses.
 5. Screenshots list only `.jpg/.jpeg/.png/.bmp` regular files (stat only, never
    opened). Alternatives: every file. Why: the folder may hold non-image
    leftovers. Reverses if: BDO writes another image extension.
 6. Poll thread is OFF unless `make_server(game_poll=True)`; `main()` turns it on
-   and `server_close()` stops it. Tests inject `game_watch=` or `game_cfg=` so
+   and `server_close()` stops it. Only `main()` passes the real `bdo` config;
+   a bare `make_server` uses `{}` (refute round 1). Tests inject `game_watch=` or `game_cfg=` so
    no test reads the real config, a real log or runs tasklist. `last_event`
    = {date, type, log (control chars stripped, <= 200 chars), state} of the
    last CLASSIFIED line; `/api/state` `sources.game` = {updated, status}.

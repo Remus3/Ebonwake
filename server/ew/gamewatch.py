@@ -36,21 +36,22 @@ STATES = ("unconfigured", "not_running", "running", "logged_in", "disconnected")
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 _BOM = b"\xff\xfe"
 
-# Ordered, case-insensitive substrings of the `Log` field; first match wins.
-# Disconnect rows come first so "login ... disconnected" is a disconnect. Real
-# substrings are confirmed by the plan 008 operator check (data change only).
+# Ordered, case-insensitive WORD-BOUNDED patterns over the `Log` field; first
+# match wins. Disconnect rows come first so "login ... disconnected" is a
+# disconnect. Word boundaries keep "catalog index" / "CatalogInfo" / "blogin"
+# from reading as a login (plan 008 refute round 1). Real wording is confirmed
+# by the plan 008 operator check (data change only).
 CLASSIFIERS = (
-    ("disconnect", "disconnected"),
-    ("reconnect fail", "disconnected"),
-    ("connection lost", "disconnected"),
-    ("logout", "running"),
-    ("log out", "running"),
-    ("exit", "running"),
-    ("login", "logged_in"),
-    ("log in", "logged_in"),
-    ("server select", "logged_in"),
-    ("selectserver", "logged_in"),
+    (r"\bdisconnect(?:ed|ion)?\b", "disconnected"),
+    (r"\breconnect fail", "disconnected"),
+    (r"\bconnection lost\b", "disconnected"),
+    (r"\blog ?out\b", "running"),
+    (r"\bexit(?:ed|ing)?\b", "running"),
+    (r"\blog ?in\b", "logged_in"),
+    (r"\bserver ?select", "logged_in"),
+    (r"\bselectserver", "logged_in"),
 )
+_CLASSIFIERS = tuple((re.compile(p), s) for p, s in CLASSIFIERS)
 
 
 def _iso(ts):
@@ -70,8 +71,8 @@ def config_bdo(root):
 def classify(text):
     """`Log` text -> logged_in | running | disconnected, or None (unknown)."""
     low = text.lower() if isinstance(text, str) else ""
-    for needle, state in CLASSIFIERS:
-        if needle in low:
+    for pattern, state in _CLASSIFIERS:
+        if pattern.search(low):
             return state
     return None
 
