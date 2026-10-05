@@ -56,6 +56,88 @@
     return Math.min(c, b * Math.pow(2, Math.max(0, attempt)));
   }
 
+  // ---- Server health + version skew (plan 020) ----
+
+  const HEALTH_DEAD_MS = 90000;
+  const VERSION_POLL_MS = 30000;
+  const RESTART_HINT = 'tray > Restart server';
+
+  function knownCommit(c) {
+    return typeof c === 'string' && /^[0-9a-f]{4,40}$/i.test(c.trim());
+  }
+
+  // The app reads `git rev-parse --short HEAD`, the server the full sha: equal
+  // when one is a prefix of the other. Unknown on either side never differs.
+  function commitsDiffer(a, b) {
+    if (!knownCommit(a) || !knownCommit(b)) return false;
+    const x = a.trim().toLowerCase();
+    const y = b.trim().toLowerCase();
+    return x.indexOf(y) !== 0 && y.indexOf(x) !== 0;
+  }
+
+  // Header pill: bad when no OK answer for 90 s (or never) or the SSE stream
+  // errored; warn when both commits are known and differ; else ok.
+  function healthPill(o) {
+    const a = o || {};
+    const fresh = isNum(a.lastOkMs) && isNum(a.nowMs) && a.nowMs - a.lastOkMs <= HEALTH_DEAD_MS;
+    if (!fresh) return { level: 'bad', text: 'server offline' };
+    if (a.sseOk === false) return { level: 'bad', text: 'server stream lost' };
+    const sc = a.version && a.version.commit;
+    if (commitsDiffer(sc, a.appCommit)) return { level: 'warn', text: 'server outdated - restart' };
+    return { level: 'ok', text: 'server ok' };
+  }
+
+  // One honest 404 line for every module: a 404 on an API route means the
+  // running server predates the app. Accepts 'grind' or '/api/spots?goal=xp'.
+  function notOnServer(module) {
+    let m = typeof module === 'string' ? module : '';
+    m = m.split('?')[0].replace(/^\/api\//, '').replace(/^\//, '') || 'this';
+    return m + ' API missing: server is older than the app - restart it (' + RESTART_HINT + ')';
+  }
+
+  function parseWhen(v) {
+    if (isNum(v)) return v < 1e12 ? v * 1000 : v; // epoch seconds or ms
+    if (typeof v !== 'string' || !v) return null;
+    const t = Date.parse(v);
+    return isNaN(t) ? null : t;
+  }
+
+  // /api/state.sources -> one pill per source, sorted by name. A source with
+  // ttl_s is stale once its age passes ttl_s; error-like statuses are bad.
+  function sourceFreshness(sources, nowMs) {
+    if (!sources || typeof sources !== 'object' || Array.isArray(sources)) return [];
+    return Object.keys(sources).sort().map(function (name) {
+      const s = sources[name] && typeof sources[name] === 'object' ? sources[name] : {};
+      let status = typeof s.status === 'string' ? s.status : null;
+      if (status === null && isNum(s.done) && isNum(s.total)) status = s.done + '/' + s.total;
+      const at = parseWhen(s.updated);
+      const ageS = at === null ? null : Math.max(0, (nowMs - at) / 1000);
+      const stale = ageS !== null && isNum(s.ttl_s) && ageS > s.ttl_s;
+      let cls = 'ok';
+      if (/^(error|bad|failed|blocked)$/.test(status || '')) cls = 'bad';
+      else if (stale || status === 'stale') cls = 'warn';
+      else if (at === null) cls = 'unknown';
+      return { name: name, age: ageS === null ? 'never' : fmtAge(ageS) + ' ago',
+        status: status || '-', stale: stale, cls: cls };
+    });
+  }
+
+  // Server card rows from /api/version + /api/health (either may be null).
+  function serverRows(version, health, appCommit, nowMs) {
+    const v = version && typeof version === 'object' ? version : {};
+    const started = parseWhen(v.started);
+    const short = function (c) { return knownCommit(c) ? c.trim().slice(0, 7) : 'unknown'; };
+    return [
+      ['status', health && health.ok === true ? 'ok' : 'no answer'],
+      ['server commit', short(v.commit)],
+      ['app commit', short(appCommit)],
+      ['outdated', commitsDiffer(v.commit, appCommit) ? 'yes - restart (' + RESTART_HINT + ')' : 'no'],
+      ['started', typeof v.started === 'string' ? v.started : '-'],
+      ['uptime', started === null ? '-' : fmtDuration(nowMs - started)],
+      ['pid', isNum(v.pid) ? String(v.pid) : '-']
+    ];
+  }
+
   const DEFAULT_HOTKEYS = { toggleOverlay: 'Control+Alt+E', showDashboard: 'Control+Alt+D' };
 
   // Accept only Electron accelerator strings made of known tokens.
@@ -1829,6 +1911,13 @@
     freshness: freshness,
     normalizeTabs: normalizeTabs,
     backoffMs: backoffMs,
+    HEALTH_DEAD_MS: HEALTH_DEAD_MS,
+    VERSION_POLL_MS: VERSION_POLL_MS,
+    commitsDiffer: commitsDiffer,
+    healthPill: healthPill,
+    notOnServer: notOnServer,
+    sourceFreshness: sourceFreshness,
+    serverRows: serverRows,
     validAccelerator: validAccelerator,
     hotkeys: hotkeys,
     DEFAULT_HOTKEYS: DEFAULT_HOTKEYS

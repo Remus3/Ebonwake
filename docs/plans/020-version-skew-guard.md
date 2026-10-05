@@ -44,3 +44,45 @@ ToS check: local server and Electron only; restart touches EW's own server
 process, never the game (CLAUDE.md standing order 11).
 
 Depends on: none.
+
+## As-built deviations
+
+1. App commit reaches the preload as a launch argument, not an IPC call.
+   Decision: `main.js` reads `git rev-parse --short HEAD` once
+   (`execFileSync`, `windowsHide`, 5 s timeout, sha-shaped or `unknown`) and
+   passes `--ew-app-commit=<sha>` via `webPreferences.additionalArguments`;
+   `preload.js` exposes `ewApi.appCommit()` returning that constant.
+   Alternatives: `ipcRenderer.sendSync` channel; async `invoke`. Why: the plan
+   asks for a read-only value and no new channel; an argument is synchronous,
+   immutable and adds zero IPC surface. Reverses if: the commit must change
+   without a window reload (e.g. hot app update).
+2. Commits compare by prefix. The app has the short sha, the server the full
+   sha; `commitsDiffer` treats one being a prefix of the other as equal, and an
+   unknown / non-hex value on either side as "not different" (pill stays ok).
+   Alternatives: make the server report a short sha; read the full sha in the
+   app. Why: no server contract change (`/api/version` is the fleet P0-5
+   shape). Reverses if: the version contract gains a short-commit field.
+3. 404 copy names the module: `notOnServer(m)` returns
+   `<m> API missing: server is older than the app - restart it (tray > Restart
+   server)`, and accepts a route path (`/api/spots?...` -> `spots`) so grind's
+   shared getJSON names `spots` correctly. Today and Market gained the 404
+   branch they lacked; the OCR POST 404 uses it too. Alternatives: the bare
+   sentence from the plan. Why: with several cards on a tab the operator must
+   see which call failed. Reverses if: UX review wants one banner instead of
+   per-card copy.
+4. The dashboard shell opens its own `EventSource('/events')` (it had none):
+   `onerror` sets `sseOk=false` (pill bad, "server stream lost"), `onopen`
+   after an error re-polls `/api/version` (the "on SSE reconnect" trigger),
+   and every heartbeat refreshes `lastOkMs`. Alternatives: piggy-back on
+   `leveling.js`'s stream. Why: the shell must not depend on a tab module.
+   Reverses if: a shared SSE hub module lands.
+5. The 30 s poll also refreshes `/api/health` and `/api/state.sources` for the
+   System cards (no tab re-render); pill and cards repaint every 5 s so ages
+   and the 90 s cut-off move without a fetch. While a restart is in flight the
+   pill reads `server restarting` and the button is disabled.
+6. `GET /` now 302s, so `test_static_dashboard_and_tokens` fetches
+   `/app/dashboard/index.html` directly; `test_root_redirects_to_dashboard`
+   covers the redirect. Added a compile test (vm.Script over main, preload and
+   every dashboard script) to `app/test/shell.test.js`.
+7. Self-test 7/7 needs the Electron desktop; not runnable in a headless build
+   lane, left to the merge step as the plan states ("at merge").

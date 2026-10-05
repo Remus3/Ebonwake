@@ -65,8 +65,19 @@ def test_foreign_host_rejected(srv):
     assert _get(srv, "/api/health", host="evil.example.com")[0] == 403
 
 
+def test_root_redirects_to_dashboard(srv):
+    # Plan 020: relative asset paths only resolve from the real page URL.
+    port = srv.server_address[1]
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.request("GET", "/")
+    r = c.getresponse()
+    r.read()
+    c.close()
+    assert r.status == 302 and r.getheader("Location") == "/app/dashboard/index.html"
+
+
 def test_static_dashboard_and_tokens(srv):
-    st, ct, body = _get(srv, "/")
+    st, ct, body = _get(srv, "/app/dashboard/index.html")
     assert st == 200 and "text/html" in ct and b"EBONWAKE" in body
     st, ct, _ = _get(srv, "/ops/fleet_kit/tokens.css")
     assert st == 200 and "css" in ct

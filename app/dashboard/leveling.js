@@ -23,7 +23,7 @@
 
   function getJSON(path) {
     return fetch(C.SERVER + path).then(function (r) {
-      if (r.status === 404) throw new Error('leveling API not on this server yet');
+      if (r.status === 404) throw new Error(C.notOnServer(path));
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     }).catch(function (e) {

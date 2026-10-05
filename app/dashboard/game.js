@@ -26,7 +26,7 @@
 
   function getJSON(path) {
     return fetch(C.SERVER + path).then(function (r) {
-      if (r.status === 404) throw new Error('game API not on this server yet');
+      if (r.status === 404) throw new Error(C.notOnServer(path));
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     }).catch(function (e) {
@@ -144,7 +144,7 @@
         if (r) o.res = r;
         else o.err = 'bad reply from server';
       } else {
-        o.err = res && res.status === 404 ? 'OCR not on this server yet' : 'failed: ' + ((res && res.error) || 'unknown error');
+        o.err = res && res.status === 404 ? C.notOnServer('ocr') : 'failed: ' + ((res && res.error) || 'unknown error');
       }
     }, function (e) { o.err = 'failed: ' + (e && e.message || e); }).then(function () {
       o.busy = false;

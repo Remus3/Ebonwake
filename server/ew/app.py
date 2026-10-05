@@ -1,7 +1,8 @@
 """EW server: loopback-only stdlib HTTP server.
 
 Routes: /api/health, /api/version (fleet P0-5), /api/state, /events (SSE),
-/ and /app/* (static dashboard + overlay assets, browser fallback),
+/ (302 to the dashboard page, plan 020) and /app/* (static dashboard + overlay
+assets, browser fallback),
 /api/market/{watch,item,hot} (plan 002), /api/today (plan 003),
 /api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006; plan 014
 adds its `suggested` coupon block),
@@ -33,6 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 APP_DIR = REPO_ROOT / "app"
 KIT_TOKENS = REPO_ROOT / "ops" / "fleet_kit" / "tokens.css"
 RUNTIME = REPO_ROOT / "ops" / "runtime"
+DASHBOARD_PAGE = "/app/dashboard/index.html"
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 MAX_POST_BYTES = 4096
 # A 20000-char deadeye note JSON-escaped at 6 bytes/char (\uXXXX) is 120000 bytes;
@@ -189,6 +191,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _redirect(self, location):
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+
     def _market_item(self, query):
         q = parse_qs(query)
         try:
@@ -238,8 +247,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(e)})
         if path == "/events":
             return self._sse()
-        if path == "/":
-            path = "/app/dashboard/index.html"
+        if path == "/":  # plan 020: redirect so relative asset paths resolve
+            return self._redirect(DASHBOARD_PAGE)
         if path == "/ops/fleet_kit/tokens.css":
             return self._file(KIT_TOKENS)
         if path.startswith("/app/"):
