@@ -188,6 +188,42 @@ EW channel code: `EW`. Kit: v8, vendored at `ops/fleet_kit/`. Kit conformance:
     the game), browser and installs are granted via the adjudicator. They never
     reach into the BDO client (see Game ToS floor).
 
+## Loop (plan 015) - armed as \EbonwakeOps\LaneLoop, every 15 min (PT15M, IgnoreNew)
+
+1. The loop tick (`tools/ew_loop.py tick`) is the default executor. A session
+   adds work by adding a ROADMAP row (`[ ] open`, `(priority)` to jump the
+   queue) or a hand-off bullet; it does not run lanes by hand while the loop
+   is armed. Pause with `ops/loop/control/HALT`; never kill a running lane.
+   The task is installed and read back; never reinstall it to look at it
+   (`python tools/loop_task.py status` reads it).
+2. INBOX is read by every tick, unattended, NEVER on operator prompting (FLEET
+   item 14): `moon_sync_inbox/` (default; config `loop.inbox_dir` overrides),
+   replies to `moon_sync_outbox/`. Kit `fleet_inbox.classify` first: own /
+   TERMINAL notes are skipped, ACK / INFORMATION / ANSWER classes get a ledger
+   line (no note), ORDER / FIX / RULING escalate to a lane item and are
+   answered after merge, everything else gets one sonnet low-effort bare
+   triage spawn (kind `triage`). At most `loop.max_notes_per_day` (6, the kit
+   cap; ORDER / FIX / RULING answers exempt) outbound notes a local day; every
+   reply carries `HOP: <n>`. A session still reads the inbox at start (FLEET
+   item 5).
+3. IDLE DEEP-DIVE, SELF-CONTINUING: when no ROADMAP row or hand-off item is
+   open and nothing is in flight, the tick runs one deep-dive lane per day (BDO
+   patch notes, events, coupons, public data sources, community tools / APIs,
+   public sibling ideas; read-only, unauthenticated, robots.txt respected),
+   writes `docs/research/NNNN-deep-dive-<date>.md` and at most
+   `loop.max_new_plans_per_day` (2) deduped new plans + ROADMAP rows, which the
+   following ticks ingest and build. Deep-dive -> ingest -> plan -> work runs
+   by itself; no operator prompt starts or continues it.
+4. The loop never self-accepts after refute round 3 (state `adjudicate`, WIP
+   unmerged); a session's adjudicator rules. Hand-off bullets that are records
+   start `NOTE:`; another tree's work starts `MAIN`; operator acts start
+   `OPERATOR`.
+5. Session checklist (FLEET item 13): the session counter is the `SESSION: <n>`
+   line in `EW-NEXT-SESSION.txt`; /done writes n+1. An interactive session
+   prints the block after reading the hand-off; the tick writes its remaining
+   tasks as kit rows into `ops/loop/control/progress/loop.json` "checklist"
+   (`python tools/ew_loop.py checklist` prints the block).
+
 ## Game ToS floor (non-negotiable; no adjudicator can lift it)
 
 Anti-cheat on NA/EU is XIGNCODE3; the operational policy bans unauthorized

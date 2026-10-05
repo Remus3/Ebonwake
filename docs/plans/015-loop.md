@@ -1,6 +1,8 @@
 # Plan 015 - EW loop tick: inbox, lanes, review, merge, idle deep-dive
 
-Status: built in lane (operator order 2026-10-05). One lane (`build`).
+Status: LANDED 2026-10-05 (operator order 2026-10-05): armed as
+`\EbonwakeOps\LaneLoop` (PT15M, IgnoreNew); rules in CLAUDE.md "Loop (plan
+015)". One lane (`build`).
 
 The operator is mostly away (standing order 1). A scheduled, idempotent tick
 does what the main session otherwise does by hand: answer the channel inbox,
@@ -182,7 +184,7 @@ checklist ends in `[ ] /done`; one push.
        never dropped; rule 0). Reverses if: the kit's `parse_verdict` defines
        otherwise.
 
-## Proposed CLAUDE.md rules (EW rules section; land on the operator's own go)
+## CLAUDE.md rules - LANDED 2026-10-05 (CLAUDE.md "Loop (plan 015)"; text below is the proposal, CLAUDE.md is authoritative: cap 6, not 12)
 
 ```
 ## Loop (plan 015) - armed as \EbonwakeOps\LaneLoop, every 15 min
