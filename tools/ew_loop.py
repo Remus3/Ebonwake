@@ -1244,7 +1244,7 @@ class Tick:
         if mh.returncode == 0 and mh.stdout.strip():
             parents += ["-p", mh.stdout.strip()]
         c = g(["commit-tree", tree.stdout.strip(), *parents, "-F", "-"], wt,
-              input="WIP (commit refused, not merged): " + msg)
+              input="salvaged (lane commit refused by hook): " + msg)
         if c.returncode != 0:
             return False
         rec["commit"] = c.stdout.strip()
