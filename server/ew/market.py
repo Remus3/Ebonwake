@@ -8,6 +8,7 @@ lives in httpcache.py (shared with plan 004).
 """
 
 import json
+import math
 import threading
 import time
 import urllib.parse
@@ -112,6 +113,73 @@ def price_of(sub):
     return None
 
 
+# -- plan 027: net proceeds after tax + pre-order queues ---------------------
+
+RULES_FILE = Path(__file__).resolve().parent / "data" / "market_rules.json"
+FAME_MAX = 1.5
+_rules_cache = None
+
+
+def load_rules():
+    """Tracked tax constants (server/ew/data/market_rules.json), read once."""
+    global _rules_cache
+    if _rules_cache is None:
+        _rules_cache = json.loads(RULES_FILE.read_text(encoding="utf-8"))
+    return _rules_cache
+
+
+def _half_up(x):
+    # floor(x + 0.5) on the same IEEE double is exactly JS Math.round for x >= 0;
+    # Python round() is half-even and would split from ewcore.js at 12.5 bp.
+    return math.floor(x + 0.5)
+
+
+def _bp(rate):
+    return _half_up(rate * 10000)
+
+
+def _valid_fame(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= FAME_MAX
+
+
+def net_proceeds(price, vp, fame_pct):
+    """Silver the seller collects for a sale at `price` (integer, floored).
+
+    Rates are taken to basis points and multiplied as integers so a 1 T sale
+    floors exactly; ewcore.js netProceeds mirrors this with BigInt.
+    """
+    if not _is_int(price) or price < 0:
+        return None
+    if not _valid_fame(fame_pct):
+        raise ValueError(f"fame_pct must be a number in 0..{FAME_MAX}")
+    r = load_rules()
+    keep = 10000 - _bp(r["tax"])
+    mult = 10000 + (_bp(r["vp_bonus"]) if vp else 0) + _half_up(fame_pct * 100)
+    return price * keep * mult // 10 ** 8
+
+
+def preorder_state(item):
+    """`capped` (last sale at priceMax), `no_stock` (currentStock 0) or None."""
+    if not isinstance(item, dict):
+        return None
+    last, top = item.get("lastSoldPrice"), item.get("priceMax")
+    if _is_int(last) and _is_int(top) and top > 0 and last == top:
+        return "capped"
+    if _is_int(item.get("currentStock")) and item["currentStock"] == 0:
+        return "no_stock"
+    return None
+
+
+def settings_from(doc):
+    """`market` {vp, fame_pct} from a config/local.json doc; bad values -> defaults."""
+    m = doc.get("market") if isinstance(doc, dict) else None
+    m = m if isinstance(m, dict) else {}
+    vp = m.get("vp")
+    fame = m.get("fame_pct")
+    return {"vp": vp if isinstance(vp, bool) else False,
+            "fame_pct": fame if _valid_fame(fame) else 0}
+
+
 def alert_for(price, below, above):
     if price is None:
         return None
@@ -181,12 +249,20 @@ class Watchlist:
 
 
 class MarketService:
-    def __init__(self, client, watchlist):
+    def __init__(self, client, watchlist, settings=None):
         self.client = client
         self.watchlist = watchlist
+        self.settings = settings_from({"market": settings or {}})
         self._last = None  # freshness summary of the last watch refresh
 
+    def tax(self):
+        """Rates the dashboard's pair calculator mirrors (plan 027)."""
+        r = load_rules()
+        return dict(self.settings, tax=r["tax"], vp_bonus=r["vp_bonus"],
+                    fame_verified=r["fame_steps"]["verified"])
+
     def watch(self):
+        vp, fame = self.settings["vp"], self.settings["fame_pct"]
         items = []
         for w in self.watchlist.items():
             res = self.client.sublist(w["id"], w["sid"])
@@ -197,9 +273,11 @@ class MarketService:
                           "trades": sub.get("totalTrades"), "below": w.get("below"),
                           "above": w.get("above"), "alert": alert_for(price, w.get("below"),
                                                                       w.get("above")),
+                          "net": net_proceeds(price, vp, fame),
+                          "preorder": preorder_state(sub),
                           "freshness": _freshness(res)})
         self._last = [it["freshness"] for it in items]
-        return {"items": items, "updated": iso(self.client.clock())}
+        return {"items": items, "tax": self.tax(), "updated": iso(self.client.clock())}
 
     def item(self, item_id, sid=0):
         sub = self.client.sublist(item_id, sid)
@@ -221,8 +299,10 @@ class MarketService:
 
     def hot(self):
         res = self.client.hot()
-        return {"items": res["data"] if isinstance(res["data"], list) else [],
-                "freshness": _freshness(res)}
+        rows = res["data"] if isinstance(res["data"], list) else []
+        # Copies: the cached rows stay as arsha sent them.
+        items = [dict(x, preorder=preorder_state(x)) if isinstance(x, dict) else x for x in rows]
+        return {"items": items, "freshness": _freshness(res)}
 
     def source(self):
         """`/api/state` sources.market: {updated, ttl_s, status: ok|stale|error|none}."""

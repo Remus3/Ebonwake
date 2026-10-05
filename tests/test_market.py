@@ -6,6 +6,7 @@ No network: every ArshaClient gets an injected fake fetch.
 import http.client
 import json
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -252,7 +253,7 @@ def test_service_watch_view(tmp_path):
     it = doc["items"][0]
     assert it == {"id": 4901, "sid": 0, "name": "Black Stone", "price": 210, "stock": 5000,
                   "trades": 99, "below": 250, "above": None, "alert": "below",
-                  "freshness": it["freshness"]}
+                  "net": 136, "preorder": None, "freshness": it["freshness"]}
     assert it["freshness"]["stale"] is False and doc["updated"]
     assert set(it["freshness"]) == {"fetched_at", "age_s", "ttl_s", "stale", "error"}
 
@@ -346,7 +347,8 @@ def test_route_item_sid_defaults_zero(msrv):
 
 def test_route_hot(msrv):
     st, doc = _req(msrv, "GET", "/api/market/hot")
-    assert st == 200 and doc["items"] == [SUB] and doc["freshness"]["stale"] is False
+    assert st == 200 and doc["items"] == [dict(SUB, preorder=None)]
+    assert doc["freshness"]["stale"] is False
 
 
 def test_state_reports_market_source(msrv):
@@ -410,3 +412,136 @@ def test_corrupt_cache_and_backoff_degrade(tmp_path):
     (tmp_path / "cache" / "backoff.json").write_text(json.dumps({key: "junk"}))
     res = c.sublist(4901)
     assert res["data"]["id"] == 4901 and res["error"] is None
+
+
+# --- plan 027: net proceeds after tax + pre-order badge ----------------------
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "market"
+
+
+def test_market_rules_file_shape():
+    r = market.load_rules()
+    assert r["tax"] == 0.35 and r["vp_bonus"] == 0.30
+    assert "pearl" in r["pearl_tax_exempt"].lower()
+    assert r["fame_steps"]["verified"] is False and r["fame_steps"]["steps"]
+    assert r["source"].startswith("https://") and "wikiNo=47" in r["source"]
+    assert r["verified"] == "2025-08-06"
+    assert all(0 <= s["bonus_pct"] <= market.FAME_MAX for s in r["fame_steps"]["steps"])
+
+
+@pytest.mark.parametrize("price,vp,fame,want", [
+    (100_000_000, False, 0, 65_000_000),
+    (100_000_000, True, 0, 84_500_000),
+    (100_000_000, True, 1.5, 85_475_000),
+    (100_000_000, False, 1.5, 65_975_000),
+    (100_000_000, False, 0.5, 65_325_000),
+    (210, False, 0, 136),        # 136.5 floors
+    (1, True, 0, 0),             # 0.845 floors
+    (0, True, 1.5, 0),
+    (20_000_000_000, True, 1.5, 17_095_000_000),
+    (999_999_999_999, True, 1.5, 854_749_999_999),  # no float drift at 1 T
+    (100_000_000, False, 0.125, 65_084_500),  # 12.5 bp rounds half up, as JS Math.round
+    (100_000_000, False, 0.005, 65_006_500),
+    (100_000_000, False, 0.145, 65_091_000),  # 14.499.. double -> 14 bp on both sides
+])
+def test_net_proceeds(price, vp, fame, want):
+    assert market.net_proceeds(price, vp, fame) == want
+
+
+@pytest.mark.parametrize("price", [None, -1, 1.5, "100", True])
+def test_net_proceeds_bad_price_is_none(price):
+    assert market.net_proceeds(price, True, 0) is None
+
+
+@pytest.mark.parametrize("fame", [-0.1, 1.6, "1", None, True])
+def test_net_proceeds_bad_fame_rejected(fame):
+    with pytest.raises(ValueError):
+        market.net_proceeds(100, False, fame)
+
+
+def test_preorder_states_from_fixture():
+    hot = json.loads((FIXTURES / "hot_preorder.json").read_text(encoding="utf-8"))
+    assert [market.preorder_state(x) for x in hot] == ["capped", "no_stock", None]
+
+
+@pytest.mark.parametrize("item,want", [
+    ({"currentStock": 5, "lastSoldPrice": 300, "priceMax": 300}, "capped"),
+    ({"currentStock": 0, "lastSoldPrice": 300, "priceMax": 300}, "capped"),
+    ({"currentStock": 0, "lastSoldPrice": 200, "priceMax": 300}, "no_stock"),
+    ({"currentStock": 0}, "no_stock"),
+    ({"currentStock": 5, "lastSoldPrice": 0, "priceMax": 0}, None),
+    ({"currentStock": None, "lastSoldPrice": None, "priceMax": None}, None),
+    ({"currentStock": False, "lastSoldPrice": 1, "priceMax": 2}, None),
+    ({}, None), (None, None), ([], None),
+])
+def test_preorder_state_edges(item, want):
+    assert market.preorder_state(item) == want
+
+
+@pytest.mark.parametrize("doc,want", [
+    (None, {"vp": False, "fame_pct": 0}),
+    ({}, {"vp": False, "fame_pct": 0}),
+    ({"market": {"vp": True, "fame_pct": 1.5}}, {"vp": True, "fame_pct": 1.5}),
+    ({"market": {"vp": True, "fame_pct": 1}}, {"vp": True, "fame_pct": 1}),
+    ({"market": {"vp": "yes", "fame_pct": 9}}, {"vp": False, "fame_pct": 0}),
+    ({"market": {"fame_pct": -1}}, {"vp": False, "fame_pct": 0}),
+    ({"market": {"fame_pct": True}}, {"vp": False, "fame_pct": 0}),
+    ({"market": []}, {"vp": False, "fame_pct": 0}),
+])
+def test_settings_from_config(doc, want):
+    assert market.settings_from(doc) == want
+
+
+def test_config_market_reads_local_json(tmp_path):
+    assert ewapp.config_market(tmp_path) == {"vp": False, "fame_pct": 0}
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "local.json").write_text(
+        json.dumps({"market": {"vp": True, "fame_pct": 0.5}}), encoding="utf-8")
+    assert ewapp.config_market(tmp_path) == {"vp": True, "fame_pct": 0.5}
+    (tmp_path / "config" / "local.json").write_text("{bad", encoding="utf-8")
+    assert ewapp.config_market(tmp_path) == {"vp": False, "fame_pct": 0}
+
+
+def test_example_config_documents_market_settings():
+    root = Path(__file__).resolve().parents[1]
+    doc = json.loads((root / "config" / "local.example.json").read_text(encoding="utf-8"))
+    assert doc["market"]["vp"] is False and doc["market"]["fame_pct"] == 0
+    assert market.settings_from(doc) == {"vp": False, "fame_pct": 0}
+
+
+def test_service_watch_net_with_settings(tmp_path):
+    capped = dict(SUB, lastSoldPrice=100_000_000, priceMax=100_000_000, currentStock=0)
+    c, _ = _client(tmp_path, {"GetWorldMarketSubList": capped})
+    svc = market.MarketService(c, market.Watchlist(Store(tmp_path / "store"), seed=[4901]),
+                               settings={"vp": True, "fame_pct": 0})
+    doc = svc.watch()
+    it = doc["items"][0]
+    assert it["net"] == 84_500_000 and it["preorder"] == "capped"
+    assert doc["tax"] == {"vp": True, "fame_pct": 0, "tax": 0.35, "vp_bonus": 0.30,
+                          "fame_verified": False}
+
+
+def test_service_watch_no_price_no_net(tmp_path):
+    svc, _ = _svc(tmp_path, {"GetWorldMarketSubList": OSError("x")})
+    it = svc.watch()["items"][0]
+    assert it["net"] is None and it["preorder"] is None
+
+
+def test_service_hot_adds_preorder_without_mutating_cache(tmp_path):
+    hot = json.loads((FIXTURES / "hot_preorder.json").read_text(encoding="utf-8"))
+    svc, _ = _svc(tmp_path, {"GetWorldMarketHotList": hot})
+    doc = svc.hot()
+    assert [x["preorder"] for x in doc["items"]] == ["capped", "no_stock", None]
+    assert "preorder" not in svc.client.hot()["data"][0]
+
+
+def test_service_hot_skips_junk_rows(tmp_path):
+    svc, _ = _svc(tmp_path, {"GetWorldMarketHotList": [SUB, "x", None]})
+    items = svc.hot()["items"]
+    assert items[0]["preorder"] is None and items[1:] == ["x", None]
+
+
+def test_route_watch_carries_net_and_preorder(msrv):
+    st, doc = _req(msrv, "GET", "/api/market/watch")
+    it = doc["items"][0]
+    assert st == 200 and "net" in it and "preorder" in it and "tax" in doc

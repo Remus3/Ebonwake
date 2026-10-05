@@ -1,0 +1,18 @@
+{
+  "_doc": "Plan 027. Central Market sale proceeds. net = floor(price * (1 - tax) * (1 + vp_bonus if Value Pack + fame_pct / 100)), rates in basis points (server/ew/market.py net_proceeds, app/shared/ewcore.js netProceeds).",
+  "tax": 0.35,
+  "vp_bonus": 0.30,
+  "pearl_tax_exempt": "Pearl items (Pearl Shop costumes and outfits sold on the market) follow their own rules; these rates cover silver items only.",
+  "fame_steps": {
+    "verified": false,
+    "_doc": "Family Fame sale bonus in percent of the after-tax amount. Step thresholds are community-reported; the operator types the bonus they see in game into config/local.json market.fame_pct (0-1.5).",
+    "steps": [
+      {"fame": 1000, "bonus_pct": 0.5},
+      {"fame": 4000, "bonus_pct": 1.0},
+      {"fame": 7000, "bonus_pct": 1.5}
+    ]
+  },
+  "preorder_note": "listing fills only from pre-orders at max; >= 20 B items fill at random",
+  "source": "https://www.naeu.playblackdesert.com/en-US/Wiki?wikiNo=47",
+  "verified": "2025-08-06"
+}
