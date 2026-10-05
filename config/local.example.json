@@ -12,5 +12,9 @@
   "secrets": {
     "_example_ocr_key": {"env": "EW_OCR_API_KEY"}
   },
-  "market_watch": [4901]
+  "market_watch": [4901],
+  "profile": {
+    "family": "",
+    "base_url": "https://api.cutepap.us/community/v1"
+  }
 }

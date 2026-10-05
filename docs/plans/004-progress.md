@@ -41,6 +41,47 @@ Files: `server/ew/progress.py`, `server/ew/httpcache.py` (if needed),
 Acceptance: pytest green (validation edges, step toggles, pct math, profile
 cache/backoff/none, POST guards).
 
+### Slice A as built (2026-10-04) - contract for slice B
+
+- `GET /api/progress` -> `{character: {name|null, cls, level|null, gs: {ap, aap,
+  dp} (each int|null)}, tracks: [{id, title, kind, steps: [{id, title, done,
+  done_at|null}], done, total, pct}], profile: {data, freshness, status}}`.
+  `profile.data` = `{family, region, guild|null, characters: [{name, cls|null,
+  level|null, main}]}`; `status` = ok|stale|error|none; unconfigured ->
+  `{data: null, freshness: null, status: "none"}`.
+- POST bodies: `{"character": {name?, cls?, level?, gs?: {ap?, aap?, dp?}}}`
+  (partial merge, `name: ""` clears), `{"step": {track, step, done}}`,
+  `{"add_track": {title, kind, steps}}`, `{"remove_track": id}`; each returns
+  the GET body.
+- Config: `config/local.json` `profile: {family, base_url?}` (base must be
+  https, else the default).
+
+Deviations (self-adjudicated in lane, minor; decision / alternatives / why /
+reverses if):
+1. Upstream path verified by the main session against the project's
+   openapi.json (servers[0] = `https://api.cutepap.us/community`; path
+   `/v1/adventurer/search`, `query` exact match, `searchType=familyName`,
+   `region` in EU|KR|NA|SA; probe answered 202 = being fetched):
+   `GET <base>/adventurer/search?query=<family>&searchType=familyName&region=NA`,
+   default base `https://api.cutepap.us/community/v1`, one call per hour (search only, no
+   second profile call). Alt: block the slice on a docs fetch. Why: base is
+   configurable and the path lives in one method (`ProfileClient.url`).
+   Reverses if: the docs show another path - change that method only.
+2. `pct` = floor(100 * done / total), 0 when total is 0, so 100 only when
+   every step is done. Alt: round. Why: no premature 100; slice B's
+   `trackPct` must floor too. Reverses if: operator prefers rounding.
+3. Gear seed has 13 steps (main, sub, awakening, 4 armor, necklace, 2 rings,
+   2 earrings, belt) instead of the spec's 11. Alt: spec list. Why: the game
+   has a sub-weapon and 6 accessory slots. Reverses if: operator says so.
+4. "Being fetched" (HTTP 202, or a JSON message mentioning fetch/later) =
+   `httpcache.Pending`: flat 60 s retry, backoff n not grown. Alt: normal
+   exponential backoff. Why: the upstream scrape finishes in about a minute.
+5. `profileTarget` (opaque account-level id) is dropped before caching or
+   serving; the cache file name is a hash, never the family name. Why: ToS /
+   leak floor. Reverses if: never.
+6. `/api/state` `sources.profile` reads cache + backoff only (`peek`), never
+   fetches; `none` = unconfigured or nothing fetched yet.
+
 ## Slice B - dashboard (lane `data`)
 
 Files: `app/dashboard/progress.js`, `dashboard.js`, `index.html`,

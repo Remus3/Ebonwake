@@ -3,51 +3,27 @@ watchlist and alert rules.
 
 Read-only GET only (ToS floor): no authenticated or write call to arsha or
 Pearl Abyss, ever. Upstream outages are normal, so every result carries its
-freshness and stale cache is served during backoff.
+freshness and stale cache is served during backoff. The cache + backoff core
+lives in httpcache.py (shared with plan 004).
 """
 
-import datetime as _dt
 import json
 import threading
 import time
 import urllib.parse
-import urllib.request
 from pathlib import Path
 
-from . import __version__
-from .store import atomic_write_json
+from .httpcache import (BACKOFF_BASE_S, BACKOFF_MAX_S, CachedClient,  # noqa: F401
+                        Pending, UpstreamError, default_fetch, iso)
+from .httpcache import freshness as _freshness
 
 BASE = "https://api.arsha.io/v2/na/"
 TIMEOUT_S = 10
 TTL = {"sublist": 300, "orders": 120, "history": 3600, "hot": 600}
 ENDPOINT = {"sublist": "GetWorldMarketSubList", "orders": "GetBiddingInfoList",
             "history": "GetMarketPriceInfo", "hot": "GetWorldMarketHotList"}
-BACKOFF_BASE_S = 30
-BACKOFF_MAX_S = 1800
 MAX_ID = 2 ** 31 - 1
 _DEFAULT_CACHE = Path(__file__).resolve().parents[2] / "ops" / "runtime" / "cache" / "market"
-
-
-def _iso(epoch):
-    if epoch is None:
-        return None
-    return _dt.datetime.fromtimestamp(epoch, _dt.timezone.utc).replace(microsecond=0).isoformat()
-
-
-def default_fetch(url, timeout):
-    """Plain GET; raises on HTTP error or timeout."""
-    req = urllib.request.Request(url, method="GET",
-                                 headers={"User-Agent": f"Ebonwake/{__version__}",
-                                          "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 (fixed https base)
-        return r.read()
-
-
-def _read_json(path):
-    try:
-        return json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
 
 
 def _pick(body, sid):
@@ -60,56 +36,17 @@ def _pick(body, sid):
     return body
 
 
-class UpstreamError(Exception):
-    pass
-
-
-class ArshaClient:
+class ArshaClient(CachedClient):
     def __init__(self, fetch=None, clock=time.time, cache_dir=None):
-        self.fetch = fetch or default_fetch
-        self.clock = clock
-        self.cache_dir = Path(cache_dir) if cache_dir is not None else _DEFAULT_CACHE
-        self._lock = threading.Lock()      # guards _keylocks
-        self._bo_lock = threading.Lock()   # guards backoff.json read-modify-write
-        self._keylocks = {}
+        super().__init__(fetch=fetch, clock=clock,
+                         cache_dir=cache_dir if cache_dir is not None else _DEFAULT_CACHE)
 
-    def _keylock(self, key):
-        with self._lock:
-            return self._keylocks.setdefault(key, threading.Lock())
-
-    # -- paths / state ----------------------------------------------------
     def _key(self, kind, item_id, sid):
         return f"{kind}_{int(item_id)}_{int(sid)}"
 
-    def _cache_path(self, key):
-        return self.cache_dir / f"{key}.json"
-
-    def _backoff_path(self):
-        return self.cache_dir / "backoff.json"
-
-    def _backoffs(self):
-        with self._bo_lock:
-            doc = _read_json(self._backoff_path())
-        return doc if isinstance(doc, dict) else {}
-
     def backoff_state(self, kind, item_id=0, sid=0):
-        bo = self._backoffs().get(self._key(kind, item_id, sid), {})
-        if not (isinstance(bo, dict) and isinstance(bo.get("n", 0), int)
-                and isinstance(bo.get("until", 0), (int, float))):
-            return {}  # corrupt entry = no backoff, never a 500
-        return bo
+        return self.key_backoff(self._key(kind, item_id, sid))
 
-    def _set_backoff(self, key, entry):
-        with self._bo_lock:
-            doc = _read_json(self._backoff_path())
-            doc = doc if isinstance(doc, dict) else {}
-            if entry:
-                doc[key] = entry
-            else:
-                doc.pop(key, None)
-            atomic_write_json(self._backoff_path(), doc)
-
-    # -- core -------------------------------------------------------------
     def _url(self, kind, item_id, sid):
         q = {"lang": "en"}
         if kind != "hot":
@@ -121,6 +58,8 @@ class ArshaClient:
     def _download(self, kind, item_id, sid):
         try:
             raw = self.fetch(self._url(kind, item_id, sid), TIMEOUT_S)
+        except Pending:
+            raise
         except Exception as e:  # HTTPError, URLError, timeout, OSError
             raise UpstreamError(f"{type(e).__name__}: {e}") from e
         try:
@@ -141,44 +80,8 @@ class ArshaClient:
         return obj
 
     def get(self, kind, item_id=0, sid=0):
-        key = self._key(kind, item_id, sid)
-        ttl = TTL[kind]
-        # Per-key lock: one in-flight fetch per key (dedupe); other keys and
-        # fresh-cache reads never wait behind a slow upstream.
-        with self._keylock(key):
-            now = self.clock()
-            cached = _read_json(self._cache_path(key))
-            if not (isinstance(cached, dict) and "data" in cached
-                    and isinstance(cached.get("fetched_at"), (int, float))
-                    and not isinstance(cached.get("fetched_at"), bool)):
-                cached = None  # corrupt cache = no cache
-            if cached and now - cached["fetched_at"] < ttl:
-                return self._result(cached, now, ttl, False, None)
-            bo = self.backoff_state(kind, item_id, sid)
-            if bo and now < bo.get("until", 0):
-                return self._result(cached, now, ttl, True, bo.get("error") or "backoff")
-            try:
-                data = self._download(kind, item_id, sid)
-            except UpstreamError as e:
-                n = int(bo.get("n", 0)) if bo else 0
-                wait = min(BACKOFF_BASE_S * 2 ** n, BACKOFF_MAX_S)
-                err = str(e)
-                self._set_backoff(key, {"n": n + 1, "until": now + wait, "error": err})
-                return self._result(cached, now, ttl, True, err)
-            entry = {"fetched_at": now, "data": data}
-            atomic_write_json(self._cache_path(key), entry)
-            if bo:
-                self._set_backoff(key, None)
-            return self._result(entry, now, ttl, False, None)
-
-    @staticmethod
-    def _result(entry, now, ttl, stale, error):
-        if not entry:
-            return {"data": None, "fetched_at": None, "age_s": None, "ttl_s": ttl,
-                    "stale": True, "error": error}
-        return {"data": entry["data"], "fetched_at": _iso(entry["fetched_at"]),
-                "age_s": int(now - entry["fetched_at"]), "ttl_s": ttl, "stale": stale,
-                "error": error}
+        return self.cached_get(self._key(kind, item_id, sid), TTL[kind],
+                               lambda: self._download(kind, item_id, sid))
 
     def sublist(self, item_id, sid=0):
         return self.get("sublist", item_id, sid)
@@ -277,10 +180,6 @@ class Watchlist:
         return self.items()
 
 
-def _freshness(res):
-    return {k: res[k] for k in ("fetched_at", "age_s", "ttl_s", "stale", "error")}
-
-
 class MarketService:
     def __init__(self, client, watchlist):
         self.client = client
@@ -300,7 +199,7 @@ class MarketService:
                                                                       w.get("above")),
                           "freshness": _freshness(res)})
         self._last = [it["freshness"] for it in items]
-        return {"items": items, "updated": _iso(self.client.clock())}
+        return {"items": items, "updated": iso(self.client.clock())}
 
     def item(self, item_id, sid=0):
         sub = self.client.sublist(item_id, sid)
