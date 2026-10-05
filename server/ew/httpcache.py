@@ -175,10 +175,10 @@ class CachedClient:
 
         try:
             (spawn or _daemon)(run)
-        except Exception:
+        except Exception:  # noqa: BLE001 - no thread = serve the cache, never a 500
             with self._lock:
                 self._inflight.discard(key)
-            raise
+            return False
         return True
 
     def pending(self, key):

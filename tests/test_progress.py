@@ -564,3 +564,17 @@ def test_route_post_does_not_wait_on_slow_upstream(tmp_path):
         f.gate.set()
         s.shutdown()
         s.server_close()
+
+
+def test_get_view_survives_thread_start_failure(tmp_path):
+    c, f = _pc(tmp_path)
+
+    def boom(fn):
+        raise RuntimeError("can't start new thread")
+
+    s = progress.ProgressService(Store(tmp_path / "store"), c, spawn=boom)
+    v = s.view()
+    assert v["profile"]["status"] in ("none", "pending", "error")
+    s2 = progress.ProgressService(Store(tmp_path / "store"), c, spawn=_sync)
+    s2.view()
+    assert len(f.calls) == 1  # in-flight slot was released after the failed start
