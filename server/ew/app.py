@@ -1,7 +1,8 @@
 """EW server: loopback-only stdlib HTTP server.
 
 Routes: /api/health, /api/version (fleet P0-5), /api/state, /events (SSE),
-/ and /app/* (static dashboard + overlay assets, browser fallback).
+/ and /app/* (static dashboard + overlay assets, browser fallback),
+/api/market/{watch,item,hot} (plan 002) and POST /api/market/watch.
 """
 
 import datetime as _dt
@@ -16,7 +17,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import __version__, ports
+from urllib.parse import parse_qs
+
+from . import __version__, market, ports
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -24,6 +27,7 @@ APP_DIR = REPO_ROOT / "app"
 KIT_TOKENS = REPO_ROOT / "ops" / "fleet_kit" / "tokens.css"
 RUNTIME = REPO_ROOT / "ops" / "runtime"
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
+MAX_POST_BYTES = 4096
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 
 TABS = [
@@ -63,16 +67,30 @@ def config_hash(root=REPO_ROOT):
         return None
 
 
+def config_market_watch(root=REPO_ROOT):
+    """`market_watch` ids from gitignored config/local.json, or []."""
+    try:
+        doc = json.loads((Path(root) / "config" / "local.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    ids = doc.get("market_watch") if isinstance(doc, dict) else None
+    return ids if isinstance(ids, list) else []
+
+
 class EWServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, addr, store_root=None, commit=None, sse_interval=15.0):
+    def __init__(self, addr, store_root=None, commit=None, sse_interval=15.0,
+                 market_client=None, market_seed=None):
         super().__init__(addr, Handler)
         self.started = _now_iso()
         self.commit = commit
         self.cfg_hash = config_hash()
         self.store = Store(store_root or RUNTIME / "store")
         self.sse_interval = sse_interval
+        seed = config_market_watch() if market_seed is None else market_seed
+        self.market = market.MarketService(market_client or market.ArshaClient(),
+                                           market.Watchlist(self.store, seed=seed))
 
     def version(self):
         return {"commit": self.commit, "started": self.started, "pid": os.getpid(),
@@ -80,7 +98,7 @@ class EWServer(ThreadingHTTPServer):
 
     def state(self):
         return {"app": "ebonwake", "version": __version__, "tabs": TABS,
-                "sources": {}, "now": _now_iso()}
+                "sources": {"market": self.market.source()}, "now": _now_iso()}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -95,26 +113,44 @@ class Handler(BaseHTTPRequestHandler):
         name = host.rsplit(":", 1)[0] if not host.startswith("[") else host.split("]")[0] + "]"
         return name in LOOPBACK_HOSTS
 
-    def _send(self, code, body, ctype="application/json"):
+    def _send(self, code, body, ctype="application/json", cors=True):
         data = body if isinstance(body, bytes) else json.dumps(body).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        if cors:
+            self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(data)
+
+    def _market_item(self, query):
+        q = parse_qs(query)
+        try:
+            item_id = int(q["id"][0])
+            sid = int(q.get("sid", ["0"])[0])
+        except (KeyError, ValueError, IndexError):
+            return self._send(400, {"error": "id and sid must be ints"})
+        if not (0 <= item_id <= market.MAX_ID and 0 <= sid <= market.MAX_ID):
+            return self._send(400, {"error": "id and sid out of range"})
+        return self._send(200, self.server.market.item(item_id, sid))
 
     def do_GET(self):  # noqa: N802
         if not self._host_ok():
             return self._send(403, {"error": "host"})
-        path = self.path.split("?", 1)[0]
+        path, _, query = self.path.partition("?")
         if path == "/api/health":
             return self._send(200, {"ok": True, "app": "ebonwake", "port": ports.SERVER})
         if path == "/api/version":
             return self._send(200, self.server.version())
         if path == "/api/state":
             return self._send(200, self.server.state())
+        if path == "/api/market/watch":
+            return self._send(200, self.server.market.watch())
+        if path == "/api/market/item":
+            return self._market_item(query)
+        if path == "/api/market/hot":
+            return self._send(200, self.server.market.hot())
         if path == "/events":
             return self._sse()
         if path == "/":
@@ -126,6 +162,50 @@ class Handler(BaseHTTPRequestHandler):
             if APP_DIR.resolve() in target.parents and "node_modules" not in target.parts:
                 return self._file(target)
         return self._send(404, {"error": "not found"})
+
+    def do_POST(self):  # noqa: N802
+        """Loopback Host + application/json + <= 4 KiB. No CORS header is sent and
+        OPTIONS is never answered, so browser pages cannot make this request."""
+        unread = [True]
+
+        def reply(code, body):
+            if unread[0]:  # drain a small unread body so the close is not a reset
+                try:
+                    n = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    n = 0
+                if 0 < n <= 1 << 16:
+                    self.rfile.read(n)
+            self.close_connection = True
+            return self._send(code, body, cors=False)
+
+        if not self._host_ok():
+            return reply(403, {"error": "host"})
+        if self.path.split("?", 1)[0] != "/api/market/watch":
+            return reply(404, {"error": "not found"})
+        ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if ctype != "application/json":
+            return reply(415, {"error": "content-type must be application/json"})
+        try:
+            length = int(self.headers.get("Content-Length") or "")
+        except ValueError:
+            return reply(411, {"error": "length required"})
+        if length < 0 or length > MAX_POST_BYTES:
+            return reply(413, {"error": f"body over {MAX_POST_BYTES} bytes"})
+        raw = self.rfile.read(length)
+        unread[0] = False
+        try:
+            body = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return reply(400, {"error": "bad json"})
+        if not isinstance(body, dict) or len(body) != 1 or not ({"add", "remove"} & set(body)):
+            return reply(400, {"error": "body must be {\"add\": {...}} or {\"remove\": {...}}"})
+        wl = self.server.market.watchlist
+        try:
+            watch = wl.add(body["add"]) if "add" in body else wl.remove(body["remove"])
+        except ValueError as e:
+            return reply(400, {"error": str(e)})
+        return reply(200, {"watch": watch})
 
     def _file(self, target):
         try:
@@ -153,9 +233,11 @@ class Handler(BaseHTTPRequestHandler):
             return
 
 
-def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15.0):
+def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15.0,
+                market_client=None, market_seed=None):
     return EWServer(("127.0.0.1", port), store_root=store_root, commit=commit,
-                    sse_interval=sse_interval)
+                    sse_interval=sse_interval, market_client=market_client,
+                    market_seed=market_seed)
 
 
 def main(argv=None):
