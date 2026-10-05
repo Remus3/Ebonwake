@@ -87,9 +87,13 @@ GATE_TIMEOUT_S = 1800
 NOTE_HEAD = 600
 NOTE_MAX = 20000
 DONE_STATES = ("merged", "no-change", "failed")
-# lane-dirty: the kit refused the claim on a dirty lane worktree (a person
-# resolves it); gave-up: MAX_ATTEMPTS refused / lost dispatches, error kept.
+# lane-dirty: the kit refused the claim on a dirty lane worktree; it waits
+# until that worktree is clean and unheld, then retries (recover_lane_dirty);
+# gave-up: MAX_ATTEMPTS refused / lost dispatches, error kept.
 ATTENTION_STATES = ("merge-conflict", "failed-dirty", "lane-dirty", "gave-up")
+# an item in these states holds its unmerged work in rec["worktree"]
+HOLD_STATES = ("ran", "committed")
+DIRTY_WT_RX = re.compile(r"lane worktree (.+?) is dirty")
 LIMIT_RX = re.compile(r"usage limit|rate[ -]?limit|\b429\b|limit reached|overloaded", re.I)
 VERDICT_RX = re.compile(r"^\s*VERDICT:\s*(PASS|FAIL)\b", re.I | re.M)
 ROW_RX = re.compile(r"^\|\s*(\d{3})\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*$")
@@ -169,6 +173,10 @@ def read_json(path, default=None):
 
 def iso(epoch):
     return _dt.datetime.fromtimestamp(epoch).astimezone().isoformat(timespec="seconds")
+
+
+def _norm_path(p):
+    return os.path.normcase(os.path.abspath(str(p)))
 
 
 def epoch_of(text):
@@ -635,6 +643,7 @@ class Deps:
         self.write_status = k.write_status
         self.lock = lambda path: fw.watch_lock(path)
         self.lane_state = lambda: fl.repo_lane_state(self.root, ew_lane.LANE_CAP)
+        self.lane_worktree = lambda i: fl.worktree_path(self.main_tree, CODE, i)
         self.pid_alive = fl.pid_alive
         self.main_tree = fl.main_tree(self.root)
         self.launch = lambda iid: _launch(self.root, iid)
@@ -1243,11 +1252,72 @@ class Tick:
                              "title": h["text"], "label": f"hand-off {h['id']}"})
         return rows, work, skipped
 
+    @staticmethod
+    def held_worktrees(recs):
+        return {_norm_path(r["worktree"]) for r in recs.values()
+                if r.get("state") in HOLD_STATES and r.get("worktree")}
+
+    def worktree_unusable(self, wt, held):
+        """A lane worktree the kit would refuse (dirty) or that holds another
+        item's unmerged work. A missing one is usable: the kit creates it."""
+        return _norm_path(wt) in held or (Path(wt).is_dir() and self.dirty(wt))
+
     def free_lanes(self):
-        running = {r["lane"] for r in self.d.lane_state() if r["state"] == "RUNNING"}
-        pending = {r.get("lane") for r in self.items.all().values()
-                   if r.get("state") == "dispatched"}
-        return [n for n in ew_lane.LANES if n not in running | pending]
+        """Lane names safe to dispatch now. Read fresh at dispatch time, lane
+        locks first, then records: a worker that finished mid-tick is "ran"
+        and still holds its worktree (fix 2026-10-05). The kit claims the
+        LOWEST non-RUNNING index, not a named one, so slots stop at the first
+        such index whose worktree is dirty or held (the claim would refuse)."""
+        by_index = {r.get("index"): r for r in self.d.lane_state()}
+        rows = [by_index.get(i) or {"index": i, "state": "FREE", "lane": None}
+                for i in range(ew_lane.LANE_CAP)]  # no lock row: a FREE index
+        recs = self.items.all()
+        running = {r["lane"] for r in rows if r["state"] == "RUNNING"}
+        busy = running | {r.get("lane") for r in recs.values()
+                          if r.get("state") in ("dispatched",) + HOLD_STATES}
+        names = [n for n in ew_lane.LANES if n not in busy]
+        held = self.held_worktrees(recs)
+        # dispatched but not yet claimed: those take the lowest free indexes
+        unclaimed = sum(1 for r in recs.values()
+                        if r.get("state") == "dispatched" and r.get("lane") not in running)
+        slots = 0
+        for row in rows:
+            if row["state"] == "RUNNING":
+                continue
+            if unclaimed:
+                unclaimed -= 1
+                continue
+            if self.worktree_unusable(self.d.lane_worktree(row["index"]), held):
+                break
+            slots += 1
+        return names[:slots]
+
+    def recover_lane_dirty(self):
+        """A lane-dirty record whose refused worktree (named in its error) is
+        now clean and holds no ran / committed item's work goes back to
+        "refused": dispatchable, attempts kept, so MAX_ATTEMPTS still bounds
+        it (out of attempts: gave-up). A still-dirty tree (a crashed run) keeps
+        it waiting; no worktree in the error keeps it as is. Idempotent."""
+        recs = self.items.all()
+        held = self.held_worktrees(recs)
+        for rec in recs.values():
+            if rec.get("state") != "lane-dirty":
+                continue
+            m = DIRTY_WT_RX.search(rec.get("error") or "")
+            if not m or self.worktree_unusable(Path(m.group(1)), held):
+                continue
+            if self.dry:
+                self.step(f"{rec['id']}: would clear lane-dirty")
+                continue
+            if rec.get("attempts", 0) >= MAX_ATTEMPTS:
+                rec["state"] = "gave-up"
+                self.step(f"{rec['id']}: gave up after {rec.get('attempts', 0)} attempts: "
+                          f"{rec.get('error')}")
+            else:
+                rec.update(state="refused",
+                           error=ascii_text(f"lane-dirty cleared: {rec.get('error')}", 300))
+                self.step(f"{rec['id']}: lane-dirty cleared, {Path(m.group(1)).name} clean")
+            self.items.put(rec)
 
     def dispatch(self, work):
         free = self.free_lanes()
@@ -1401,6 +1471,7 @@ class Tick:
         else:
             self.step(f"spawning paused: {self.blocked()}")
         self.finished()
+        self.recover_lane_dirty()
         rows, work, skipped = self.work_list()
         self.rearm(rows)
         self.dispatch(work)
@@ -1487,8 +1558,8 @@ def lane_worker(iid, deps=None, run_lane=None):
             backoff_hit(d.root, d.clock(), text)
         if halt.exists():
             return pause("halted")
-        # a dirty lane worktree is a crashed run's work: retrying cannot clear
-        # it, so it waits for a person instead of burning the attempts
+        # a dirty lane worktree: retrying cannot clear it, so it waits without
+        # burning attempts until the tick sees that tree clean and unheld
         state = "lane-dirty" if "dirty" in text.lower() else "refused"
         rec.update(state=state, error=ascii_text(text, 300))
         items.put(rec)
