@@ -827,3 +827,18 @@ def test_probe_never_cuts_before_a_grouped_tail():
     probe = FakeProbe([0.0])
     assert ocr.split_spaced_amount(doc, bounds, "p.png", probe) == doc
     assert probe.calls == [] and ocr.extract_silver(doc["lines"]) == 21187096269
+
+
+@pytest.mark.parametrize("words,ink,want", [
+    (["1", "234", "567"], [0.0, 0.3], 1234567),        # space-grouped, first gap clean
+    (["1,234", "567", "100"], [0.0, 0.0], 1234567),    # cut only at the last gap
+])
+def test_probe_cuts_only_the_last_gap(words, ink, want):
+    rows, x = _tsv_row(1, 1, 0, 0, 120, 30, "Silver"), 132
+    for i, w in enumerate(words):
+        width = 18 * len(w)
+        rows += _tsv_row(1, 2 + i, x, 0, width, 30, w)
+        x += width + 13  # 0.43 h: one space / a dropped comma
+    doc, bounds = ocr._parse_tsv(TSV_HEAD + rows)
+    out = ocr.split_spaced_amount(doc, bounds, "p.png", FakeProbe(ink[-1:]))
+    assert ocr.extract_silver(out["lines"]) == want

@@ -281,7 +281,10 @@ def parse_tsv(stdout, scale=1.0):
     return _parse_tsv(stdout, scale)[0]
 
 
-def ink_probe(image, rects, run=subprocess.run, timeout=OCR_TIMEOUT_S):
+PROBE_TIMEOUT_S = 10  # measured ~0.4 s; a hung probe must not stall a read for 60 s
+
+
+def ink_probe(image, rects, run=subprocess.run, timeout=PROBE_TIMEOUT_S):
     """tools/ocr_ink.ps1: dark-pixel fraction per rectangle of a prepped image."""
     spec = ";".join(",".join(str(int(v)) for v in r) for r in rects)
     args = [powershell_exe(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
@@ -325,10 +328,10 @@ def split_spaced_amount(doc, bounds, image, probe):
         return doc
     _, li, start, end = hit
     text = doc["lines"][li]["text"]
-    # A grouped tail ("21 187,096,269") is the rest of one number, never a
-    # second one: only a plain digit run after the gap may be cut off.
+    # A grouped tail ("21 187,096,269", "1 234 567") is the rest of one number,
+    # never a second one: only the LAST gap, before a plain digit run, may be cut.
     spans = [b for b in bounds if b["line"] == li and start < b["at"] < end
-             and not re.search(r"[,.]", text[b["at"] + 1:end])]
+             and not re.search(r"[,. ]", text[b["at"] + 1:end])]  # last gap only (r1)
     if not spans:
         return doc
     try:
