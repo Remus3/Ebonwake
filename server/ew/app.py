@@ -119,9 +119,11 @@ class EWServer(ThreadingHTTPServer):
             family = progress.family_from_config(cfg)
             if family is not None:
                 profile_client = progress.ProfileClient(family, base_url=cfg.get("base_url"))
-        # Season level objectives auto-tick from the newest XP sample (plan 013).
+        # Season level objectives auto-tick from the newest XP sample (plan 013);
+        # plan 023: the newest started XP epoch flags bracket tables to re-verify.
         self.progress = progress.ProgressService(
-            self.store, profile_client, level=lambda: self.leveling.current_level())
+            self.store, profile_client, level=lambda: self.leveling.current_level(),
+            epoch=lambda: self.leveling.active_epoch())
         # Plan 018: buff presets follow the newest started XP epoch.
         self.grind = grind.GrindService(self.store, clock=grind_clock or time.time,
                                         epoch=lambda: self.leveling.active_epoch())
@@ -273,10 +275,10 @@ class Handler(BaseHTTPRequestHandler):
     def _post_progress(self, body):
         ops = {"character": "set_character", "step": "step", "add_track": "add_track",
                "remove_track": "remove_track", "claim": "claim", "obj_add": "obj_add",
-               "obj_edit": "obj_edit", "obj_del": "obj_del"}
+               "obj_edit": "obj_edit", "obj_del": "obj_del", "brackets_set": "brackets_set"}
         if len(body) != 1 or not (set(ops) & set(body)):
             raise ValueError("body must be one of {character|step|add_track|remove_track|"
-                             "claim|obj_add|obj_edit|obj_del: ...}")
+                             "claim|obj_add|obj_edit|obj_del|brackets_set: ...}")
         (op, arg), = body.items()
         return getattr(self.server.progress, ops[op])(arg)
 

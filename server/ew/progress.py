@@ -18,6 +18,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
+from . import brackets
 from .httpcache import CachedClient, Pending, UpstreamError, freshness
 from .levels import LEVEL_RANGE
 from .today import slug
@@ -411,14 +412,26 @@ class ProgressService:
     A `season` track (plan 013) holds {id, title, kind, seed, objectives: [{id,
     title, kind, target, reward, done_at, claimed_at}]} instead of steps.
     `level` returns the plan 011 sample level (or None); with the character
-    level, the higher one auto-ticks level objectives."""
+    level, the higher one auto-ticks level objectives. Plan 023: `brackets`
+    in the view is the AP/DP bracket summary for the stored gs (tracked
+    `data/brackets.json` + store domain `brackets_override`); `epoch` returns
+    the newest started XP epoch (re-verify flag) or None."""
 
-    def __init__(self, store, profile_client=None, clock=time.time, spawn=None, level=None):
+    def __init__(self, store, profile_client=None, clock=time.time, spawn=None, level=None,
+                 epoch=None, bracket_tables=None):
         self.store = store
         self.profile = profile_client
         self.clock = clock
         self.spawn = spawn  # background refresh runner (None = daemon thread)
         self.level = level
+        self.epoch = epoch
+        self.bracket_error = None
+        if bracket_tables is None:
+            try:
+                bracket_tables = brackets.load_tracked()
+            except ValueError as e:  # a broken data file never breaks the Progress tab
+                bracket_tables, self.bracket_error = {}, str(e)
+        self.bracket_tables = bracket_tables
         self._lock = threading.Lock()  # read-modify-write; Store guards each file op
         with self._lock:
             doc = store.get("progress")
@@ -533,7 +546,16 @@ class ProgressService:
             out.append({"id": t["id"], "title": t["title"], "kind": t["kind"], "steps": steps,
                         "done": done, "total": len(steps), "pct": pct(done, len(steps))})
         return {"character": character, "tracks": out, "season": season,
-                "profile": self.profile_view(refresh=refresh)}
+                "profile": self.profile_view(refresh=refresh),
+                "brackets": self._brackets(character)}
+
+    def _brackets(self, character):
+        try:
+            epoch = self.epoch() if self.epoch is not None else None
+        except Exception:  # a broken feed never breaks the Progress tab
+            epoch = None
+        tables = brackets.load(self.store.get("brackets_override"), tracked=self.bracket_tables)
+        return brackets.summary(character["gs"], tables, epoch=epoch)
 
     def source(self):
         """`/api/state` sources.profile: {updated, ttl_s, status}; never fetches."""
@@ -724,6 +746,22 @@ class ProgressService:
                 tracks.append({"id": tid, "title": title, "kind": arg["kind"],
                                "steps": _make_steps(steps)})
             self._save(character, tracks)
+        return self.view(refresh=False)
+
+    def brackets_set(self, arg):
+        """{table: {source, verified, note, rows} | null, ...}: replace a bracket
+        table with an operator copy, or null to fall back to the tracked one."""
+        if not isinstance(arg, dict) or not arg or set(arg) - set(brackets.TABLES):
+            raise ValueError(f"brackets_set must be an object of {', '.join(brackets.TABLES)}")
+        patch = {k: None if v is None else brackets.validate_table(v) for k, v in arg.items()}
+        with self._lock:
+            doc = brackets.clean_overrides(self.store.get("brackets_override"))
+            for k, v in patch.items():
+                if v is None:
+                    doc.pop(k, None)
+                else:
+                    doc[k] = v
+            self.store.put("brackets_override", doc)
         return self.view(refresh=False)
 
     def remove_track(self, tid):

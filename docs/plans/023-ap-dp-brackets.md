@@ -38,3 +38,34 @@ verifier PASS within 3 rounds.
 ToS check: static sourced data plus operator-typed gear score.
 
 Depends on: none.
+
+## As-built deviations
+
+1. Tables are the research 0003 section 1.2 excerpt, not the full 66 + 30 + 68
+   rows. Decision: ship the transcribed rows only and mark each
+   untranscribed span as a row with `value: null` (AP 277-308 and 316-448,
+   DP DR 211-400, all-DR 256-530); lookup answers "not in table" there and
+   never interpolates. Alternatives: fetch the BDFoundry page from the lane
+   (network denied in the headless lane); interpolate "+6..+7 per 4 AP" /
+   "about +1% per 7 DP" (invents numbers). Why: the plan says rows are facts
+   from the cited page; the operator fills a span with `brackets_set`.
+   Reverses if: a session with web access transcribes the full page into
+   `data/brackets.json` (same shape, nulls removed).
+2. Table shape is `{source, verified, note, rows: [{min, value}]}`; a row
+   ends where the next one starts, so "no gaps" holds by construction; the
+   schema test asserts strictly increasing `min`, non-decreasing known
+   values, a known open-ended top row and ASCII. Below the first row the
+   value is 0. Reverses if: a table needs explicit `max` bounds.
+3. `lookup` also returns `x` (the stat looked up) so the pure formatter needs
+   no second input. `summary` returns `dp` as the `dp_dr` lookup plus
+   `all_dr` (the `dp_all_dr` lookup) and a `tables` map {source, verified,
+   note, override, reverify}. The `cliff` flag is computed for AP, AAP and DP
+   DR alike and is false whenever any of the three points is unknown.
+   Reverses if: the card needs a per-table cliff rule.
+4. `brackets_set` replaces a whole table (`{"ap": {...}}`) or drops the
+   override (`{"ap": null}`); a corrupt stored override is ignored, never a
+   500. The `verify` badge is computed server side (`reverify`, plan 018
+   spots pattern) from the newest started XP epoch, not in the renderer.
+   Reverses if: per-row overrides are wanted.
+
+refute-rounds: 0/3 (lane build; verifier round runs at merge).

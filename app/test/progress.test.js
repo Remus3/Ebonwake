@@ -216,3 +216,54 @@ test('overlay never posts to /api/progress', () => {
   const uses = src.match(/['"]\/api\/progress['"]/g) || [];
   assert.strictEqual(uses.length, (src.match(/getJSON\('\/api\/progress'\)/g) || []).length);
 });
+
+// ---- plan 023: AP/DP bracket lines -------------------------------------------
+
+const lk = (x, bmin, bmax, value, nmin, ngain, extra) => Object.assign(
+  { x: x, bracket_min: bmin, bracket_max: bmax, value: value, next_min: nmin, next_gain: ngain }, extra || {});
+const tbl = (reverify) => ({ ap: { override: false, reverify: !!reverify, verified: '2026-08-13' },
+  dp_dr: { override: false, reverify: false, verified: '2026-08-13' },
+  dp_all_dr: { override: false, reverify: false, verified: '2026-08-13' } });
+
+test('bracketLines: plan 023 example line and cliff mark', () => {
+  const b = { ap: lk(251, 249, 252, 57, 253, 12, { cliff: true }), aap: null, dp: null, tables: tbl() };
+  const lines = C.bracketLines(b);
+  assert.strictEqual(lines.length, 1);
+  assert.strictEqual(lines[0].key, 'ap');
+  assert.strictEqual(lines[0].text, 'AP 251 -> +57 bonus; +2 AP to 253 gives +12');
+  assert.strictEqual(lines[0].cliff, true);
+  assert.strictEqual(lines[0].verify, false);
+});
+
+test('bracketLines: AAP uses the ap table; verify flag follows its reverify', () => {
+  const b = { ap: null, aap: lk(245, 245, 248, 48, 249, 9, { cliff: true }), dp: null, tables: tbl(true) };
+  const l = C.bracketLines(b)[0];
+  assert.strictEqual(l.key, 'aap');
+  assert.strictEqual(l.text, 'AAP 245 -> +48 bonus; +4 AAP to 249 gives +9');
+  assert.strictEqual(l.verify, true);
+});
+
+test('bracketLines: DP gives DR % and all-DR lines', () => {
+  const dp = lk(205, 203, 210, 1, 211, null, { cliff: false, all_dr: lk(205, null, 252, 0, 253, 2) });
+  const lines = C.bracketLines({ ap: null, aap: null, dp: dp, tables: tbl() });
+  assert.deepStrictEqual(lines.map((l) => l.text), [
+    'DP 205 -> 1% DR; +6 DP to 211: next bracket not in table',
+    'DP 205 -> all-DR +0; +48 DP to 253 gives +2',
+  ]);
+  assert.deepStrictEqual(lines.map((l) => l.key), ['dp', 'dp_all']);
+});
+
+test('bracketLines: top bracket, unknown span, junk', () => {
+  const top = C.bracketLines({ ap: lk(460, 449, null, 297, null, null), tables: tbl() })[0];
+  assert.strictEqual(top.text, 'AP 460 -> +297 bonus (top bracket)');
+  const gap = C.bracketLines({ ap: lk(290, 277, 308, null, 309, null), tables: tbl() })[0];
+  assert.strictEqual(gap.text, 'AP 290 -> bonus not in table (277-308)');
+  assert.deepStrictEqual(C.bracketLines(null), []);
+  assert.deepStrictEqual(C.bracketLines({ ap: 'x', aap: { x: 'y' } }), []);
+});
+
+test('progress.js renders bracket lines with a verify badge', () => {
+  const src = read('dashboard/progress.js');
+  assert.match(src, /C\.bracketLines\(/);
+  assert.match(src, /'verify'/);
+});
