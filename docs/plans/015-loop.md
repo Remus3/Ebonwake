@@ -125,3 +125,52 @@ checklist ends in `[ ] /done`; one push.
 10. The task's ExecutionTimeLimit is PT6H (not PT0S): with IgnoreNew a hung
     tick would otherwise stop the loop forever; StartWhenAvailable is true so
     a tick missed while asleep runs on wake.
+11. Inbox path (2026-10-05). MAIN delivers by byte-copying notes into
+    `<root>/moon_sync_inbox/` (gitignored, fleet convention); the loop read
+    only `loop.inbox_dir` from config, which was never set, so every tick said
+    "inbox unconfigured" and the v7 and scorecard ORDERs sat unread.
+    `load_config` now defaults `inbox_dir` / `outbox_dir` to
+    `<root>/moon_sync_inbox` / `<root>/moon_sync_outbox`; config still
+    overrides. The first watch state was seeded by hand (baselined, the four
+    already-handled notes seen) so the scorecard ORDER is processed instead
+    of being swallowed by the baseline.
+12. Responder diet (operator 2026-10-05). A note whose name carries
+    `-ORDER-`, `-FIX-` or `-RULING-` is ESCALATED: no acknowledgement spawn;
+    it becomes a lane work item `N<6 hex>` (queue
+    `ops/loop/control/loop_orders.json`, note text in the lane prompt),
+    dispatched before ROADMAP rows. Once the item is merged / failed /
+    adjudicate, the next tick writes the ANSWER with the item's state,
+    verdict, rounds and commit. Every other note gets ONE triage answer,
+    sonnet, effort low. At most `loop.max_notes_per_day` (default 12) answers
+    per local day; the rest wait for the next day. Pending notes stay unseen,
+    so `run_source` re-offers them every tick (idempotent: the outbox
+    `-re-<stem>.md` check). ROADMAP rows whose status contains `priority`
+    dispatch before other rows.
+
+## Proposed CLAUDE.md rules (EW rules section; land on the operator's own go)
+
+```
+## Loop (plan 015) - armed as \Ebonwake\LaneLoop, every 15 min
+
+1. The loop tick (`tools/ew_loop.py tick`) is the default executor. A session
+   adds work by adding a ROADMAP row (`[ ] open`, `(priority)` to jump the
+   queue) or a hand-off bullet; it does not run lanes by hand while the loop
+   is armed. Pause with `ops/loop/control/HALT`; never kill a running lane.
+2. INBOX is read by every tick, never on operator prompting:
+   `moon_sync_inbox/` (default; config `loop.inbox_dir` overrides), replies
+   to `moon_sync_outbox/`. ORDER / FIX / RULING notes escalate to a lane
+   item and are answered after merge; everything else gets one sonnet
+   low-effort triage answer; at most `loop.max_notes_per_day` (12) answers a
+   day. A session still reads the inbox at start (FLEET item 5).
+3. IDLE DEEP-DIVE: when no ROADMAP row or hand-off item is open and nothing
+   is in flight, the tick runs one deep-dive lane per day (BDO patch notes,
+   events, coupons, public data sources, community tools / APIs, public
+   sibling ideas; read-only, unauthenticated, robots.txt respected), writes
+   `docs/research/NNNN-deep-dive-<date>.md` and at most
+   `loop.max_new_plans_per_day` (2) deduped new plans + ROADMAP rows, which
+   the following ticks then build. The loop is self-continuing.
+4. The loop never self-accepts after refute round 3 (state `adjudicate`,
+   WIP unmerged); a session's adjudicator rules. Hand-off bullets that are
+   records start `NOTE:`; another tree's work starts `MAIN`; operator acts
+   start `OPERATOR`.
+```

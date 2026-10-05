@@ -157,6 +157,12 @@ def test_inbox_unconfigured_logged(tmp_path):
     assert "inbox unconfigured" in progress(root)["log"]
 
 
+def test_inbox_defaults_to_fleet_moon_sync_dirs(tmp_path):
+    cfg = ew_loop.load_config(tmp_path)
+    assert Path(cfg["inbox_dir"]) == tmp_path / "moon_sync_inbox"
+    assert Path(cfg["outbox_dir"]) == tmp_path / "moon_sync_outbox"
+
+
 # ---------------------------------------------------------------- inbox
 
 def test_inbox_baseline_then_one_answer_per_note(tmp_path):
@@ -177,7 +183,7 @@ def test_inbox_baseline_then_one_answer_per_note(tmp_path):
     inbox_calls = [c for c in sp.calls if c.get("note", "").endswith(".md")]
     assert [c["note"] for c in inbox_calls] == ["n1-from-MAIN-QUESTION-y.md"]
     c = inbox_calls[0]
-    assert c["model"] == "sonnet" and c["effort"] == "medium" and c["writes_code"] is False
+    assert c["model"] == "sonnet" and c["effort"] == "low" and c["writes_code"] is False
     assert "governor" not in c and c["stdin"] is True
     replies = list(outbox.glob("*-from-EW-ANSWER-re-n1-from-MAIN-QUESTION-y.md"))
     assert len(replies) == 1
@@ -196,11 +202,67 @@ def test_inbox_failed_answer_is_reoffered(tmp_path):
                     {"rc": 0, "error": None, "result": "fine"}])
     d = deps(root, spawn=sp)
     ew_loop.tick(deps=d, no_push=True)
-    (inbox / "a-from-MAIN-ORDER-q.md").write_text("# From MAIN - ORDER\ndo\n")
+    (inbox / "a-from-MAIN-QUESTION-q.md").write_text("# From MAIN - QUESTION\ndo\n")
     ew_loop.tick(deps=d, no_push=True)
     assert not list(outbox.iterdir())
     ew_loop.tick(deps=d, no_push=True)
     assert len(list(outbox.iterdir())) == 1
+
+
+def _inbox_root(tmp_path, roadmap="", local_extra=None):
+    inbox, outbox = tmp_path / "in", tmp_path / "out"
+    inbox.mkdir()
+    outbox.mkdir()
+    loop = {"inbox_dir": str(inbox), "outbox_dir": str(outbox)}
+    loop.update(local_extra or {})
+    root = make_root(tmp_path, roadmap=roadmap, handoff="", local={"loop": loop})
+    return root, inbox, outbox
+
+
+def test_order_note_escalates_to_lane_item_then_answers_after_merge(tmp_path):
+    root, inbox, outbox = _inbox_root(tmp_path, roadmap=ROADMAP)
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "# From EW - ANSWER\ndone"}])
+    d = deps(root, spawn=sp)
+    ew_loop.tick(deps=d, no_push=True)  # baseline
+    name = "b-from-MAIN-ORDER-to-EW-harden.md"
+    (inbox / name).write_text("# From MAIN - ORDER\nadd dependabot\n")
+    ew_loop.tick(deps=d, no_push=True)
+    oid = ew_loop.order_id(name)
+    assert [c for c in sp.calls if c.get("note") == name] == []  # no ack spawn
+    assert d.seen["launch"][-1] == oid
+    assert ew_loop.Tick(d).work_list()[1][0]["id"] == oid  # orders first
+    rec = ew_loop.Items(root).get(oid)
+    assert rec["kind"] == "order" and "add dependabot" in rec["prompt"]
+    assert not list(outbox.iterdir())
+    rec.update(state="merged", commit="abc123", verdict="PASS", rounds=1)
+    ew_loop.Items(root).put(rec)
+    ew_loop.tick(deps=d, no_push=True)
+    calls = [c for c in sp.calls if c.get("note") == name]
+    assert len(calls) == 1 and "abc123" in calls[0]["prompt"]
+    assert len(list(outbox.glob("*-re-b-from-MAIN-ORDER-to-EW-harden.md"))) == 1
+    ew_loop.tick(deps=d, no_push=True)
+    assert len([c for c in sp.calls if c.get("note") == name]) == 1
+
+
+def test_daily_note_cap_defers_answers(tmp_path):
+    root, inbox, outbox = _inbox_root(tmp_path, local_extra={"max_notes_per_day": 1})
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "ok"}] * 3)
+    d = deps(root, spawn=sp)
+    ew_loop.tick(deps=d, no_push=True)
+    (inbox / "q1-from-MAIN-QUESTION-a.md").write_text("q1\n")
+    (inbox / "q2-from-MAIN-QUESTION-b.md").write_text("q2\n")
+    doc = ew_loop.tick(deps=d, no_push=True)
+    assert len(list(outbox.iterdir())) == 1
+    assert any("daily note cap 1" in s for s in doc["log"])
+
+
+def test_priority_rows_dispatch_first(tmp_path):
+    rm = ROADMAP.replace("| 013 | Season pass tracker | [ ] open |",
+                         "| 013 | Season pass tracker | [ ] open (priority) |")
+    root = make_root(tmp_path, roadmap=rm, handoff="")
+    d = deps(root)
+    ew_loop.tick(deps=d, no_push=True)
+    assert d.seen["launch"][:2] == ["013", "012"]
 
 
 # ---------------------------------------------------------------- dispatch
@@ -266,7 +328,7 @@ def test_usage_limit_result_sets_backoff_and_pauses(tmp_path):
     sp = FakeSpawn([{"rc": 1, "error": None, "result": "Claude usage limit reached"}])
     d = deps(root, spawn=sp)
     ew_loop.tick(deps=d, no_push=True)
-    (inbox / "a-from-MAIN-ORDER-q.md").write_text("# From MAIN - ORDER\ndo\n")
+    (inbox / "a-from-MAIN-QUESTION-q.md").write_text("# From MAIN - QUESTION\ndo\n")
     d.seen["launch"].clear()
     ew_loop.Items(root).dir.mkdir(parents=True, exist_ok=True)
     for p in ew_loop.Items(root).dir.glob("*.json"):

@@ -37,7 +37,8 @@ SEED_CONFIG = ("config/leak_needles.json", "config/local.json")
 # plus the gate commands below; commits and merges are done by the main session.
 CODE_EXTRA = ("--permission-mode", "acceptEdits", "--allowedTools",
               "Bash(python -m pytest:*),Bash(npm test:*),Bash(node --test:*),"
-              "Bash(python tools/leak_sweep.py:*)")
+              "Bash(python tools/leak_sweep.py:*),Bash(python -m ruff:*),"
+              "Bash(python tools/ocr_bench.py:*)")
 sys.path.insert(0, str(ROOT / "tools"))
 import eta  # noqa: E402
 

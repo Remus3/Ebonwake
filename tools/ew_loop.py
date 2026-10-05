@@ -43,6 +43,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+INBOX_REL = "moon_sync_inbox"
+OUTBOX_REL = "moon_sync_outbox"
 sys.path.insert(0, str(ROOT / "tools"))
 import eta  # noqa: E402
 import ew_lane  # noqa: E402
@@ -54,6 +56,13 @@ LOCK_REL = CONTROL_REL / "loop.lock"
 BACKOFF_REL = CONTROL_REL / "backoff.json"
 ITEMS_REL = CONTROL_REL / "loop_items"
 WATCH_REL = CONTROL_REL / "loop_inbox_watch.json"
+ORDERS_REL = CONTROL_REL / "loop_orders.json"
+# Responder diet (operator 2026-10-05): an ORDER / FIX / RULING note escalates
+# to a lane work item (a lane does the work, the loop answers after merge);
+# any other note gets one sonnet low-effort triage answer. At most
+# loop.max_notes_per_day answers are written per local day.
+ESCALATE_RX = re.compile(r"-(ORDER|FIX|RULING)-", re.I)
+DEFAULT_MAX_NOTES = 12
 PROGRESS_TASK = "loop"
 TICK_S = 900
 HEADROOM = 3
@@ -123,10 +132,13 @@ def eta_label(seconds):
 def load_config(root):
     doc = read_json(Path(root) / "config" / "local.json", {}) or {}
     loop = doc.get("loop") if isinstance(doc.get("loop"), dict) else {}
-    return {"inbox_dir": loop.get("inbox_dir") or None,
-            "outbox_dir": loop.get("outbox_dir") or None,
+    # Fleet convention: MAIN byte-copies notes into <root>/moon_sync_inbox
+    # (gitignored); replies go to <root>/moon_sync_outbox. Config overrides.
+    return {"inbox_dir": loop.get("inbox_dir") or str(Path(root) / INBOX_REL),
+            "outbox_dir": loop.get("outbox_dir") or str(Path(root) / OUTBOX_REL),
             "max_new_plans_per_day": int(loop.get("max_new_plans_per_day",
                                                   DEFAULT_MAX_PLANS)),
+            "max_notes_per_day": int(loop.get("max_notes_per_day", DEFAULT_MAX_NOTES)),
             "lane_timeout_s": int(loop.get("lane_timeout_s", LANE_TIMEOUT_S)),
             "tick_s": int(loop.get("tick_s", TICK_S))}
 
@@ -280,13 +292,29 @@ def fix_prompt(item, rnd, findings):
             + "\n\nFindings:\n" + "\n".join(findings)[:8000])
 
 
-def inbox_prompt(name, text):
+def inbox_prompt(name, text, context=None):
     return ("You are the Ebonwake (EW) session answering ONE channel note. Reply with the "
             "note body only: markdown, ASCII, first line '# From EW - ANSWER re " + name
-            + "'. Answer what is asked; for an order that needs repo changes, acknowledge "
-            "it and state that the EW loop will plan it - do not change files. Never put a "
-            "directory name, account id or email in the reply.\n\n--- NOTE " + name
-            + " ---\n" + text[:NOTE_MAX] + "\n--- END NOTE ---")
+            + "'. Answer what is asked; do not change files. Never put a directory name, "
+            "account id or email in the reply." + (" " + context if context else "")
+            + "\n\n--- NOTE " + name + " ---\n" + text[:NOTE_MAX] + "\n--- END NOTE ---")
+
+
+def order_id(name):
+    return "N" + hashlib.sha1(name.encode("utf-8")).hexdigest()[:6]
+
+
+def order_prompt(order):
+    return ("You are an Ebonwake (EW) build lane in a detached git worktree. Read "
+            "CLAUDE.md first. Carry out the channel ORDER note below in THIS tree. Do "
+            "every item that needs only repo files. An item needing a password, an OAuth "
+            "grant, a download, a tool outside your allow list or a physical act is left "
+            "undone and listed as BLOCKED (one line, the reason) in a section 'Order "
+            + order["id"] + " - blocked items' at the end of docs/plans/ROADMAP.md. Do not "
+            "write the ANSWER note; the loop writes it after merge. "
+            + GATES.format(task=order["id"])
+            + "\n\n--- NOTE " + order["note"] + " ---\n" + order.get("text", "")[:NOTE_MAX]
+            + "\n--- END NOTE ---")
 
 
 # ---------------------------------------------------------------- item records
@@ -496,9 +524,9 @@ class Tick:
             return
 
         def deliver(names):
-            for name in names:
-                if not self.answer(inbox / name, outbox):
-                    return {"delivered": False, "detail": f"stopped at {name}"}
+            pending = [n for n in names if not self.answer(inbox / n, outbox)]
+            if pending:  # left unseen: run_source re-offers them next tick
+                return {"delivered": False, "detail": f"{len(pending)} pending"}
             return {"delivered": True}
 
         res = self.d.watch.run_source(state, "inbox", fetch, deliver,
@@ -516,10 +544,26 @@ class Tick:
         stem = Path(name).stem
         if outbox.is_dir() and any(p.name.endswith(f"-re-{stem}.md") for p in outbox.iterdir()):
             return True
+        context = None
+        if ESCALATE_RX.search(name):
+            oid = order_id(name)
+            rec = self.items.get(oid)
+            if not rec or rec.get("state") not in DONE_STATES + ("adjudicate",):
+                self.queue_order(oid, name, text)
+                return False  # answered after the lane item is done
+            context = (f"EW's loop carried this order out as lane item {oid}: state "
+                       f"{rec.get('state')}, verdict {rec.get('verdict', 'none')}, "
+                       f"refute-rounds {rec.get('rounds', 0)}/{MAX_ROUNDS}, commit "
+                       f"{rec.get('commit', 'none')}. Mark each item DONE in that commit, "
+                       "or BLOCKED / NOT-APPLICABLE with the reason.")
+        if self.notes_today(outbox) >= self.cfg["max_notes_per_day"]:
+            self.step(f"inbox: daily note cap {self.cfg['max_notes_per_day']} reached")
+            return False
         if self.blocked():
             return False
-        line = self.spawn(inbox_prompt(name, text), note=name, writes_code=False,
-                          model="sonnet", effort=self.d.pick_effort(name),
+        line = self.spawn(inbox_prompt(name, text, context), note=name, writes_code=False,
+                          model="sonnet",
+                          effort=self.d.pick_effort(name) if context else "low",
                           timeout=1800)
         reply = (line or {}).get("result")
         if not line or line.get("rc") != 0 or not reply:
@@ -533,6 +577,25 @@ class Tick:
             return False
         self.step(f"inbox answered: {name} (1/1 reached)")
         return True
+
+    def notes_today(self, outbox):
+        day = _dt.datetime.fromtimestamp(self.d.clock()).strftime("%Y%m%d")
+        if not outbox.is_dir():
+            return 0
+        return sum(1 for p in outbox.iterdir()
+                   if p.name.startswith(day) and f"-from-{CODE}-ANSWER-" in p.name)
+
+    def orders(self):
+        doc = read_json(self.root / ORDERS_REL, {}) or {}
+        return [o for o in doc.get("orders", []) if isinstance(o, dict) and o.get("id")]
+
+    def queue_order(self, oid, name, text):
+        if self.dry or any(o["id"] == oid for o in self.orders()):
+            return
+        doc = {"orders": self.orders() + [{"id": oid, "note": name, "text": text,
+                                           "title": ascii_text(name, 120)}]}
+        atomic_write(self.root / ORDERS_REL, json.dumps(doc, indent=1))
+        self.step(f"inbox escalated: {name} -> lane item {oid}")
 
     # -- lanes in flight
     def reap_lost(self):
@@ -684,8 +747,14 @@ class Tick:
             hand = handoff_items((main / f"{CODE}-NEXT-SESSION.txt").read_text(encoding="utf-8"))
         except OSError:
             hand = []
-        work = [{"id": r["id"], "kind": "plan", "title": r["title"],
-                 "label": f"plan {r['id']}: {r['title']}"} for r in rows if r["open"]]
+        # orders first, then ROADMAP rows whose status says "priority", then the rest
+        open_rows = sorted((r for r in rows if r["open"]),
+                           key=lambda r: "priority" not in r["status"].lower())
+        work = [{"id": o["id"], "kind": "order", "title": o["title"], "note": o["note"],
+                 "label": f"order {o['id']}: {o['title']}", "prompt": order_prompt(o)}
+                for o in self.orders()]
+        work += [{"id": r["id"], "kind": "plan", "title": r["title"],
+                  "label": f"plan {r['id']}: {r['title']}"} for r in open_rows]
         skipped = []
         for h in hand:
             if h["skip"]:
