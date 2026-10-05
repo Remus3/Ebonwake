@@ -54,7 +54,9 @@ function createOverlay() {
   overlay.setAlwaysOnTop(true, 'screen-saver');
   overlay.setIgnoreMouseEvents(true, { forward: false });
   overlay.setVisibleOnAllWorkspaces(true);
-  overlay.loadFile(path.join(__dirname, 'overlay', 'index.html'));
+  // Opt-in widgets (spec section 3) ride in the query; the overlay has no bridge.
+  const widgets = core.overlayWidgets(readConfig());
+  overlay.loadFile(path.join(__dirname, 'overlay', 'index.html'), { query: core.widgetsQuery(widgets) });
   overlay.on('closed', function () { overlay = null; });
 }
 

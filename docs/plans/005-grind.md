@@ -41,6 +41,29 @@ confirm), Spots (avg silver/h, sorted), Buffs (one-tap arm with minutes, live
 countdowns). Overlay: active session elapsed + soonest-ending buff (opt-in
 widgets per spec section 3; default on). Fits 1280x800.
 
+### Slice B deviations (adjudicated 2026-10-04)
+
+- Widget opt-in. Decision: `config/local.json` `overlay.widgets`
+  `{grindSession, grindBuff}` (only a literal false turns one off; default on);
+  `app/main.js` reads it and passes it to the overlay as a `loadFile` query
+  (`ewcore.overlayWidgets` / `widgetsQuery` / `widgetsFromQuery`). Alternatives:
+  always-on rows (ignores spec section 3); a preload on the overlay (breaks the
+  no-bridge overlay floor). Why: the only config path that keeps the overlay
+  bridge-less. Touches `app/main.js` and `config/local.example.json`, outside
+  the slice file list. Reverses if: an overlay settings UI lands.
+- Spot reference. Decision: `start` and `log.spot` send the spot `id` (falling
+  back to `name` when a spot has no id); sessions/active resolve `spot` through
+  `spots[].id` for display and fall back to the raw value, so a server that
+  stores names also renders. Alternatives: send names. Why: `spots` carries
+  ids and sessions reference a spot. Reverses if: slice A keys by name - then
+  `spotRef` in `grind.js` returns `s.name`.
+- Buff list. GET returns only armed buffs, so the Buffs card merges them with
+  client defaults (`ewcore.BUFF_DEFAULTS`, the plan's buff kinds, minutes
+  capped at 1440) by case-insensitive name. Session / buff ids are accepted as
+  a short string or a whole number by `validGrindBody`.
+- `app/test/progress.test.js` route check loosened from an exact list to
+  membership (the exact list now lives in `grind.test.js`).
+
 ## Gates
 
 pytest + node --test + leak sweep; verifier per merged plan, refute rounds

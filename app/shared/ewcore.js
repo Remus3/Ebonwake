@@ -521,9 +521,208 @@
     return rows;
   }
 
+  // ---- Grind (plan 005) ----
+  // Elapsed clocks and buff countdowns run locally between polls: from the
+  // absolute stamps when parseable, else from the server's seconds minus the
+  // time since that fetch.
+
+  const NAME_MAX = 60;
+  const MINUTES = [1, 1440];
+  const SILVER = [0, 1e13];
+  const TRASH = [0, 1e6];
+
+  // Operator-editable defaults; minutes capped by the server's 1440 limit.
+  const BUFF_DEFAULTS = [
+    { name: 'Combat XP scroll', minutes: 30 },
+    { name: 'Skill XP scroll', minutes: 30 },
+    { name: 'Item drop scroll', minutes: 60 },
+    { name: 'Hot Time', minutes: 60 },
+    { name: 'Value Pack', minutes: 1440 },
+    { name: 'Old Moon book', minutes: 60 },
+    { name: 'Kamasylve blessing', minutes: 1440 }
+  ];
+
+  function silverPerHour(silver, minutes) {
+    if (!isNum(silver) || silver < 0 || !isNum(minutes) || minutes <= 0) return null;
+    return Math.floor(silver * 60 / minutes);
+  }
+
+  function fmtElapsed(s) {
+    if (!isNum(s)) return '-';
+    let v = Math.max(0, Math.floor(s));
+    const h = Math.floor(v / 3600);
+    v -= h * 3600;
+    const m = Math.floor(v / 60);
+    return h + ':' + String(m).padStart(2, '0') + ':' + String(v - m * 60).padStart(2, '0');
+  }
+
+  function sinceFetch(fetchedMs, now) { return Math.max(0, (now - fetchedMs) / 1000); }
+
+  // Whole seconds the active session has run, or null when none is active.
+  function liveElapsed(active, fetchedMs, now) {
+    if (!plainObject(active)) return null;
+    const t = typeof active.started === 'string' ? Date.parse(active.started) : NaN;
+    if (isFinite(t)) return Math.max(0, Math.floor((now - t) / 1000));
+    if (!isNum(active.elapsed_s)) return null;
+    return Math.max(0, Math.floor(active.elapsed_s + sinceFetch(fetchedMs, now)));
+  }
+
+  function buffLeft(b, fetchedMs, now) {
+    const t = typeof b.ends === 'string' ? Date.parse(b.ends) : NaN;
+    if (isFinite(t)) return Math.floor((t - now) / 1000);
+    if (isNum(b.left_s)) return Math.floor(b.left_s - sinceFetch(fetchedMs, now));
+    return null;
+  }
+
+  // Armed buffs with a live left_s, expired dropped, soonest first. Copies.
+  function buffsLive(buffs, fetchedMs, now) {
+    return (Array.isArray(buffs) ? buffs : []).filter(plainObject).map(function (b) {
+      return Object.assign({}, b, { left_s: buffLeft(b, fetchedMs, now) });
+    }).filter(function (b) { return b.left_s !== null && b.left_s > 0; })
+      .sort(function (a, b) { return a.left_s - b.left_s; });
+  }
+
+  function soonestBuff(buffs, fetchedMs, now) {
+    return buffsLive(buffs, fetchedMs, now)[0] || null;
+  }
+
+  function defaultMinutes(name) {
+    const n = String(name).toLowerCase();
+    const d = BUFF_DEFAULTS.filter(function (x) { return x.name.toLowerCase() === n; })[0];
+    return d ? d.minutes : 60;
+  }
+
+  // Buffs card rows: armed buffs (soonest first) then every default not armed.
+  function buffRows(buffs, fetchedMs, now) {
+    const armed = buffsLive(buffs, fetchedMs, now).filter(function (b) { return typeof b.name === 'string'; })
+      .map(function (b) {
+        return { id: b.id === undefined ? null : b.id, name: b.name, left_s: b.left_s, minutes: defaultMinutes(b.name) };
+      });
+    const seen = armed.map(function (b) { return b.name.toLowerCase(); });
+    const idle = BUFF_DEFAULTS.filter(function (d) { return seen.indexOf(d.name.toLowerCase()) < 0; })
+      .map(function (d) { return { id: null, name: d.name, left_s: null, minutes: d.minutes }; });
+    return armed.concat(idle);
+  }
+
+  // Best silver/h first; spots without an average last.
+  function sortSpots(spots) {
+    const v = function (s) { return isNum(s.silver_per_h) ? s.silver_per_h : -1; };
+    return (Array.isArray(spots) ? spots : []).filter(plainObject).slice()
+      .sort(function (a, b) { return v(b) - v(a); });
+  }
+
+  function spotName(spots, ref) {
+    if (ref === null || ref === undefined) return '?';
+    const s = (Array.isArray(spots) ? spots : []).filter(function (x) { return plainObject(x) && x.id === ref; })[0];
+    return s && typeof s.name === 'string' ? s.name : String(ref);
+  }
+
+  function validName(t) {
+    return typeof t === 'string' && t.trim().length > 0 && t.length <= NAME_MAX &&
+      !/[\u0000-\u001f\u007f]/.test(t);
+  }
+
+  // Session / buff ids: a short string or a whole number (server picks).
+  function validRef(v) {
+    return (typeof v === 'string' && v.length > 0 && v.length <= NAME_MAX && !/[\u0000-\u001f\u007f]/.test(v)) ||
+      isInt(v, 0);
+  }
+
+  function exact(o, keys) {
+    return plainObject(o) && Object.keys(o).length === keys.length && onlyKeys(o, keys);
+  }
+
+  function validLoot(v) { return inRange(v.silver, SILVER) && inRange(v.trash, TRASH); }
+
+  // Exact shape check for POST /api/grind bodies (main-process IPC guard).
+  function validGrindBody(body) {
+    if (!plainObject(body)) return false;
+    const keys = Object.keys(body);
+    if (keys.length !== 1) return false;
+    const k = keys[0];
+    const v = body[k];
+    if (k === 'start' || k === 'add_spot') return validName(v);
+    if (k === 'delete' || k === 'clear_buff') return validRef(v);
+    if (k === 'stop') return exact(v, ['silver', 'trash']) && validLoot(v);
+    if (k === 'log') {
+      return exact(v, ['spot', 'minutes', 'silver', 'trash']) && validName(v.spot) &&
+        inRange(v.minutes, MINUTES) && validLoot(v);
+    }
+    if (k === 'buff') return exact(v, ['name', 'minutes']) && validName(v.name) && inRange(v.minutes, MINUTES);
+    return false;
+  }
+
+  // Grind form strings -> POST body, or an error for the operator.
+  // kind: stop {silver, trash} | log {spot, minutes, silver, trash} |
+  // buff {name, minutes} | spot {name}. Blank silver / trash = 0.
+  function parseGrindForm(kind, form) {
+    const f = form || {};
+    const blank = function (k) { return f[k] === undefined || f[k] === null || String(f[k]).trim() === ''; };
+    const loot = function () {
+      const silver = blank('silver') ? 0 : wholeIn(f.silver, SILVER);
+      if (silver === null) return { error: 'silver must be a whole number 0-10000000000000' };
+      const trash = blank('trash') ? 0 : wholeIn(f.trash, TRASH);
+      if (trash === null) return { error: 'trash must be a whole number 0-1000000' };
+      return { silver: silver, trash: trash };
+    };
+    const minutes = function () { return wholeIn(f.minutes, MINUTES); };
+    const minErr = 'minutes must be a whole number ' + MINUTES[0] + '-' + MINUTES[1];
+    const name = function (k) { return typeof f[k] === 'string' ? f[k].trim() : ''; };
+    if (kind === 'stop') {
+      const l = loot();
+      return l.error ? { ok: false, error: l.error } : { ok: true, body: { stop: l } };
+    }
+    if (kind === 'log') {
+      if (!validName(f.spot)) return { ok: false, error: 'pick a spot' };
+      const m = minutes();
+      if (m === null) return { ok: false, error: minErr };
+      const l = loot();
+      if (l.error) return { ok: false, error: l.error };
+      return { ok: true, body: { log: { spot: f.spot, minutes: m, silver: l.silver, trash: l.trash } } };
+    }
+    if (kind === 'buff') {
+      if (!validName(name('name'))) return { ok: false, error: 'buff name: 1-' + NAME_MAX + ' plain characters' };
+      const m = minutes();
+      if (m === null) return { ok: false, error: minErr };
+      return { ok: true, body: { buff: { name: name('name'), minutes: m } } };
+    }
+    if (kind === 'spot') {
+      const n = name('name');
+      if (!validName(n)) return { ok: false, error: 'spot name: 1-' + NAME_MAX + ' plain characters' };
+      return { ok: true, body: { add_spot: n } };
+    }
+    return { ok: false, error: 'unknown action' };
+  }
+
+  // Overlay widgets (spec section 3: each opt-in, default on). Main reads
+  // config.overlay.widgets and hands the overlay a query string; only a literal
+  // false turns a widget off.
+  const WIDGETS = ['grindSession', 'grindBuff'];
+
+  function overlayWidgets(config) {
+    const w = config && plainObject(config.overlay) && plainObject(config.overlay.widgets) ? config.overlay.widgets : {};
+    const out = {};
+    WIDGETS.forEach(function (k) { out[k] = w[k] !== false; });
+    return out;
+  }
+
+  function widgetsQuery(widgets) {
+    const out = {};
+    WIDGETS.forEach(function (k) { out[k] = widgets && widgets[k] === false ? '0' : '1'; });
+    return out;
+  }
+
+  function widgetsFromQuery(search) {
+    const q = new URLSearchParams(typeof search === 'string' ? search : '');
+    const out = {};
+    WIDGETS.forEach(function (k) { out[k] = q.get(k) !== '0'; });
+    return out;
+  }
+
   // The only routes the dashboard bridge forwards, each with its body check.
   const POST_VALIDATORS = {
-    '/api/market/watch': validWatchBody, '/api/today': validTodayBody, '/api/progress': validProgressBody
+    '/api/market/watch': validWatchBody, '/api/today': validTodayBody, '/api/progress': validProgressBody,
+    '/api/grind': validGrindBody
   };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
@@ -551,6 +750,20 @@
     parseTrackForm: parseTrackForm,
     profilePill: profilePill,
     profileRows: profileRows,
+    BUFF_DEFAULTS: BUFF_DEFAULTS,
+    silverPerHour: silverPerHour,
+    fmtElapsed: fmtElapsed,
+    liveElapsed: liveElapsed,
+    buffsLive: buffsLive,
+    soonestBuff: soonestBuff,
+    buffRows: buffRows,
+    sortSpots: sortSpots,
+    spotName: spotName,
+    validGrindBody: validGrindBody,
+    parseGrindForm: parseGrindForm,
+    overlayWidgets: overlayWidgets,
+    widgetsQuery: widgetsQuery,
+    widgetsFromQuery: widgetsFromQuery,
     validPost: validPost,
     POST_ROUTES: POST_ROUTES,
     fmtSilver: fmtSilver,
