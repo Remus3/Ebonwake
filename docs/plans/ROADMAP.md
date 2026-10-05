@@ -62,7 +62,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 055 | Jetina boss-crystal planner + Caphras cost calculator | [ ] open |
 | 056 | Black Spirit's Adventure dice timer from logged-in time (overlay) | [ ] open |
 | 057 | Deadeye notes autosave + safe open-in-browser for source links | [ ] open |
-| 058 | Loop resolves its own merge conflicts: re-dispatch a resolve lane | [ ] open (priority) |
+| 058 | Loop resolves its own merge conflicts: re-dispatch a resolve lane | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 
 Deep dive + UX audit 2026-10-05 session 4 (research 0003-0005): plans 019-057,
 39 plans from 21 + 25 + 15 candidates and 30 UX findings. Ordering rationale:

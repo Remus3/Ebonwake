@@ -43,3 +43,40 @@ row-level resolver and never dispatches a resolve lane.
 Reverses if: lane conflict rate drops to near zero (e.g. lanes rebased per
 dispatch) or resolve lanes are measured merging broken features past the
 gates.
+
+## As-built deviations
+
+1. The worker starts the merge; the lane leaves it uncommitted.
+   Decision: `lane_worker` runs `git merge --no-ff --no-commit
+   refs/ew/keep/<id>` in the claimed worktree (clean, detached at main)
+   just before the spawn; the lane only resolves and leaves the merge in
+   progress, and `process()` -> `commit()` concludes it (a two-parent
+   commit, so the kept commit becomes an ancestor of what merges).
+   Alternatives: the lane runs the merge and commits (plan text); add
+   `git merge` / `git commit` to the lane allow list. Why: `CODE_EXTRA`
+   has no git tools and every lane prompt says "Do NOT commit"; a
+   committed, clean worktree would read as `no-change` in `process()`.
+   Reverses if: lanes get git tools and `process()` learns to review a
+   lane-made commit.
+2. Resolve runs go first of all (before ORDER items too), not only before
+   new plan rows. Why: an order lane built on stale main conflicts the
+   same way. Reverses if: an order is measured waiting on a resolve run.
+3. Extra review check: any file a resolve run changed that still holds a
+   `<<<<<<<` / `>>>>>>>` line is a finding (`commit()`'s `git add -A`
+   would otherwise stage it as resolved). Reverses if: never - it is free.
+4. `settle_conflicts()` each tick: a merge-conflict whose commit is already
+   in main (resolved by hand, as session 5 did) becomes `merged` and drops
+   its ref; a merge-conflict recorded before this plan gets its ref
+   created from `rec["commit"]` when that commit still exists. Why: without
+   it the loop would dispatch resolve lanes for already-merged work.
+   Reverses if: no pre-058 or hand-merged records remain.
+5. A resolve dispatch starts its own `attempts` count (refused / lost
+   resolve runs are re-dispatched as resolve runs, kind kept); a paused
+   resolve run gives its `resolve_runs` back like its attempt. Records
+   keep `base_kind`, so the ROADMAP flip at merge and the merge message
+   (`merge <lane>: <label>`) are the original item's. failed / adjudicate
+   / gave-up records keep their ref for a session; any record drops it
+   once the commit is in main.
+6. The merge-conflict row of an item out of resolve runs keeps showing
+   `merge-conflict`; when nothing else is open the tick still idles into
+   the daily deep-dive (unchanged pre-058 behaviour).

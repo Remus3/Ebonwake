@@ -1588,3 +1588,192 @@ def test_lane_dirty_without_a_worktree_in_its_error_stays(tmp_path):
     ew_loop.tick(deps=d, no_push=True)
     assert ew_loop.Items(root).get("012")["state"] == "lane-dirty"
     assert "012" not in d.seen["launch"]
+
+
+# ---------------------------------------------------------------- plan 058: resolve lanes
+
+def _conflict_world(tmp_path):
+    """012 merges, 013 conflicts on f.txt (finished() runs ids in order)."""
+    root = _two_lane_world(tmp_path, lambda wt: (wt / "f.txt").write_text("a\n"),
+                           lambda wt: (wt / "f.txt").write_text("b\n"))
+    return root, ew_loop.Items(root)
+
+
+def _free(root, tmp_path, **over):
+    return deps(root, git=real_git, lane_worktree=lambda i: tmp_path / "none" / str(i),
+                **over)
+
+
+def keep_refs(root):
+    return git(root, "for-each-ref", "--format=%(refname) %(objectname)", "refs/ew/keep")
+
+
+def test_conflict_keeps_the_lane_commit_under_a_ref(tmp_path):
+    root, items = _conflict_world(tmp_path)
+    rec = items.get("013")
+    assert rec["state"] == "merge-conflict" and rec["keep_ref"] == "refs/ew/keep/013"
+    assert keep_refs(root) == f"refs/ew/keep/013 {rec['commit']}"
+    assert items.get("012")["state"] == "merged"
+
+
+def test_roadmap_only_conflict_never_keeps_a_ref(tmp_path):
+    def a(wt):
+        (wt / "a.txt").write_text("a\n")
+        _flip_in(wt, "012")
+
+    def b(wt):
+        (wt / "b.txt").write_text("b\n")
+        _flip_in(wt, "013")
+
+    root = _two_lane_world(tmp_path, a, b)
+    assert keep_refs(root) == ""
+    d = _free(root, tmp_path)
+    ew_loop.tick(deps=d, no_push=True)
+    assert not {"012", "013"} & set(d.seen["launch"])  # idle deep-dive only
+    assert all(r.get("kind") != "resolve" for r in ew_loop.Items(root).all().values())
+
+
+def test_next_tick_dispatches_a_resolve_lane_first(tmp_path):
+    root, items = _conflict_world(tmp_path)
+    rm = root / "docs/plans/ROADMAP.md"
+    rm.write_text(rm.read_text() + "| 014 | Other | [ ] open |\n", newline="\n")
+    git(root, "commit", "-q", "-am", "row 014")
+    d = _free(root, tmp_path)
+    ew_loop.tick(deps=d, no_push=True)
+    assert d.seen["launch"][:2] == ["013", "014"] and d.seen["launch"].count("013") == 1
+    rec = items.get("013")
+    assert rec["kind"] == "resolve" and rec["base_kind"] == "plan"
+    assert rec["resolve_runs"] == 1 and rec["state"] == "dispatched"
+    assert rec["keep_ref"] == "refs/ew/keep/013" and rec["attempts"] == 1
+    assert "git merge --no-ff --no-commit refs/ew/keep/013" in rec["prompt"]
+    assert "BOTH" in rec["prompt"] and "As-built deviations" in rec["prompt"]
+    assert "Do NOT edit docs/plans/ROADMAP.md" in rec["prompt"]
+    row = [r for r in progress(root)["checklist"] if r["id"] == "013"][0]
+    assert row["state"] == "resolving, run 1/2"
+
+
+def _run_resolve(root, tmp_path, items, name, content):
+    """The lane worker for a dispatched resolve item; the fake lane resolves
+    f.txt to `content`. Returns the merge state the lane saw."""
+    wt = tmp_path / "ew-worktrees" / name
+    git(root, "worktree", "add", "-q", "--detach", str(wt), "main")
+    saw = {}
+
+    def lane(kw):
+        cwd = Path(kw["cwd"])
+        saw["merging"] = real_git(["rev-parse", "-q", "--verify", "MERGE_HEAD"],
+                                  cwd).returncode == 0
+        saw["markers"] = "<<<<<<<" in (cwd / "f.txt").read_text()
+        (cwd / "f.txt").write_text(content)
+        return {"rc": 0, "error": None, "result": "resolved"}
+
+    sp = FakeSpawn([lane])
+
+    def run_lane(lane_name, prompt, spawn=None, root=None, **kw):
+        line = spawn(root, "EW", prompt, cwd=wt)
+        return dict(line, worktree=str(wt))
+
+    assert ew_loop.lane_worker("013", deps=deps(root, spawn=sp, git=real_git),
+                               run_lane=run_lane) == 0
+    assert items.get("013")["state"] == "ran"
+    return saw
+
+
+def _review(root, verdicts=1):
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: PASS"}] * verdicts)
+    return deps(root, spawn=sp, git=real_git,
+                lane_state=lambda: [{"index": i, "state": "RUNNING", "lane": n}
+                                    for i, n in enumerate(("build", "data", "review"))])
+
+
+def test_resolve_lane_merges_through_the_normal_path_and_drops_the_ref(tmp_path):
+    root, items = _conflict_world(tmp_path)
+    kept = items.get("013")["commit"]
+    ew_loop.tick(deps=_free(root, tmp_path), no_push=True)
+    saw = _run_resolve(root, tmp_path, items, "lane-2", "a\nb\n")
+    assert saw == {"merging": True, "markers": True}
+    ew_loop.tick(deps=_review(root), no_push=True)
+    rec = items.get("013")
+    assert rec["state"] == "merged" and rec["verdict"] == "PASS"
+    assert "keep_ref" not in rec and keep_refs(root) == ""
+    assert (root / "f.txt").read_text() == "a\nb\n"
+    assert git(root, "merge-base", "--is-ancestor", kept, "main") == ""
+    assert git(root, "log", "-1", "--format=%s", "main") == "merge lane-2: plan 013: t"
+    assert "| 013 | Season pass tracker | [x] done" in (root / "docs/plans/ROADMAP.md").read_text()
+    assert git(root, "status", "--porcelain") == ""
+
+
+def test_second_conflict_reenters_resolve_then_caps(tmp_path):
+    root, items = _conflict_world(tmp_path)
+    ew_loop.tick(deps=_free(root, tmp_path), no_push=True)
+    _run_resolve(root, tmp_path, items, "lane-2", "a\nb\n")
+    (root / "f.txt").write_text("c\n")  # main moves on under the resolve lane
+    git(root, "commit", "-q", "-am", "main moves")
+    ew_loop.tick(deps=_review(root), no_push=True)
+    rec = items.get("013")
+    assert rec["state"] == "merge-conflict" and rec["resolve_runs"] == 1
+    assert keep_refs(root) == f"refs/ew/keep/013 {rec['commit']}"
+    d = _free(root, tmp_path)
+    ew_loop.tick(deps=d, no_push=True)
+    assert d.seen["launch"] == ["013"] and items.get("013")["resolve_runs"] == 2
+    items.put(dict(items.get("013"), state="merge-conflict"))
+    d = _free(root, tmp_path)
+    ew_loop.tick(deps=d, no_push=True)
+    assert "013" not in d.seen["launch"] and items.get("013")["state"] == "merge-conflict"
+    row = [r for r in progress(root)["checklist"] if r["id"] == "013"][0]
+    assert row["state"] == "merge-conflict"
+
+
+def test_lost_resolve_lane_is_redispatched_as_resolve(tmp_path):
+    root, items = _conflict_world(tmp_path)
+    ew_loop.tick(deps=_free(root, tmp_path), no_push=True)
+    items.put(dict(items.get("013"), state="lost"))
+    d = _free(root, tmp_path)
+    ew_loop.tick(deps=d, no_push=True)
+    rec = items.get("013")
+    assert d.seen["launch"] == ["013"] and rec["kind"] == "resolve"
+    assert rec["attempts"] == 2 and "refs/ew/keep/013" in rec["prompt"]
+
+
+def test_hand_merged_conflict_settles_as_merged_and_drops_the_ref(tmp_path):
+    root, items = _conflict_world(tmp_path)
+    git(root, "merge", "-q", "--no-ff", "-X", "theirs", "-m", "by hand",
+        items.get("013")["commit"])
+    d = _free(root, tmp_path)
+    ew_loop.tick(deps=d, no_push=True)
+    assert items.get("013")["state"] == "merged" and keep_refs(root) == ""
+    assert "013" not in d.seen["launch"]
+
+
+def test_legacy_conflict_without_a_ref_gets_one(tmp_path):
+    root, items = _conflict_world(tmp_path)
+    rec = items.get("013")
+    git(root, "update-ref", "-d", "refs/ew/keep/013")
+    rec.pop("keep_ref")
+    items.put(rec)
+    d = _free(root, tmp_path)
+    ew_loop.tick(deps=d, no_push=True)
+    assert keep_refs(root) == f"refs/ew/keep/013 {rec['commit']}"
+    assert d.seen["launch"] == ["013"] and items.get("013")["kind"] == "resolve"
+
+
+def test_resolve_lane_with_conflict_markers_left_fails_review(tmp_path):
+    root, wt = git_world(tmp_path)
+    (wt / "feature.txt").write_text("<<<<<<< HEAD\nx\n=======\ny\n>>>>>>> abc\n")
+    t = ew_loop.Tick(deps(root, git=real_git))
+    rec = {"id": "012", "kind": "resolve", "base_kind": "plan"}
+    out = t.extra_checks(rec, wt)
+    assert len(out) == 1 and "feature.txt" in out[0] and "conflict marker" in out[0]
+    (wt / "feature.txt").write_text("x\ny\n")
+    assert t.extra_checks(rec, wt) == []
+
+
+def test_paused_resolve_gives_its_run_back(tmp_path):
+    root = make_root(tmp_path)
+    items = _dispatched(root, kind="resolve", base_kind="plan", resolve_runs=1,
+                        keep_ref="refs/ew/keep/012")
+    (root / "ops/loop/control").mkdir(parents=True, exist_ok=True)
+    (root / "ops/loop/control/HALT").write_text("")
+    assert ew_loop.lane_worker("012", deps=deps(root)) == 0
+    rec = items.get("012")
+    assert rec["state"] == "paused" and rec["resolve_runs"] == 0
