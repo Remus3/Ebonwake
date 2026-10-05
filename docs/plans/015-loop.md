@@ -233,6 +233,39 @@ checklist ends in `[ ] /done`; one push.
        names, so a note settled by the 13 code is never re-triaged; 13's cap
        ledger (`outbound_cap.jsonl`) is not read - at worst one extra note on
        the day of the switch. Reverses if: never (read-only shim).
+15. Verifier r1 minors (hand-off item, 2026-10-05).
+    a. Lane worker re-checks HALT / backoff / runs cap (`spawn_block`, shared
+       with the tick) before `run_lane` and passes `halt_file` to every
+       spawn. A block, or a kit refusal while HALT exists, sets state
+       `paused` and gives the attempt back; `paused` is always dispatchable.
+       Alternative: `refused` (burns one of the 2 attempts on a pause). Why: a
+       pause is not a failure. Reverses if: never.
+    b. A verifier run with rc != 0 that is not a usage limit counts
+       `verify_errors` (separate from refute rounds: no verdict was given);
+       at MAX_ROUNDS (3) the item goes to `adjudicate`, WIP unmerged.
+       Alternative: count it as a FAIL round and run a fix (a fix against a
+       crash has no findings to fix). Reverses if: verifier crashes are
+       measured to be transient enough that 3 is too few.
+    c. A `_launch` exception marks the item `lost` (error kept) and frees the
+       lane for the next item; `reap_lost` also reaps a `dispatched` record
+       with no pid (safe: it runs under the tick lock, so no launch is in
+       flight).
+    d. A refused / lost item out of attempts becomes `gave-up` (attention
+       state, error kept, logged). A claim refused for a dirty lane worktree
+       is `lane-dirty` at once (attention state, never retried). Alternative:
+       retry on another index. Why: the kit claims the lowest free index, so a
+       retry hits the same dirty worktree and burns the attempt; a person
+       resolves the crashed run's work (kit rule: never cleaned). Reverses
+       if: the kit gains targeted-index claims.
+    e. Hand-off items naming a password, OAuth or per-host value are tagged
+       `operator` (FLEET item 1). `config/local.json` alone is not a tag (a
+       lane may change code that reads it). Reverses if: the hand-off gains
+       explicit per-item tags.
+    f. Checklist ETA = median of `lane-<lane>-code` (what `ew_lane.run_lane`
+       records; `lane-build-code` for an item not yet on a lane) less the
+       time since dispatch for dispatched / ran / committed items, floored at
+       0; attention states 0. `loop-review` was never recorded (always the
+       60 s default).
 
 ## CLAUDE.md rules - LANDED 2026-10-05 (CLAUDE.md "Loop (plan 015)"; text below is the proposal, CLAUDE.md is authoritative: cap 6, not 12)
 
