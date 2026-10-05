@@ -53,6 +53,47 @@ html, body {
 .ew-num { font: 600 20px var(--ew-mono); }
 .ew-muted { color: var(--fk-text-muted); }
 
+/* Market tab (plan 002): lists scroll inside their card; stale = muted. */
+.ew-mcard { display: flex; flex-direction: column; overflow: hidden; }
+.ew-mcard h2 { display: flex; justify-content: space-between; align-items: center; }
+.ew-cbody { flex: 1; min-height: 0; overflow: auto; }
+.ew-list { display: flex; flex-direction: column; gap: 2px; }
+.ew-mrow {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center;
+  gap: 6px; padding: 3px 4px; border-radius: var(--ew-radius); cursor: pointer;
+}
+.ew-mrow:hover, .ew-mrow:focus { background: var(--fk-surface); outline: none; }
+.ew-mrow.sel { box-shadow: inset 2px 0 0 var(--fk-accent); }
+.ew-mname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ew-mprice { font-family: var(--ew-mono); }
+.ew-stale { color: var(--fk-text-muted); opacity: .7; }
+.ew-err { color: var(--fk-status-bad); font-size: 12px; margin-bottom: 4px; }
+.ew-badge { font-size: 11px; text-transform: uppercase; }
+.ew-badge.below { color: var(--fk-status-ok); }
+.ew-badge.above { color: var(--fk-status-warn); }
+.ew-spark { display: block; width: 100%; height: 60px; margin: 6px 0; }
+.ew-spark path { fill: none; stroke: var(--fk-chart-1); stroke-width: 1.5; }
+.ew-stats { display: flex; gap: 12px; margin-bottom: 6px; }
+.ew-depth { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.ew-drow { position: relative; height: 18px; margin-top: 2px; }
+.ew-dbar { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; opacity: .35; }
+.ew-dbar.sell { background: var(--fk-status-bad); }
+.ew-dbar.buy { background: var(--fk-status-ok); }
+.ew-dtxt { position: relative; padding-left: 4px; font: 12px/18px var(--ew-mono); }
+.ew-form { display: flex; flex-direction: column; gap: 6px; }
+.ew-form label { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.ew-form input {
+  width: 120px; font: inherit; color: var(--fk-text); background: var(--fk-surface);
+  border: 1px solid var(--fk-border); border-radius: var(--ew-radius); padding: 3px 6px;
+}
+.ew-btns { display: flex; gap: 6px; }
+.ew-btn {
+  font: inherit; color: var(--fk-text); background: var(--fk-surface); cursor: pointer;
+  border: 1px solid var(--fk-border); border-radius: var(--ew-radius); padding: 4px 12px;
+}
+.ew-btn:hover { border-color: var(--fk-accent); }
+.ew-msg { min-height: 1.4em; }
+
 /* Overlay: glanceable, corner-anchored, translucent. */
 html.ew-overlay, html.ew-overlay body { background: transparent; }
 .ew-ov {

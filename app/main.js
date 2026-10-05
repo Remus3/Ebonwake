@@ -3,9 +3,10 @@
    hooks, injects into or sends input to the game. Hotkeys use globalShortcut only. */
 'use strict';
 
-const { app, BrowserWindow, globalShortcut, screen } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, screen } = require('electron');
 const selftest = require('./selftest');
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
 const core = require('./shared/ewcore');
 
@@ -26,9 +27,15 @@ function createDashboard() {
   dashboard = new BrowserWindow({
     width: 1280, height: 800, minWidth: 960, minHeight: 600,
     title: 'Ebonwake', backgroundColor: '#0f1216', show: true,
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
+    webPreferences: {
+      contextIsolation: true, nodeIntegration: false, sandbox: true,
+      preload: path.join(__dirname, 'preload.js')
+    }
   });
   dashboard.removeMenu();
+  // The dashboard (and its preload bridge) never leaves its own file page.
+  dashboard.webContents.on('will-navigate', function (e) { e.preventDefault(); });
+  dashboard.webContents.setWindowOpenHandler(function () { return { action: 'deny' }; });
   dashboard.loadFile(path.join(__dirname, 'dashboard', 'index.html'));
   dashboard.on('closed', function () { dashboard = null; });
 }
@@ -50,6 +57,41 @@ function createOverlay() {
   overlay.loadFile(path.join(__dirname, 'overlay', 'index.html'));
   overlay.on('closed', function () { overlay = null; });
 }
+
+// Market watchlist writes (plan 002): the server answers no CORS preflight, so
+// the dashboard cannot POST itself. Only the dashboard may ask, only the exact
+// add/remove shape passes, and only the local EW server is ever contacted.
+function postLocal(route, body) {
+  const base = new URL(core.SERVER);
+  const data = Buffer.from(JSON.stringify(body), 'utf8');
+  return new Promise(function (resolve) {
+    const req = http.request({
+      hostname: base.hostname, port: base.port, path: route, method: 'POST', timeout: 10000,
+      headers: { 'Content-Type': 'application/json', 'Content-Length': data.length }
+    }, function (res) {
+      const chunks = [];
+      let size = 0;
+      res.on('data', function (c) { size += c.length; if (size <= 65536) chunks.push(c); });
+      res.on('end', function () {
+        let parsed = null;
+        try { parsed = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (e) { /* non-JSON */ }
+        const ok = res.statusCode >= 200 && res.statusCode < 300;
+        resolve(ok ? { ok: true, status: res.statusCode, data: parsed }
+          : { ok: false, status: res.statusCode,
+            error: (parsed && typeof parsed.error === 'string' ? parsed.error : 'HTTP ' + res.statusCode) });
+      });
+    });
+    req.on('timeout', function () { req.destroy(new Error('timeout')); });
+    req.on('error', function (e) { resolve({ ok: false, error: 'server offline (' + e.message + ')' }); });
+    req.end(data);
+  });
+}
+
+ipcMain.handle('ew:market-watch', function (event, body) {
+  if (!dashboard || event.sender !== dashboard.webContents) return { ok: false, error: 'not allowed' };
+  if (!core.validWatchBody(body)) return { ok: false, error: 'invalid request' };
+  return postLocal('/api/market/watch', body);
+});
 
 function toggleOverlay() {
   if (!overlay) createOverlay();

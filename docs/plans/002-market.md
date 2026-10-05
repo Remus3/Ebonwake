@@ -65,7 +65,20 @@ oversize), routes with a fake client.
 
 Files: `app/dashboard/market.js` (new), `app/dashboard/dashboard.js` (mount),
 `app/dashboard/index.html` (script tag), `app/shared/ewcore.js` (pure helpers),
-`app/shared/ew.css`, `app/test/market.test.js` (new).
+`app/shared/ew.css`, `app/test/market.test.js` (new), `app/preload.js` (new),
+`app/main.js` (IPC POST bridge).
+
+Adjudicated 2026-10-04: the dashboard is a file:// page and slice A answers no
+CORS preflight, so the renderer cannot POST `application/json`. Decision: the
+add/remove POST goes through a sandboxed dashboard preload (`window.ewMarket`)
+and an `ipcMain` handler that checks the exact body shape (`validWatchBody`)
+and POSTs with Node `http` to the local EW server only; the overlay gets no
+preload. Alternatives: server answers the preflight for file:// (weakens the
+guard, other lane); read-only slice B (fails item 2). Why: keeps slice A's
+"browser pages cannot POST" guard and the CSP unchanged. Reverses if: the
+sandboxed preload cannot reach contextBridge/ipcRenderer, the desktop self-test
+drops below 7/7 fit, or MAIN/the operator orders the server to accept renderer
+POSTs.
 
 1. Pure helpers in `ewcore.js`: `fmtSilver(n)` (`1.23B`, `45.6M`, `789K`,
    `950`), `sparkPath(points, w, h)` -> SVG path `d` (empty input -> ''),
