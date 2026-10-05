@@ -5,7 +5,7 @@ Routes: /api/health, /api/version (fleet P0-5), /api/state, /events (SSE),
 /api/market/{watch,item,hot} (plan 002), /api/today (plan 003),
 /api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006),
 /api/deadeye (plan 007), /api/game (plan 008), and POST /api/market/watch + /api/today + /api/progress +
-/api/grind + /api/events + /api/deadeye behind one shared guard.
+/api/grind + /api/events + /api/deadeye + /api/ocr (plan 009) behind one shared guard.
 """
 
 import datetime as _dt
@@ -22,7 +22,7 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import __version__, deadeye, events, gamewatch, grind, market, ports, progress, today
+from . import __version__, deadeye, events, gamewatch, grind, market, ocr, ports, progress, today
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -90,7 +90,8 @@ class EWServer(ThreadingHTTPServer):
     def __init__(self, addr, store_root=None, commit=None, sse_interval=15.0,
                  market_client=None, market_seed=None, today_clock=None,
                  profile_client=None, profile_cfg=None, grind_clock=None, events_clock=None,
-                 deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False):
+                 deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
+                 ocr_runner=None, ocr_cache_dir=None):
         super().__init__(addr, Handler)
         self.started = _now_iso()
         self.commit = commit
@@ -116,6 +117,9 @@ class EWServer(ThreadingHTTPServer):
             cfg = {} if game_cfg is None else game_cfg
             game_watch = gamewatch.GameWatch.from_config(cfg)
         self.game = game_watch
+        if ocr_cache_dir is None:  # beside the store, so a test store keeps OCR in tmp too
+            ocr_cache_dir = Path(store_root).parent / "ocr" if store_root else RUNTIME / "ocr"
+        self.ocr = ocr.OcrService(self.game, ocr_cache_dir, runner=ocr_runner)
         if game_poll:  # off by default so tests never probe processes; main() turns it on
             self.game.start()
 
@@ -254,9 +258,13 @@ class Handler(BaseHTTPRequestHandler):
         (op, arg), = body.items()
         return getattr(self.server.deadeye, op)(arg)
 
+    def _post_ocr(self, body):
+        return self.server.ocr.read(body)
+
     POST_ROUTES = {"/api/market/watch": _post_market_watch, "/api/today": _post_today,
                    "/api/progress": _post_progress, "/api/grind": _post_grind,
-                   "/api/events": _post_events, "/api/deadeye": _post_deadeye}
+                   "/api/events": _post_events, "/api/deadeye": _post_deadeye,
+                   "/api/ocr": _post_ocr}
 
     def do_POST(self):  # noqa: N802
         """Shared guard for every POST route: loopback Host + application/json +
@@ -304,6 +312,8 @@ class Handler(BaseHTTPRequestHandler):
             out = route(self, body)
         except ValueError as e:
             return reply(400, {"error": str(e)})
+        except ocr.OcrError as e:
+            return reply(502, {"error": f"ocr failed: {e}"})
         return reply(200, out)
 
     def _file(self, target):
@@ -343,14 +353,16 @@ class Handler(BaseHTTPRequestHandler):
 def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15.0,
                 market_client=None, market_seed=None, today_clock=None,
                 profile_client=None, profile_cfg=None, grind_clock=None, events_clock=None,
-                deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False):
+                deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
+                ocr_runner=None, ocr_cache_dir=None):
     return EWServer(("127.0.0.1", port), store_root=store_root, commit=commit,
                     sse_interval=sse_interval, market_client=market_client,
                     market_seed=market_seed, today_clock=today_clock,
                     profile_client=profile_client, profile_cfg=profile_cfg,
                     grind_clock=grind_clock, events_clock=events_clock,
                     deadeye_clock=deadeye_clock, game_watch=game_watch,
-                    game_cfg=game_cfg, game_poll=game_poll)
+                    game_cfg=game_cfg, game_poll=game_poll, ocr_runner=ocr_runner,
+                    ocr_cache_dir=ocr_cache_dir)
 
 
 def main(argv=None):
