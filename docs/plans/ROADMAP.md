@@ -21,6 +21,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 014 | Coupon auto-check vs the official news page (robots.txt-gated, suggest only) | [ ] open |
 | 015 | EW loop tick: inbox answers, lane dispatch, review + merge + push, idle deep-dive, 15-min scheduled task | [>] built in lane 2026-10-05 (install + read-back pending) |
 | 016 | OCR comma-drop regression: a vanished comma must not cut a digit group (old bench 141 -> 142/144) | [x] done 2026-10-05 (loop; refute 1/3 PASS) |
+| 017 | Supply-chain hardening (MAIN order Nfa7953): dependabot, SHA pins, hashed CI pip, CodeQL, read-only token, ruff gate, fuzzing ruled out | [x] done 2026-10-05 (loop; refute 1/3 PASS; Scorecard before/after blocked) |
 
 Ranking 011-014 (adjudicated 2026-10-05, value to a new Season Deadeye who is
 leveling now): 011 helps every leveling hour with zero external risk; 012
@@ -42,3 +43,7 @@ responder task existed, none disabled.
 - BLOCKED: vendor kit v8 into `ops/fleet_kit/` (all files, one commit) - the bundle sits in the main tree's inbox, outside this lane's read allow list, and the lane may not edit `ops/fleet_kit/`; main session vendors it and verifies the 12 hashes.
 - BLOCKED: re-embed the v8 FLEET-COMMON block (item 14) in CLAUDE.md - lane may not edit CLAUDE.md; rides with the vendoring commit.
 - BLOCKED: kit conformance test green on v8 - `tests/test_fleet_kit_conformance.py` stays on v6 until the vendoring commit; then switch the tick to the kit's `fleet_inbox` (plan 015 deviation 13a).
+
+## Order Nfa7953 - blocked items
+
+- Section 4 Scorecard before/after: BLOCKED - needs the scorecard v5.5.0 Linux binary downloaded into WSL (operator-approved download).

@@ -514,7 +514,7 @@ def test_refute_r1_missing_milestones_keeps_samples(tmp_path):
     st = store_mod.Store(tmp_path)
     st.put("leveling", {"samples": [{"ts": "2026-10-05T10:00:00+00:00", "level": 52,
                                      "pct": 10.0}], "hot_windows": [], "next_id": 1})
-    svc = leveling.LevelingService(st, clock=lambda: 1791190000.0)
+    leveling.LevelingService(st, clock=lambda: 1791190000.0)
     doc = st.get("leveling")
     assert doc["milestones"] == list(leveling.SEED_MILESTONES)
     assert len(doc["samples"]) == 1
