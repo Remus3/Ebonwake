@@ -62,3 +62,27 @@ allowlist route `/api/deadeye`), `app/shared/ew.css`,
   escaping).
 - Dashboard self-test 7/7 tabs fit; Deadeye tab renders with an empty store.
 - Verifier PASS within 3 refute rounds; one push; CI green.
+
+### Slice A deviations (adjudicated in-lane, 2026-10-04)
+
+1. POST cap. Decision: `MAX_DEADEYE_POST_BYTES = 131072` (128 KiB) via a
+   per-route `POST_CAPS` map in `app.py`; every other route stays at 4096.
+   Alternatives: raise the global cap; 64 KiB. Why: a 20000-char BMP note
+   JSON-escaped at 6 bytes/char is 120000 bytes, so 128 KiB covers the worst
+   BMP case and nothing else grows. Reverses if: notes heavy in astral chars
+   (12 bytes escaped) hit 413 in practice.
+2. Text length is counted after `\r\n` -> `\n`. Alternatives: count raw.
+   Why: the stored text is what the counter in slice B shows. Reverses if:
+   slice B counts raw textarea input and the two disagree.
+3. `item` and `note` are stripped and refuse control characters (same rule as
+   grind names); note text keeps every character. Alternatives: no strip.
+   Why: single-line fields in a table row. Reverses if: operator needs
+   multi-line step notes.
+4. `edit_step` with only `id` is a 400; unknown keys in any op are a 400; the
+   merged step must keep target strictly above current. `dir` must be an int
+   (`1.0`, `true` refused). Why: one shape per op, like grind. Reverses if:
+   slice B needs a no-op edit.
+5. GET `sections[].updated` is `null` until first saved; `/api/state`
+   `sources.deadeye` is exactly `{done, total}`. Store doc also carries a
+   top-level `updated` stamp (as grind). Reverses if: state consumers need a
+   `status` key.
