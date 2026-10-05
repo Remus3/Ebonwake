@@ -430,3 +430,24 @@ def test_default_server_ocr_cache_not_in_repo_runtime_under_tests(tmp_path):
         assert tmp_path in Path(s.ocr.cache_dir).parents
     finally:
         s.server_close()
+
+
+def _ln(text, y=10):
+    return {"text": text, "x": 0, "y": y, "w": 100, "h": 10}
+
+
+def test_two_buffs_on_one_line_each_get_their_own_time():
+    out = ocr.extract_buffs([_ln("XP scroll 29 min Value Pack 3 d 4 h")])
+    assert out == [{"name": "XP scroll", "minutes": 29},
+                   {"name": "Value Pack", "minutes": 3 * 1440 + 240}]
+    out = ocr.extract_buffs([_ln("Hot Time XP scroll 10 min")])
+    assert [b["name"] for b in out] == ["Hot Time", "XP scroll"]
+    assert out[1]["minutes"] == 10 and out[0]["minutes"] is None
+
+
+def test_unwritable_cache_still_returns_result(watch, tmp_path):
+    name = _shot(watch)
+    blocker = tmp_path / "ocr"
+    blocker.write_text("not a dir")
+    svc = ocr.OcrService(watch, blocker, runner=lambda p: OCR_DOC)
+    assert svc.read({"file": name})["silver"] == 1500000

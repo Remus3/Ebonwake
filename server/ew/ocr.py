@@ -207,13 +207,36 @@ def _norm(s):
     return " " + re.sub(r"[^a-z0-9]+", " ", s.lower()).strip() + " "
 
 
-def _find_name(text, names):
+def _find_names(text, names):
+    """Every buff name on a normalised line as (name, rest), in line order; each
+    `rest` runs only up to the next name, so one OCR line holding two buffs
+    gives each its own time (plan 009 refute round 1)."""
     t = _norm(text)
+    hits = []
     for name in names:
         n = _norm(name)
-        if n.strip() and n in t:
-            return name, t[t.index(n) + len(n):]
-    return None, None
+        if not n.strip():
+            continue
+        start = t.find(n)
+        while start >= 0:
+            hits.append((start, start + len(n), name))
+            start = t.find(n, start + 1)
+    hits.sort()
+    kept, end = [], -1
+    for s, e, name in hits:  # drop a name nested inside an earlier, longer hit
+        if s >= end - 1:
+            kept.append((s, e, name))
+            end = e
+    out = []
+    for i, (s, e, name) in enumerate(kept):
+        stop = kept[i + 1][0] if i + 1 < len(kept) else len(t)
+        out.append((name, t[e:stop]))
+    return out
+
+
+def _find_name(text, names):
+    found = _find_names(text, names)
+    return found[0] if found else (None, None)
 
 
 def extract_buffs(lines, names=SEED_BUFFS):
@@ -223,19 +246,20 @@ def extract_buffs(lines, names=SEED_BUFFS):
     lines = _lines(lines)
     out, seen = [], set()
     for i, ln in enumerate(lines):
-        name, rest = _find_name(ln["text"], names)
-        if name is None or name in seen:
-            continue
-        seen.add(name)
-        minutes = duration_minutes(rest)
-        if minutes is None:
-            for b in _neighbours(lines, i):
-                if _find_name(b["text"], names)[0] is not None:
-                    continue
-                minutes = duration_minutes(b["text"])
-                if minutes is not None:
-                    break
-        out.append({"name": name, "minutes": minutes})
+        found = _find_names(ln["text"], names)
+        for name, rest in found:
+            if name in seen:
+                continue
+            seen.add(name)
+            minutes = duration_minutes(rest)
+            if minutes is None and len(found) == 1:
+                for b in _neighbours(lines, i):
+                    if _find_name(b["text"], names)[0] is not None:
+                        continue
+                    minutes = duration_minutes(b["text"])
+                    if minutes is not None:
+                        break
+            out.append({"name": name, "minutes": minutes})
     return out
 
 
@@ -298,7 +322,10 @@ class OcrService:
             doc = self._cached(cpath)
             if doc is None:
                 doc = _sanitise(self.runner(self.game.shot_dir / shot["name"]))
-                atomic_write_json(cpath, {"file": shot["name"], "size": shot["size"],
-                                          "mtime": shot["mtime"], "ocr": doc})
-                self._prune()
+                try:  # a cache that cannot be written must not lose the result
+                    atomic_write_json(cpath, {"file": shot["name"], "size": shot["size"],
+                                              "mtime": shot["mtime"], "ocr": doc})
+                    self._prune()
+                except OSError:
+                    pass
         return extract(doc)
