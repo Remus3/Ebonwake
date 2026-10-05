@@ -58,3 +58,36 @@ classifier table needs the observed `Log` substring (data change only).
 
 pytest, node --test, leak sweep green; contract covered by synthetic-file
 tests; self-test 7/7; verifier PASS within 3 refute rounds; one push; CI green.
+
+### Slice A deviations (adjudicated in-lane, 2026-10-05)
+
+1. SSE `game` event is a NAMED event (`event: game` + `data: <GET /api/game
+   body>`), sent instead of the next heartbeat when the state changes.
+   Alternatives: a `data:` message with `"type": "game"`. Why: the overlay's
+   `onmessage` treats every default message as a heartbeat and reloads Today;
+   a named event leaves it untouched and slice B subscribes with
+   `addEventListener('game', ...)`. Reverses if: slice B needs one stream type.
+2. `configured` = `bdo.install_dir` is a non-empty string. Without it the state
+   is `unconfigured` and tasklist is never run; a `documents_dir` alone still
+   lists screenshots. Alternatives: require both keys; probe the process even
+   unconfigured. Why: the session signal needs the log dir; no path is ever
+   guessed. Reverses if: the operator wants a process-only signal unconfigured.
+3. Session state resets to plain `running` when a new log file appears, when
+   the file shrinks below the stored offset, and when the game goes
+   `not_running` (so a relaunch never shows a stale `logged_in`). Alternatives:
+   carry the last classified state across sessions. Why: each launch writes a
+   new log; a carried login would be wrong. Reverses if: the client is seen to
+   reuse one log across launches.
+4. Classifier substrings beyond the spec's words: `connection lost`, `log out`,
+   `log in`, `selectserver`; disconnect rows are first so they win. Data only,
+   to be confirmed by the operator check.
+5. Screenshots list only `.jpg/.jpeg/.png/.bmp` regular files (stat only, never
+   opened). Alternatives: every file. Why: the folder may hold non-image
+   leftovers. Reverses if: BDO writes another image extension.
+6. Poll thread is OFF unless `make_server(game_poll=True)`; `main()` turns it on
+   and `server_close()` stops it. Tests inject `game_watch=` or `game_cfg=` so
+   no test reads the real config, a real log or runs tasklist. `last_event`
+   = {date, type, log (control chars stripped, <= 200 chars), state} of the
+   last CLASSIFIED line; `/api/state` `sources.game` = {updated, status}.
+   tasklist is resolved from `%SystemRoot%\System32` first (no cwd hijack).
+   Reads are capped at 4 MiB per poll; a larger backlog drains over polls.
