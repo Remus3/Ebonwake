@@ -902,6 +902,53 @@
     return { ok: true, body: { add: add } };
   }
 
+  // ---- Coupon suggestions (plan 014) ----
+  // GET /api/events `suggested`: candidates read from the official news list
+  // (robots.txt-gated, server side). Suggest only: one click posts a normal
+  // coupon add; nothing is added without the operator.
+
+  const SUGGEST_STATUS = {
+    ok: 'checked', stale: 'stale - last good list', pending: 'checking...',
+    off: 'off - robots.txt', error: 'check failed', none: 'off'
+  };
+
+  // Valid candidates whose code is not already an item, in server order.
+  function suggestedRows(suggested, items) {
+    const s = plainObject(suggested) ? suggested : {};
+    const list = Array.isArray(s.candidates) ? s.candidates : [];
+    const known = {};
+    (Array.isArray(items) ? items : []).forEach(function (it) {
+      if (plainObject(it) && typeof it.code === 'string') known[it.code.toUpperCase()] = true;
+    });
+    const out = [];
+    list.forEach(function (c) {
+      if (!plainObject(c) || !validCode(c.code) || !validTitle(c.title) || !validUrl(c.url)) return;
+      const code = c.code.toUpperCase();
+      if (known[code]) return;
+      known[code] = true;
+      const date = typeof c.date === 'string' && ISO_DAY.test(c.date) ? c.date : null;
+      out.push({ code: code, title: c.title, url: c.url, date: date });
+    });
+    return out;
+  }
+
+  // Candidate -> POST /api/events body (a plain coupon add), or null.
+  function suggestAddBody(c) {
+    if (!plainObject(c) || !validCode(c.code) || !validTitle(c.title)) return null;
+    const add = { kind: 'coupon', title: c.title, code: c.code.toUpperCase() };
+    if (validUrl(c.url)) add.url = c.url;
+    return { add: add };
+  }
+
+  // Sources card line for the coupon check: {status, text}; reason when off.
+  function suggestStatus(suggested) {
+    const s = plainObject(suggested) ? suggested : null;
+    const st = s && Object.prototype.hasOwnProperty.call(SUGGEST_STATUS, s.status) ? s.status : 'none';
+    let text = 'coupon check: ' + SUGGEST_STATUS[st];
+    if (st === 'off' && (s.robots === 'disallow' || s.robots === 'unreachable')) text += ' ' + s.robots;
+    return { status: st, text: text };
+  }
+
   // ---- Deadeye (plan 007) ----
   // Operator build notes (markdown, rendered as a safe subset) and an ordered
   // enhancement plan. Text only: nothing here is executed or sent to the game.
@@ -1466,6 +1513,9 @@
     localToUtcIso: localToUtcIso,
     validEventsBody: validEventsBody,
     parseEventForm: parseEventForm,
+    suggestedRows: suggestedRows,
+    suggestAddBody: suggestAddBody,
+    suggestStatus: suggestStatus,
     DEADEYE_LEVELS: DEADEYE_LEVELS,
     DEADEYE_SECTIONS: DEADEYE_SECTIONS,
     NOTE_MAX: NOTE_MAX,

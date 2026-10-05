@@ -3,7 +3,8 @@
 Routes: /api/health, /api/version (fleet P0-5), /api/state, /events (SSE),
 / and /app/* (static dashboard + overlay assets, browser fallback),
 /api/market/{watch,item,hot} (plan 002), /api/today (plan 003),
-/api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006),
+/api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006; plan 014
+adds its `suggested` coupon block),
 /api/deadeye (plan 007), /api/game (plan 008), /api/leveling (plan 011), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
 /api/ocr (plan 009) + /api/leveling behind one shared guard.
@@ -23,7 +24,7 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import (__version__, deadeye, events, gamewatch, grind, leveling, market, ocr, ports,
+from . import (__version__, coupons, deadeye, events, gamewatch, grind, leveling, market, ocr, ports,
                progress, single, today)
 from .store import Store
 
@@ -98,7 +99,8 @@ class EWServer(ThreadingHTTPServer):
                  market_client=None, market_seed=None, today_clock=None,
                  profile_client=None, profile_cfg=None, grind_clock=None, events_clock=None,
                  deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
-                 ocr_runner=None, ocr_cache_dir=None, leveling_clock=None):
+                 ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
+                 coupon_client=None, coupon_spawn=None):
         super().__init__(addr, Handler)
         self.started = _now_iso()
         self.commit = commit
@@ -120,6 +122,9 @@ class EWServer(ThreadingHTTPServer):
         self.leveling = leveling.LevelingService(self.store, clock=leveling_clock or time.time,
                                                  buffs=lambda: self.grind.view()["buffs"])
         self.events = events.EventsService(self.store, clock=events_clock or time.time)
+        # Coupon suggestions (plan 014): off unless a client is passed; only main()
+        # passes the live one, so no test ever reaches the network.
+        self.coupons = coupons.CouponService(coupon_client, self.events, spawn=coupon_spawn)
         self.deadeye = deadeye.DeadeyeService(self.store, clock=deadeye_clock or time.time)
         if game_watch is None:
             # Only main() passes the real config; a bare make_server (every test)
@@ -145,7 +150,8 @@ class EWServer(ThreadingHTTPServer):
         return {"app": "ebonwake", "version": __version__, "tabs": TABS,
                 "sources": {"market": self.market.source(), "today": self.today.source(),
                             "profile": self.progress.source(), "grind": self.grind.source(),
-                            "events": self.events.source(), "deadeye": self.deadeye.source(),
+                            "events": self.events.source(), "coupons": self.coupons.source(),
+                            "deadeye": self.deadeye.source(),
                             "game": self.game.source(), "leveling": self.leveling.source()},
                 "now": _now_iso()}
 
@@ -207,7 +213,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/grind":
             return self._send(200, self.server.grind.view())
         if path == "/api/events":
-            return self._send(200, self.server.events.view())
+            return self._send(200, dict(self.server.events.view(),
+                                        suggested=self.server.coupons.view(refresh=True)))
         if path == "/api/deadeye":
             return self._send(200, self.server.deadeye.view())
         if path == "/api/game":
@@ -260,7 +267,9 @@ class Handler(BaseHTTPRequestHandler):
         if len(body) != 1 or not (ops & set(body)):
             raise ValueError("body must be one of {add|edit|done|delete|purge_expired: ...}")
         (op, arg), = body.items()
-        return getattr(self.server.events, op)(arg)
+        out = getattr(self.server.events, op)(arg)
+        out["suggested"] = self.server.coupons.view(refresh=False)  # a POST never fetches
+        return out
 
     def _post_deadeye(self, body):
         ops = {"note", "add_step", "edit_step", "step_done", "delete_step", "move_step"}
@@ -395,7 +404,8 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                 market_client=None, market_seed=None, today_clock=None,
                 profile_client=None, profile_cfg=None, grind_clock=None, events_clock=None,
                 deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
-                ocr_runner=None, ocr_cache_dir=None, leveling_clock=None):
+                ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
+                coupon_client=None, coupon_spawn=None):
     return EWServer(("127.0.0.1", port), store_root=store_root, commit=commit,
                     sse_interval=sse_interval, market_client=market_client,
                     market_seed=market_seed, today_clock=today_clock,
@@ -403,7 +413,8 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                     grind_clock=grind_clock, events_clock=events_clock,
                     deadeye_clock=deadeye_clock, game_watch=game_watch,
                     game_cfg=game_cfg, game_poll=game_poll, ocr_runner=ocr_runner,
-                    ocr_cache_dir=ocr_cache_dir, leveling_clock=leveling_clock)
+                    ocr_cache_dir=ocr_cache_dir, leveling_clock=leveling_clock,
+                    coupon_client=coupon_client, coupon_spawn=coupon_spawn)
 
 
 def main(argv=None, probe=None):
@@ -411,7 +422,8 @@ def main(argv=None, probe=None):
     if (probe or single.probe)() == "ew":
         return 0
     srv = make_server(commit=read_commit(), game_poll=True,
-                      game_cfg=gamewatch.config_bdo(REPO_ROOT))
+                      game_cfg=gamewatch.config_bdo(REPO_ROOT),
+                      coupon_client=coupons.CouponClient())
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

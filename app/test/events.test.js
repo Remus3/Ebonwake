@@ -200,6 +200,53 @@ test('events.js: safe DOM, POST via the bridge only, uses the shared helpers', (
   assert.match(src, /window\.EWEvents\s*=/);
 });
 
+test('suggestedRows: valid candidates only, known codes and duplicates dropped, upper-cased', () => {
+  const sug = { status: 'ok', candidates: [
+    { code: 'AUTUMN-2026-GIFT', title: 'Autumn coupon', url: 'https://www.naeu.playblackdesert.com/en-US/News/Detail?groupContentNo=1', date: '2026-10-03' },
+    { code: 'oldcode-1234', title: 'Old', url: 'https://www.naeu.playblackdesert.com/x', date: null },
+    { code: 'HAWKEYE7TREAT', title: 'Deadeye', url: 'https://www.naeu.playblackdesert.com/y', date: 'junk' },
+    { code: 'AUTUMN-2026-GIFT', title: 'dup', url: 'https://www.naeu.playblackdesert.com/z', date: null },
+    { code: 'bad code', title: 'x', url: 'https://a.b/c' }, { code: 'GOOD1234', title: '', url: 'https://a.b/c' },
+    { code: 'GOOD1234', title: 'x', url: 'javascript:alert(1)' }, null, 'x', 5
+  ] };
+  const items = [item({ id: 'e1', kind: 'coupon', code: 'OLDCODE-1234' }), null];
+  const rows = C.suggestedRows(sug, items);
+  assert.deepStrictEqual(rows.map((r) => r.code), ['AUTUMN-2026-GIFT', 'HAWKEYE7TREAT']);
+  assert.strictEqual(rows[0].date, '2026-10-03');
+  assert.strictEqual(rows[1].date, null, 'junk date dropped');
+  assert.deepStrictEqual(C.suggestedRows(null, null), []);
+  assert.deepStrictEqual(C.suggestedRows({ candidates: 'x' }, []), []);
+});
+
+test('suggestAddBody: one click = a plain coupon add the bridge accepts', () => {
+  const c = { code: 'hawkeye7treat', title: 'Deadeye coupons', url: 'https://www.naeu.playblackdesert.com/en-US/News/Detail?groupContentNo=2', date: '2026-10-01' };
+  const b = C.suggestAddBody(c);
+  assert.deepStrictEqual(b, { add: { kind: 'coupon', title: 'Deadeye coupons', code: 'HAWKEYE7TREAT', url: c.url } });
+  assert.strictEqual(C.validEventsBody(b), true);
+  assert.strictEqual(C.validPost('/api/events', b), true);
+  assert.deepStrictEqual(C.suggestAddBody({ code: 'ABCD1', title: 't', url: 'http://x' }), { add: { kind: 'coupon', title: 't', code: 'ABCD1' } });
+  for (const bad of [null, {}, { code: 'AB', title: 't' }, { code: 'ABCD1', title: '' }]) {
+    assert.strictEqual(C.suggestAddBody(bad), null, JSON.stringify(bad));
+  }
+});
+
+test('suggestStatus: coupon check line for the Sources card, robots reason when off', () => {
+  assert.deepStrictEqual(C.suggestStatus({ status: 'off', robots: 'disallow' }), { status: 'off', text: 'coupon check: off - robots.txt disallow' });
+  assert.match(C.suggestStatus({ status: 'off', robots: 'unreachable' }).text, /unreachable/);
+  assert.strictEqual(C.suggestStatus({ status: 'stale' }).status, 'stale');
+  assert.strictEqual(C.suggestStatus({ status: 'ok' }).status, 'ok');
+  assert.strictEqual(C.suggestStatus({ status: 'weird' }).status, 'none');
+  assert.strictEqual(C.suggestStatus(null).status, 'none');
+});
+
+test('events.js: Suggested card uses the helpers and never auto-adds', () => {
+  const src = read('dashboard/events.js');
+  for (const f of ['suggestedRows', 'suggestAddBody', 'suggestStatus']) assert.match(src, new RegExp('C\\.' + f + '\\('), f);
+  assert.match(src, /Suggested coupons/);
+  const i = src.indexOf('C.suggestAddBody(');
+  assert.ok(src.lastIndexOf("addEventListener('click'", i) > src.lastIndexOf('function drawSuggested', i), 'add only inside a click handler');
+});
+
 test('dashboard loads and mounts events.js; CSP unchanged', () => {
   const html = read('dashboard/index.html');
   assert.match(html, /connect-src http:\/\/127\.0\.0\.1:8940;/);
