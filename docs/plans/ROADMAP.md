@@ -23,6 +23,71 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 016 | OCR comma-drop regression: a vanished comma must not cut a digit group (old bench 141 -> 142/144) | [x] done 2026-10-05 (loop; refute 1/3 PASS) |
 | 017 | Supply-chain hardening (MAIN order Nfa7953): dependabot, SHA pins, hashed CI pip, CodeQL, read-only token, ruff gate, fuzzing ruled out | [x] done 2026-10-05 (loop; refute 1/3 PASS; Scorecard before/after blocked) |
 | 018 | Level cap 75 readiness: one level range, patch epoch for XP rates, re-seeded milestones, XP buff presets | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
+| 019 | Loop dependency gate: skip a ROADMAP row until its Depends-on plans are done | [ ] open (priority) |
+| 020 | Server health + version-skew guard, System freshness card, honest 404 copy, / redirect | [ ] open (priority) |
+| 021 | Multi-cadence resets: per-item reset rule (Sunday weeklies, non-midnight dailies) | [ ] open (priority) |
+| 022 | Overlay placement off the minimap, content-sized height, legibility | [ ] open (priority) |
+| 023 | AP/DP bracket calculator: bonus AP, DR %, next-bracket gain on the Progress card | [ ] open (priority) |
+| 024 | Olvia Academy deadline vs level ETA: red pill when Lv 60 lands after enrolment closes | [ ] open (priority) |
+| 025 | Home / Now tab: one glance screen for resets, dailies left, buffs, session, ETA, alerts | [ ] open |
+| 026 | Toasts + opt-in Windows notifications (alert hit, buff ending, Hot Time, reset, coupon, game exit) | [ ] open |
+| 027 | Market net proceeds after tax (VP / fame) + pre-order-queue badge | [ ] open |
+| 028 | Market item-name search (local name index) + exact silver in detail | [ ] open |
+| 029 | Overlay market ticker: up to 5 watched prices, alert hits first | [ ] open |
+| 030 | Settings tab + allowlisted POST /api/settings (overlay, hotkeys, profile, theme, scale, notifications) | [ ] open |
+| 031 | World boss schedule: NA table as sourced data, DST-correct next-spawn API | [ ] open |
+| 032 | World boss overlay widget + Today card + 5/15-min notification | [ ] open |
+| 033 | Weekly content planner gated by level and gear (Black Shrine, Atoraxxion, Jetina, LoML, Garmoth, Edania) | [ ] open |
+| 034 | Post-graduation gear roadmap track + graduation readiness + adventure-log seeds | [ ] open |
+| 035 | Enhancement EV calculator: per-step chance tables, expected attempts and cost, Agris pity cap | [ ] open |
+| 036 | Failstack bank + Agris pity tracker + cron budget | [ ] open |
+| 037 | Shopping list from the enhancement plan: materials x arsha prices, can-afford-by | [ ] open |
+| 038 | Drop-buff cap calculator (300/400/500 % caps, rate vs amount) + Blessing of Agris ROI | [ ] open |
+| 039 | Loot-valued grind log: per-spot loot tables, tax-correct silver/h, sell-vs-vendor | [ ] open |
+| 040 | OCR loot-window import: operator screenshot -> item counts for the grind log | [ ] open |
+| 041 | Profile history: hourly BDO-REST-API snapshots, trend sparklines, auto level sample | [ ] open |
+| 042 | Lifeskill / energy / contribution card from the profile API | [ ] open |
+| 043 | Pet roster: 5 slots, tier, talents, special-skill coverage, exchange planner | [ ] open |
+| 044 | Mount tracker: horses (tier, level, skills), Royal Fern Root counter, T10 breed pity calc | [ ] open |
+| 045 | Inventory / weight / storage planner + Value Pack ledger | [ ] open |
+| 046 | Session-end summary: prompt to stop the grind on game exit, nightly and weekly recap | [ ] open |
+| 047 | Density and accessibility rework: content-sized cards, focus-visible, keyboard tabs, tab badges | [ ] open |
+| 048 | Quick-entry parsers (1.2b, 30d, 90m) + local time everywhere | [ ] open |
+| 049 | Shared SSE event bus in the dashboard, hidden-tab poll pause, keyed row updates | [ ] open |
+| 050 | Command palette (Ctrl+K) with typed commands and cross-tab search | [ ] open |
+| 051 | First-run checklist: profile family, log path, ScreenShot folder, overlay corner, watch items, dailies | [ ] open |
+| 052 | Enhancement-mats price bands (p20/p50/p80) with cached-history fallback and below-p20 alert | [ ] open |
+| 053 | Imperial delivery planner: CP/2 boxes per type, 250 % box value, reset countdown | [ ] open |
+| 054 | Cooking / alchemy margin calculator: operator recipes, input/output prices, net after tax | [ ] open |
+| 055 | Jetina boss-crystal planner + Caphras cost calculator | [ ] open |
+| 056 | Black Spirit's Adventure dice timer from logged-in time (overlay) | [ ] open |
+| 057 | Deadeye notes autosave + safe open-in-browser for source links | [ ] open |
+
+Deep dive + UX audit 2026-10-05 session 4 (research 0003-0005): plans 019-057,
+39 plans from 21 + 25 + 15 candidates and 30 UX findings. Ordering rationale:
+019 first because the loop dispatches 3 lanes with no dependency order and
+later plans carry `Depends on:` lines (each dependent plan also carries a
+code-presence guard until 019 lands). Then the UX correctness fix that makes
+the dashboard stop lying about health (020), the Sunday-reset model that 033
+and 056 build on (021), the overlay off the minimap (022), and the two
+progression wins with verified data and a hard date (023 AP/DP brackets, 024
+Olvia enrolment closes 2026-11-05). After the priority rows: glance surfaces
+(025 Home, 026 notifications), small market wins (027-029), settings (030),
+world bosses (031-032), gear-gated weekly plan and roadmap (033-034), the
+enhancement chain (035-037), loot economy (038-040), profile-API trackers
+(041-042), rosters (043-045), then UX polish and lower-value calculators
+(046-057). Dropped as duplicates of 001-018: 0003 C20 (018 milestones),
+0003 C21 (007 notes), 0003 C08 (018 presets), 0004 F22 (research 0002 s5),
+0004 F23 (002 hot list). Deferred (low value, L effort or blocked source):
+0003 C15 next-upgrade value ranker (L; revisit once 023 + 035 + 037 land),
+0003 C18 carrack, 0003 C19 war hours (unverified), 0004 F18 treasure
+tracker, 0004 F19 Marni's Stone, 0004 F20 barter log, 0004 F21 registration
+queue (arsha /queue Imperva-blocked), 0004 F25 worker empire (L). Merged:
+0003 C07 + C11 into 034, 0004 F05 + F06 + F07 into 036, 0004 F08 + F12 into
+039, 0004 F09 + F10 into 038, 0003 C13 + C14 and 0004 F24 into 055, 0005
+F7/F8 into 050. Blocked lanes: a dependent plan dispatched early writes a
+`blocked` marker; plan 019 adds the `blocked` item state that re-dispatches
+it once its Depends-on rows are `[x]`.
 
 Deep dive 2026-10-05 (research 0002): one plan, 018 - the Global Lab level
 cap 75 / XP rescale can go live at the 2026-10-08 maintenance and would make
