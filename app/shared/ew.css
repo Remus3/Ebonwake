@@ -154,6 +154,25 @@ html, body {
 .ew-gnum { font-size: 12px; white-space: nowrap; }
 .ew-grind .ew-form { gap: 4px; }
 
+/* Events tab (plan 006): lists scroll inside their card; soon = warn, ended = muted. */
+.ew-events [hidden] { display: none; }
+.ew-events .ew-form { gap: 4px; }
+.ew-events .ew-form input[type="text"], .ew-events .ew-form input[type="datetime-local"] {
+  width: 170px; box-sizing: border-box; color-scheme: dark;
+}
+.ew-events .ew-form select { width: 170px; box-sizing: border-box; }
+.ew-erow { padding: 2px 4px; border-radius: var(--ew-radius); }
+.ew-erow:hover { background: var(--fk-surface); }
+.ew-ehead { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; align-items: center; gap: 6px; }
+.ew-ecode { font-family: var(--ew-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
+.ew-erow.soon { box-shadow: inset 2px 0 0 var(--fk-status-warn); }
+.ew-erow.soon .ew-mprice { color: var(--fk-status-warn); }
+.ew-erow.done .ew-ecode, .ew-erow.done .ew-ehead .ew-mname { color: var(--fk-text-muted); text-decoration: line-through; }
+.ew-erow.expired { opacity: .55; }
+.ew-srcrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 2px 4px; }
+.ew-srctxt { min-width: 0; }
+.ew-srcurl { user-select: all; }
+
 /* Overlay: glanceable, corner-anchored, translucent. */
 html.ew-overlay, html.ew-overlay body { background: transparent; }
 .ew-ov {
@@ -163,4 +182,5 @@ html.ew-overlay, html.ew-overlay body { background: transparent; }
 }
 .ew-ov-row { display: flex; justify-content: space-between; gap: 12px; }
 .ew-ov-row .ew-stale { color: var(--fk-text-muted); }
+.ew-ov-row .ew-mname { min-width: 0; }
 .ew-card h2 .ew-pill { text-transform: none; letter-spacing: 0; font-weight: 400; }

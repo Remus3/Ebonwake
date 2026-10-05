@@ -118,3 +118,43 @@ capped at 3; one push.
   (`soonest` = earliest `ends` among open items, or null).
 - SOURCES = NA/EU news page, NA/EU notice board, Twitch drops campaigns; all
   https.
+
+### Slice B deviations (adjudicated in-lane, 2026-10-04)
+
+1. Extra pure helpers. Decision: besides `fmtLeft` / `eventRows` /
+   `validEventsBody`, ewcore exports `soonestEvent` (overlay), `localToUtcIso`
+   (datetime-local -> `YYYY-MM-DDTHH:MM:SSZ`, no millis) and `parseEventForm`.
+   Alternatives: inline the logic in events.js / overlay.js (untestable without
+   a DOM). Why: mirrors `soonestBuff` / `parseGrindForm`; node --test covers it.
+   Reverses if: ewcore is split per tab.
+2. Countdown source. Decision: `eventRows` recomputes `left_s`, `status`,
+   `soon` and the order locally from `ends` (date-only `ends` = 23:59:59 UTC,
+   date-only `starts` = 00:00 UTC), falling back to server `left_s` minus time
+   since fetch when `ends` does not parse. Alternatives: show server values
+   until the next 60 s poll. Why: an item flips to expired / soon on the second,
+   same as the plan 005 buff clocks. Reverses if: the server and client rules
+   are found to disagree (then the server value wins).
+3. IPC guard strictness. Decision: `validEventsBody` checks shapes and every
+   limit the client can know (kind, title 1-80, coupon code regex and
+   coupon-only on add, rewards <= 200, https url <= 300, date formats, starts <=
+   ends). On `add` optional fields must be absent (not null); on `edit` null
+   clears rewards/starts/ends/url but never `code` or `title`. The 2-year
+   window, duplicate codes and code-on-non-coupon edits are left to the server
+   (it knows the stored kind and the clock). Alternatives: mirror every server
+   rule (needs server state). Why: the main-process guard must not need
+   server data. Reverses if: slice A accepts null on add (then relax add).
+4. UI placement. Decision: "Purge expired" (two-click) sits in the Add card;
+   events/drops rows also get the two-click delete; the Add form has no
+   `starts` field (the plan's card lists none; the API still takes it).
+   Every successful POST re-polls GET (op replies are an item or a count; the
+   purge count is shown when the reply carries `purged` or `count`).
+   Alternatives: purge in the Coupons header. Why: one action area, keeps rows
+   compact at 1280x800. Reverses if: operator QA asks otherwise.
+5. Upcoming items may be `soon`. Decision: follows the server rule literally
+   (not done, not expired, left_s <= 48 h), so an upcoming item ending within
+   48 h is highlighted and can lead the overlay. Why: the rule in slice A says
+   so. Reverses if: slice A excludes upcoming from soon.
+6. grind.test.js exact-equality assertions on `overlayWidgets` and
+   `POST_ROUTES` were widened for the new `eventsSoon` key and `/api/events`
+   route (same intent, new members). Overlay row label is the item title with
+   ellipsis; label `Ending soon` + `none` when nothing is soon.

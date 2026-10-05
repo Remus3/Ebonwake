@@ -4,7 +4,9 @@
    offline keeps the last value, muted.
    Grind (plan 005): GET /api/grind on the same cadence; the session clock and
    soonest buff countdown run locally each second. Each widget is opt-in via
-   the query main.js passes (config overlay.widgets, default on). */
+   the query main.js passes (config overlay.widgets, default on).
+   Events (plan 006): eventsSoon shows the soonest "ending soon" item from
+   GET /api/events (title + time left), same cadence, countdown local. */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -19,6 +21,9 @@
   let grind = null;
   let grindAt = 0;
   let grindStale = false;
+  let events = null;
+  let eventsAt = 0;
+  let eventsStale = false;
 
   function drawToday(now) {
     const t = document.getElementById('ov-today');
@@ -54,12 +59,24 @@
     }
   }
 
+  function drawEvents(now) {
+    const v = document.getElementById('ov-events');
+    const n = document.getElementById('ov-events-name');
+    const soon = events ? C.soonestEvent(events.items, eventsAt, now) : null;
+    n.textContent = soon ? soon.title : 'Ending soon';
+    n.title = n.textContent;
+    if (soon) v.textContent = C.fmtLeft(soon.left_s);
+    else v.textContent = events ? 'none' : (eventsStale ? 'offline' : '-');
+    v.className = eventsStale ? 'ew-stale' : '';
+  }
+
   function tick() {
     const now = Date.now();
     document.getElementById('ov-daily').textContent = C.fmtDuration(C.nextDailyReset(now) - now);
     document.getElementById('ov-weekly').textContent = C.fmtDuration(C.nextWeeklyReset(now) - now);
     drawToday(now);
     if (GRIND_ON) drawGrind(now);
+    if (W.eventsSoon) drawEvents(now);
   }
 
   function getJSON(path) {
@@ -80,6 +97,17 @@
     }).then(function () { drawGrind(Date.now()); });
   }
 
+  function loadEvents() {
+    getJSON('/api/events').then(function (d) {
+      if (!d || typeof d !== 'object' || !Array.isArray(d.items)) throw new Error('bad body');
+      events = d;
+      eventsAt = Date.now();
+      eventsStale = false;
+    }).catch(function () {
+      eventsStale = true;
+    }).then(function () { drawEvents(Date.now()); });
+  }
+
   function loadToday(force) {
     const now = Date.now();
     if (!force && !C.pollDue(lastToday, now, TODAY_MIN_MS)) return;
@@ -92,6 +120,7 @@
       todayStale = true;
     }).then(function () { drawToday(Date.now()); });
     if (GRIND_ON) loadGrind();
+    if (W.eventsSoon) loadEvents();
   }
 
   function connect() {
@@ -107,6 +136,8 @@
       grindStale = true;
       drawToday(Date.now());
       if (GRIND_ON) drawGrind(Date.now());
+      eventsStale = true;
+      if (W.eventsSoon) drawEvents(Date.now());
       src.close();
       setTimeout(connect, C.backoffMs(attempt++));
     };
@@ -114,6 +145,7 @@
 
   document.getElementById('ov-grind-row').hidden = !W.grindSession;
   document.getElementById('ov-buff-row').hidden = !W.grindBuff;
+  document.getElementById('ov-events-row').hidden = !W.eventsSoon;
   tick();
   setInterval(tick, 1000);
   setInterval(function () { loadToday(true); }, TODAY_MS);
