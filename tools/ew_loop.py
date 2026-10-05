@@ -1193,12 +1193,12 @@ class Tick:
             head = rec["label"]
         msg = (f"{head}\n\nrefute-rounds: {rounds}/{MAX_ROUNDS}\n"
                f"verifier: {rec.get('verdict', 'none')}\nloop item: {rec['id']}\n")
-        if self.d.git(["add", "-A"], wt).returncode != 0 or \
-                self.d.git(["commit", "-q", "-F", "-"], wt, input=msg).returncode != 0:
-            rec["state"] = "failed-dirty"
-            self.items.put(rec)
-            self.step(f"{rec['id']}: commit refused, worktree left dirty")
-            return
+        rec["gates_ok"] = gates_ok  # a refused commit is salvaged with the same verdict
+        r = self.d.git(["add", "-A"], wt)
+        if r.returncode == 0:
+            r = self.d.git(["commit", "-q", "-F", "-"], wt, input=msg)
+        if r.returncode != 0:
+            return self.commit_refused(rec, wt, r, msg)
         rec["commit"] = self.d.git(["rev-parse", "HEAD"], wt).stdout.strip()
         if not gates_ok or not passed:
             rec["state"] = "failed" if not gates_ok else "adjudicate"
@@ -1208,6 +1208,69 @@ class Tick:
         rec["state"] = "committed"
         self.items.put(rec)
         self.merge(rec)
+
+    def commit_refused(self, rec, wt, r, msg):
+        """fix-loop-stall: a refused lane commit (a pre-commit hook in the lane
+        worktree, which runs the lane's own possibly stale tools) no longer
+        parks staged work in the lane: the tree is kept as a commit under
+        refs/ew/keep/<id> and the worktree reset, so the dirty lowest lane
+        index stops wedging every dispatch. Verified work then goes through
+        merge(), whose main-side commit runs main's hooks over the same lines;
+        anything else is failed, kept unmerged for a session."""
+        why = ((r.stderr or "") + (r.stdout or "")).strip()
+        rec["error"] = ascii_text(f"lane commit refused: {why[-260:]}", 300)
+        if not self.salvage(rec, wt, msg):
+            rec["state"] = "failed-dirty"
+            self.items.put(rec)
+            self.step(f"{rec['id']}: commit refused, salvage failed, worktree left dirty")
+            return
+        ok = rec.get("gates_ok") and rec.get("verdict") == "PASS"
+        rec["state"] = "committed" if ok else "failed"
+        self.items.put(rec)
+        self.step(f"{rec['id']}: lane commit refused, work kept under {rec['keep_ref']}, "
+                  f"lane worktree reset")
+        if ok:
+            self.merge(rec)
+
+    def salvage(self, rec, wt, msg):
+        g = self.d.git
+        if g(["add", "-A"], wt).returncode != 0:
+            return False
+        tree = g(["write-tree"], wt)
+        if tree.returncode != 0:
+            return False
+        parents = ["-p", "HEAD"]
+        mh = g(["rev-parse", "-q", "--verify", "MERGE_HEAD"], wt)
+        if mh.returncode == 0 and mh.stdout.strip():
+            parents += ["-p", mh.stdout.strip()]
+        c = g(["commit-tree", tree.stdout.strip(), *parents, "-F", "-"], wt,
+              input="WIP (commit refused, not merged): " + msg)
+        if c.returncode != 0:
+            return False
+        rec["commit"] = c.stdout.strip()
+        self.keep(rec)
+        if not rec.get("keep_ref"):
+            return False
+        if mh.returncode == 0:
+            g(["merge", "--abort"], wt)  # a resolve run's merge in progress
+        return g(["reset", "-q", "--hard", "HEAD"], wt).returncode == 0
+
+    def retry_refused(self):
+        """fix-loop-stall backfill, idempotent: a failed-dirty record whose
+        worktree still holds its staged work (and no other item's) re-runs
+        commit(), which salvages it when the lane hook refuses again."""
+        recs = self.items.all()
+        for rec in recs.values():
+            if rec.get("state") != "failed-dirty" or not rec.get("worktree"):
+                continue
+            wt = Path(rec["worktree"])
+            others = self.held_worktrees({k: v for k, v in recs.items() if k != rec["id"]})
+            if not wt.is_dir() or _norm_path(wt) in others or not self.dirty(wt):
+                continue
+            if self.dry:
+                self.step(f"{rec['id']}: would retry the refused commit")
+                continue
+            self.commit(rec, wt, rec.get("gates_ok", rec.get("verdict") == "PASS"))
 
     def merge(self, rec):
         main = self.d.main_tree
@@ -1607,6 +1670,7 @@ class Tick:
         else:
             self.step(f"spawning paused: {self.blocked()}")
         self.finished()
+        self.retry_refused()
         self.settle_conflicts()
         self.recover_lane_dirty()
         rows, work, skipped = self.work_list()

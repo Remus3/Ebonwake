@@ -1777,3 +1777,82 @@ def test_paused_resolve_gives_its_run_back(tmp_path):
     assert ew_loop.lane_worker("012", deps=deps(root)) == 0
     rec = items.get("012")
     assert rec["state"] == "paused" and rec["resolve_runs"] == 0
+
+
+# ---------------------------------------------------------------- fix-loop-stall: refused commits
+
+def _refusing_git(wt, refuse):
+    """real_git, but `commit` in the lane worktree is refused (a pre-commit hook)
+    while refuse["on"] holds."""
+    def g(args, cwd, input=None):
+        if args[:1] == ["commit"] and Path(cwd) == Path(wt) and refuse["on"]:
+            return subprocess.CompletedProcess(args, 1, "", "[leak-sweep] HALT t.py:1 drive-path")
+        return real_git(args, cwd, input=input)
+    return g
+
+
+def _passing(n=1):
+    return FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: PASS"}] * n)
+
+
+def test_refused_lane_commit_is_salvaged_and_merged_in_main(tmp_path):
+    root, wt = git_world(tmp_path)
+    d = deps(root, spawn=_passing(), git=_refusing_git(wt, {"on": True}),
+             lane_state=lambda: [{"index": i, "state": "RUNNING", "lane": n}
+                                 for i, n in enumerate(("build", "data", "review"))])
+    ew_loop.tick(deps=d, no_push=True)
+    rec = ew_loop.Items(root).get("012")
+    assert rec["state"] == "merged" and "leak-sweep" in rec["error"]
+    assert (root / "feature.txt").exists() and keep_refs(root) == ""
+    assert git(wt, "status", "--porcelain") == ""  # lane index usable again
+    assert "refute-rounds: 0/3" in git(root, "log", "-1", "--format=%B", rec["commit"])
+    assert "| 012 | Grind spot recommender | [x] done" in (
+        root / "docs/plans/ROADMAP.md").read_text()
+
+
+def test_pre_fix_failed_dirty_record_is_retried(tmp_path):
+    # backfill: the 031 shape - failed-dirty, verdict PASS, work staged, no counters
+    root, wt = git_world(tmp_path)
+    git(wt, "add", "-A")
+    rec = ew_loop.Items(root).get("012")
+    rec.update(state="failed-dirty", verdict="PASS", error=None)
+    ew_loop.Items(root).put(rec)
+    d = deps(root, git=real_git, lane_state=lambda: [
+        {"index": i, "state": "RUNNING", "lane": n}
+        for i, n in enumerate(("build", "data", "review"))])
+    ew_loop.tick(deps=d, no_push=True)
+    rec = ew_loop.Items(root).get("012")
+    assert rec["state"] == "merged" and (root / "feature.txt").exists()
+    assert "refute-rounds: 0/3" in git(root, "log", "-1", "--format=%B", rec["commit"])
+
+
+def test_refused_commit_of_red_work_is_kept_unmerged_and_frees_the_lane(tmp_path):
+    root, wt = git_world(tmp_path)
+    d = deps(root, git=_refusing_git(wt, {"on": True}), gates=lambda cwd: (False, "red"),
+             lane_state=lambda: [{"index": i, "state": "RUNNING", "lane": n}
+                                 for i, n in enumerate(("build", "data", "review"))])
+    ew_loop.tick(deps=d, no_push=True)
+    rec = ew_loop.Items(root).get("012")
+    assert rec["state"] == "failed" and rec["keep_ref"] == "refs/ew/keep/012"
+    assert keep_refs(root) == f"refs/ew/keep/012 {rec['commit']}"
+    assert git(wt, "status", "--porcelain") == ""  # lane index usable again
+    assert git(root, "show", f"{rec['commit']}:feature.txt") == "work"
+    assert "commit refused" in git(root, "log", "-1", "--format=%B", rec["commit"])
+    assert not (root / "feature.txt").exists()  # never merged
+    ew_loop.tick(deps=d, no_push=True)  # idempotent
+    assert ew_loop.Items(root).get("012")["state"] == "failed"
+
+
+def test_dirty_failed_dirty_lane_zero_no_longer_wedges_dispatch(tmp_path):
+    # the stall: lane-0 held a failed-dirty item's staged work, the kit claims
+    # the lowest index, so free_lanes() gave 0 slots and every tick read idle
+    root, wt = dirty_lane_world(tmp_path, index=0)
+    git(wt, "add", "-A")
+    items = ew_loop.Items(root)
+    items.put({"id": "099", "kind": "plan", "state": "failed-dirty", "verdict": "PASS",
+               "title": "t", "label": "plan 099: t", "lane": "build", "rc": 0,
+               "worktree": str(wt), "rounds": 0})
+    d = deps(root, git=real_git, lane_worktree=lambda i: lane_wt(tmp_path, i))
+    ew_loop.tick(deps=d, no_push=True)
+    assert items.get("099")["state"] == "merged"
+    assert d.seen["launch"] == ["012"]
