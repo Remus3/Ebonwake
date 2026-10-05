@@ -1,40 +1,26 @@
-PASTE PROMPT
-------------
-continue. Repo Ebonwake. Read EW-NEXT-SESSION.txt, CLAUDE.md, docs/plans/ROADMAP.md, git log -10 first and obey them (adjudicate, never ask, refute max 3, ETAs, batched pushes, kit lanes). I order the EW loop armed: run python tools/loop_task.py install, read back status Ready / PT15M / IgnoreNew, then write the "Proposed CLAUDE.md rules" block from docs/plans/015-loop.md (loop, inbox, responder diet, idle deep-dive) into CLAUDE.md. Then vendor fleet kit v8 from moon_sync_inbox (supersedes v7; re-embed the FLEET-COMMON block, conformance green). Then work the loop's results: lane items Nfa7953 (scorecard order), N715c44 (kit v8 order), 016 (OCR comma-drop) - check ops/loop/control/loop_items/*.json and progress/loop.json; adjudicate any in state adjudicate. Never send input to the BDO window. Run /done at ~60 percent context.
-
 EW NEXT SESSION
 ---------------
-SESSION: 2
+SESSION: 3
 
-Next action: (1) ARM: `python tools/loop_task.py install` then `status`
-(read back Ready, PT15M, IgnoreNew). Operator ordered it 2026-10-05 ("if it
-runs out of tasks ... deep dive research ... self-continuing"); this session
-was a sub-agent relay, so the install and the CLAUDE.md edit wait for the
-operator's own words in chat - the PASTE PROMPT above carries them.
-(2) CLAUDE.md: paste the "Proposed CLAUDE.md rules" block from
-docs/plans/015-loop.md into the EW rules section (loop, inbox read every
-tick unattended, responder diet, idle deep-dive). (3) Kit v8 (MAIN ORDER
-0310, supersedes v7 0215; both in moon_sync_inbox with bundle dirs):
-vendor ops/fleet_kit/ in one commit, re-embed FLEET-COMMON block, item 13
-checklist + `SESSION: <n>` line, item 14 inbox cost (fleet_inbox.scan /
-classify; EW's loop already escalates ORDER/FIX/RULING, triages sonnet
-low; MAIN's cap is 6 notes a day - set loop.max_notes_per_day 6), answer
-MAIN once. Lanes cannot do (3): GATES forbid CLAUDE.md and ops/fleet_kit
-edits. (4) Collect lane results (In flight below).
+Next action: collect the loop's idle deep-dive DD-20261005 (lane build,
+state "ran" at 04:51; ops/loop/control/loop_items/DD-20261005.json) - the
+next LaneLoop tick verifies/merges it and adds <= 2 new plans + ROADMAP rows;
+check its state and any new plan rows, adjudicate anything in state
+adjudicate / merge-conflict. The loop is armed and self-continuing; a session
+adds work via ROADMAP rows, it does not run lanes by hand.
 
 Carried forward (not acted on yet):
-- Loop (plan 015) minors from verifier r1, open: lane worker ignores HALT /
-  backoff / runs cap after dispatch and does not pass halt_file to spawn; a
-  verifier failing with rc!=0 (not a usage limit) is retried every tick with
-  no round count; a `_launch` exception leaves an item "dispatched" with no
-  pid forever; a lane left dirty is dropped silently after 2 claims; hand-off
-  skip regex lets password / OAuth / per-host items through; checklist ETA
-  uses kind loop-review (never recorded -> always 60 s) - use lane_build /
-  lane-build-code and subtract elapsed.
 - Scorecard BEFORE/AFTER (MAIN order 0300 section 4): needs the OpenSSF
   scorecard v5.5.0 linux binary downloaded into WSL Ubuntu (none present) -
-  OPERATOR approves that download; BEFORE reference = MAIN audit 3.6 (the
-  tick pushed b08b433 before any lane work merged).
+  OPERATOR approves that download; BEFORE reference = MAIN audit 3.6. Loop
+  item Hf8969a ended no-change (blocked). Nfa7953 ANSWER already sent with it
+  marked BLOCKED.
+- Lanes still write progress/lane-<name>.json, not lane-<index>.json
+  (recorded in plan 015).
+- Loop gate limits: the loop runs one local Python (ci runs 3.11 + 3.14) and
+  cannot run shell operators in ci.yml steps (none today).
+- EW sent two v8 ANSWERs to MAIN (04:00 loop note said "blocked on v6";
+  04:11 supersedes it). If MAIN flags the duplicate, point to 04:11.
 - OPERATOR: overlay safety check - run BDO borderless/windowed, overlay shown,
   on an alt account first, watch for XIGNCODE3 complaints (ADR 0001 reversal
   condition).
@@ -45,13 +31,15 @@ Carried forward (not acted on yet):
 - OPERATOR (plan 009 QA, optional): ~10 real screenshots with silver and
   buffs visible, press Read on each in System > screenshots. If real silver
   misreads in >1 of 10, set config ocr.engine=windows and re-bench with real
-  crops. Also watch for a comma-drop cut (plan 016 is on it).
+  crops. Plan 016 (comma-drop) is merged; watch for regressions.
 - OPERATOR (plan 010 QA): tray icon shows Show dashboard / Toggle overlay /
   Restart server / Quit; logon task "Ebonwake" starts EW 60 s after login.
 - OPERATOR (plan 011 QA): Progress tab Leveling card - type level + XP pct a
   few times while leveling; add the current Hot Time window from the official
   notice (UTC); optionally enable overlay widget `leveling` in
   config/local.json overlay.widgets.
+- OPERATOR (plans 012-014 QA): grind spot recommender, season pass tracker,
+  coupon check cards in the dashboard - sanity-check against the game.
 - MAIN to record EW's port block 8940-8959 in the machine-wide registry and
   add EW to the roster / lane widget (roster INFO 0230 says EW is a member).
 - NOTE: write gitignored config/leak_needles.json on any new host before
@@ -59,8 +47,9 @@ Carried forward (not acted on yet):
 - NOTE: npm install on this box does NOT fetch the Electron binary; after any
   Electron bump run `node node_modules/electron/install.js` in app/ (and in
   lane worktrees).
-- NOTE: GitHub dependabot banner said 25 alerts right after the Electron 44
-  push (rescan lag); npm audit is 0. Re-check the Security tab.
+- NOTE: GitHub dependabot is now configured (npm app/, pip /ci,
+  github-actions); its PRs merge by this tree once ci is green, never
+  auto-merged. Re-check the Security tab alert count.
 - NOTE: non-blocking verifier notes: OCR cache key mtime is whole seconds;
   bridge timeout 10 s vs server OCR timeout 60 s; normalizeOcr hides buffs
   found without a time; main.js postLocal keeps only the first 64 KiB of a
@@ -71,41 +60,29 @@ Carried forward (not acted on yet):
 - NOTE: SS's 2245 ANSWER to MAIN (v6) was misdelivered into EW's inbox; not
   acted on, reported to MAIN in EW's v6 ANSWER; marked seen in the loop watch.
 
-Context: tools/ew_loop.py (inbox default moon_sync_inbox / moon_sync_outbox,
-ORDER/FIX/RULING -> lane item N<hex> via ops/loop/control/loop_orders.json,
-answered after merge; triage sonnet low; loop.max_notes_per_day; ROADMAP
-"(priority)" rows first), docs/plans/015-loop.md as-built 11-12 + proposed
-CLAUDE.md block, docs/plans/016-ocr-comma-drop.md, ci/requirements-ci.txt
-(hashed pytest+ruff for the scorecard lane). Watch state
-ops/loop/control/loop_inbox_watch.json was seeded (baselined; v6, SS answer,
-v7, roster INFO seen; scorecard left unseen so it escalated).
+Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew (read back this
+session: Enabled, repeat 15 min, MultipleInstances IgnoreNew). State:
+ops/loop/control/loop_items/*.json, progress/loop.json, lane-*.json.
+Loop now: kit v8 fleet_inbox triage, kind labels, cap 6 notes/day, pre-merge
+gates = every ci.yml check step (ruff.toml rule set pinned), lanes no longer
+edit ROADMAP.md (loop flips rows at merge; ROADMAP-only conflicts auto-
+resolved row by row; plan 015 deviation 16).
 
-Acceptance: LaneLoop read back Ready; CLAUDE.md carries the loop rules; kit
-v8 conformance green + one ANSWER to MAIN; scorecard order merged with CI
-green and answered; plan 016 merged (old bench >= 142/144, gap 120/120) or
-its no-signal record.
+Acceptance: DD-20261005 merged (or adjudicated) and its new plans built by
+the loop with ci green; no item left in merge-conflict / adjudicate.
 
-Do NOT redo: inbox path bug (b08b433: MAIN writes <root>/moon_sync_inbox,
-loop now reads it by default; 33 loop tests pass), responder diet in the
-loop (b08b433), one real tick fired 03:11 (rc 0, 82 s; read back: 28 new
-[pin] lines for account B in the proxy activity log, progress/loop.json
-written state running, push ok b08b433), plan 016 written + ROADMAP row,
-hashed CI requirements, hotfix 008, OCR word-gap fix, plans 011-015 build,
-Electron 44.5.1, kit v6 adoption.
+Do NOT redo: LaneLoop arm (read back), CLAUDE.md loop rules (ec4eba7), kit
+v8 vendored + conformance (4e327cc) + loop on fleet_inbox (593a2e0) + v8
+ANSWER 04:11, Nfa7953 supply-chain (f5d51af, ruff.toml 0b6867a, ANSWER
+04:15), plan 016 (ce5081f), N715c44 (8069937), plan 012 (f5f8857 + ci fix
+218215d), 013 (63db64c), 014 (e1e946b), loop ci-parity gates + ROADMAP
+conflict fix (cf0bc60, d147475), Hc7103f loop minors (merged by loop),
+inbox "deliver-failed" mislabel + re-triage bug (593a2e0).
 
-In flight (dispatched 03:11 by the tick, detached lane workers; progress
-ops/loop/control/progress/lane-<build|data|review>.json, items
-ops/loop/control/loop_items/<ID>.json; ETA ~11m each, then a tick runs
-verify/merge/push - with the loop not armed, run
-`python tools/ew_loop.py tick` to process them):
-- Nfa7953 lane build: MAIN supply-chain ORDER 0300 (dependabot, SHA pins
-  pre-resolved in the order record, CodeQL, permissions, ruff, ROADMAP.md,
-  fuzzing record).
-- N715c44 lane data: MAIN kit-v8 ORDER 0310 (expect little: lanes may not
-  edit ops/fleet_kit or CLAUDE.md - next action (3) owns it).
-- 016 lane review: OCR comma-drop regression.
+In flight: DD-20261005 deep-dive (lane build, ran; next tick verifies).
 
-Status: pushed b08b433 (by the tick). CI 37282200361 green on b08b433.
-Gates before commit: pytest pass, node 151 pass, leak sweep ARMED.
+Status: main 08147df pushed; ci 37293162212 success, codeql 37293162204
+success. Gates this /done: pytest 0 failed (~1086 tests), node 172 pass /
+0 fail, leak sweep ARMED (19). Session jsonl 0.7 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
