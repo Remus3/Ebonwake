@@ -556,6 +556,66 @@
     return 'resets ' + fmtResetRule(rule) + ' in ' + fmtDuration(nextResetOf(rule, now) - now);
   }
 
+  // Plan 033: one gate -> 'needs Lv +2, +10 AP (+5 AP crosses a bracket: +8 bonus
+  // AP)'; unknown stats say whether the gate is unsourced or the stat unset.
+  const GATE_REQ = { level: 'min_level', ap: 'ap', dp: 'dp' };
+  const GATE_NAME = { level: 'level', ap: 'AP', dp: 'DP' };
+  function fmtWeeklyGate(row) {
+    const g = plainObject(row) && plainObject(row.gate) ? row.gate : null;
+    if (!g) return '';
+    const needs = plainObject(g.needs) ? g.needs : {};
+    const parts = [];
+    if (Number.isInteger(needs.level)) parts.push('Lv +' + needs.level);
+    if (Number.isInteger(needs.ap)) parts.push('+' + needs.ap + ' AP');
+    if (Number.isInteger(needs.dp)) parts.push('+' + needs.dp + ' DP');
+    let out = parts.length ? 'needs ' + parts.join(', ') : '';
+    const b = g.bracket;
+    if (parts.length && plainObject(b) && Number.isInteger(b.to_next) && b.to_next > 0) {
+      out += ' (+' + b.to_next + ' AP crosses a bracket' +
+        (Number.isInteger(b.next_gain) ? ': +' + b.next_gain + ' bonus AP' : '') + ')';
+    }
+    const unsourced = [];
+    const unset = [];
+    (Array.isArray(g.unknown) ? g.unknown : []).forEach(function (k) {
+      if (typeof k !== 'string' || !Object.prototype.hasOwnProperty.call(GATE_REQ, k)) return;
+      (row[GATE_REQ[k]] === null ? unsourced : unset).push(GATE_NAME[k]);
+    });
+    const more = [];
+    if (unset.length) more.push('set ' + unset.join('/') + ' on Progress');
+    if (unsourced.length) more.push(unsourced.join('/') + ' gate not sourced');
+    if (more.length) out += (out ? '; ' : '') + more.join('; ');
+    return out;
+  }
+
+  // Plan 033: GET /api/today weekly_plan -> {rows, eligible, total}; eligible rows
+  // first, then unknown, then locked (data order kept inside each group). A
+  // count whose next_reset has passed reads 0 until the next poll.
+  const GATE_ORDER = { eligible: 0, unknown: 1, locked: 2 };
+  function weeklyPlan(d, now) {
+    const plan = plainObject(d) && plainObject(d.weekly_plan) ? d.weekly_plan : null;
+    const raw = plan && Array.isArray(plan.rows) ? plan.rows : [];
+    const rows = [];
+    raw.forEach(function (r, n) {
+      if (!plainObject(r) || typeof r.id !== 'string' || !validTitle(r.name)) return;
+      if (!Number.isInteger(r.per_week) || r.per_week < 1) return;
+      const state = plainObject(r.gate) && typeof r.gate.state === 'string' &&
+        Object.prototype.hasOwnProperty.call(GATE_ORDER, r.gate.state) ? r.gate.state : 'unknown';
+      const next = Date.parse(r.next_reset);
+      let done = Number.isInteger(r.done) ? Math.max(0, Math.min(r.done, r.per_week)) : 0;
+      if (Number.isFinite(next) && now >= next) done = 0;
+      rows.push({ id: r.id, name: r.name, state: state, done: done, per_week: r.per_week,
+        full: done >= r.per_week, ticks: done + '/' + r.per_week, gap: fmtWeeklyGate(r),
+        reset: Number.isFinite(next) ? next : null,
+        title: [typeof r.note === 'string' ? r.note : '',
+          typeof r.source === 'string' ? 'source: ' + r.source : '',
+          typeof r.verified === 'string' ? 'verified ' + r.verified : ''].filter(Boolean).join('\n'),
+        n: n });
+    });
+    rows.sort(function (a, b) { return GATE_ORDER[a.state] - GATE_ORDER[b.state] || a.n - b.n; });
+    return { rows: rows, eligible: rows.filter(function (r) { return r.state === 'eligible'; }).length,
+      total: rows.length, error: plan && typeof plan.error === 'string' ? plan.error : null };
+  }
+
   // Changes whenever any list's or item's reset passes (Today redraw trigger).
   function resetKey(items, now) {
     const keys = [lastResetOf({ every: 'day', at: '00:00' }, now),
@@ -672,7 +732,8 @@
     if (keys.length !== 1) return false;
     const k = keys[0];
     const v = body[k];
-    if (k === 'tick' || k === 'untick' || k === 'remove') return typeof v === 'string' && SLUG.test(v);
+    if (k === 'tick' || k === 'untick' || k === 'remove' || k === 'weekly_tick' ||
+        k === 'weekly_untick') return typeof v === 'string' && SLUG.test(v);
     if (k === 'move') {
       return plainObject(v) && onlyKeys(v, ['id', 'to']) && typeof v.id === 'string' &&
         SLUG.test(v.id) && isInt(v.to, 0);
@@ -2731,6 +2792,8 @@
     nextResetOf: nextResetOf,
     fmtResetRule: fmtResetRule,
     fmtResetCountdown: fmtResetCountdown,
+    fmtWeeklyGate: fmtWeeklyGate,
+    weeklyPlan: weeklyPlan,
     resetKey: resetKey,
     resetPresets: resetPresets,
     presetForm: presetForm,
