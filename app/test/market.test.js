@@ -257,7 +257,7 @@ test('fmtSilverExact groups digits for the hover title', () => {
   assert.strictEqual(C.fmtSilverExact(950), '950');
   assert.strictEqual(C.fmtSilverExact(-1234567), '-1,234,567');
   assert.strictEqual(C.fmtSilverExact(null), '-');
-  assert.strictEqual(C.fmtSilverExact(1.5), '-');
+  assert.strictEqual(C.fmtSilverExact(1.5), '2'); // one formatter since the 027+028 merge: rounds
 });
 
 test('parseSilver reads digits, commas and k/m/b suffixes', () => {
@@ -313,4 +313,56 @@ test('market.js shows net column, pair calculator and pre-order badge (L6)', () 
 test('fmtSilver never prints -0', () => {
   assert.strictEqual(C.fmtSilver(-0.4), '0');
   assert.strictEqual(C.fmtSilver(-1500), '-1.5K');
+});
+
+// ---- plan 028: exact silver + name typeahead helpers ----
+
+test('fmtSilverExact uses thousands separators', () => {
+  assert.strictEqual(C.fmtSilverExact(1234567890), '1,234,567,890');
+  assert.strictEqual(C.fmtSilverExact(100000000), '100,000,000');
+  assert.strictEqual(C.fmtSilverExact(999), '999');
+  assert.strictEqual(C.fmtSilverExact(1000), '1,000');
+  assert.strictEqual(C.fmtSilverExact(0), '0');
+  assert.strictEqual(C.fmtSilverExact(-4560000), '-4,560,000');
+  assert.strictEqual(C.fmtSilverExact(-0.2), '0');
+  assert.strictEqual(C.fmtSilverExact(1499.6), '1,500');
+  assert.strictEqual(C.fmtSilverExact(null), '-');
+  assert.strictEqual(C.fmtSilverExact(NaN), '-');
+  assert.strictEqual(C.fmtSilverExact('12'), '-');
+});
+
+test('searchQuery mirrors the server validation (2-40 printable ASCII)', () => {
+  assert.strictEqual(C.searchQuery(' cron '), 'cron');
+  assert.strictEqual(C.searchQuery('16080'), '16080');
+  assert.strictEqual(C.searchQuery('x'.repeat(40)), 'x'.repeat(40));
+  [null, undefined, 12, '', 'a', ' a ', 'x'.repeat(41), 'caf' + String.fromCharCode(0xe9), 'ab\tc', 'ab\x7f']
+    .forEach((q) => assert.strictEqual(C.searchQuery(q), null, JSON.stringify(q)));
+  assert.strictEqual(C.SEARCH_DEBOUNCE_MS, 250);
+});
+
+test('searchPath encodes the query', () => {
+  assert.strictEqual(C.searchPath('black st&x'), '/api/market/search?q=black%20st%26x');
+});
+
+test('searchRows keeps valid rows and builds labels', () => {
+  const rows = C.searchRows({ items: [
+    { id: 16080, sid: 0, name: 'Cron Stone' },
+    { id: 11103, sid: 3, name: 'Kzarka Longbow' },
+    { id: '1', sid: 0, name: 'bad id' }, { id: 2, sid: -1, name: 'bad sid' },
+    { id: 3, sid: 0, name: '' }, null, 'junk'] });
+  assert.deepStrictEqual(rows, [
+    { id: 16080, sid: 0, name: 'Cron Stone', label: 'Cron Stone  #16080' },
+    { id: 11103, sid: 3, name: 'Kzarka Longbow', label: 'Kzarka Longbow [3]  #11103' }]);
+  assert.deepStrictEqual(C.searchRows(null), []);
+  assert.deepStrictEqual(C.searchRows({ items: 'x' }), []);
+});
+
+test('market.js wires the debounced typeahead and exact silver in detail', () => {
+  const src = read('dashboard/market.js');
+  assert.match(src, /C\.searchPath\(/);
+  assert.match(src, /C\.SEARCH_DEBOUNCE_MS/);
+  assert.match(src, /clearTimeout\(f\.timer\)/);
+  assert.match(src, /advanced: raw id \/ sid/);
+  assert.match(src, /C\.fmtSilverExact\(s\[1\]\)/);
+  assert.match(src, /title = C\.fmtSilverExact\(n\)/);
 });

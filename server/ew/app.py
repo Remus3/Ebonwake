@@ -3,7 +3,7 @@
 Routes: /api/health, /api/version (fleet P0-5), /api/state, /events (SSE),
 / (302 to the dashboard page, plan 020) and /app/* (static dashboard + overlay
 assets, browser fallback),
-/api/market/{watch,item,hot} (plan 002), /api/today (plan 003),
+/api/market/{watch,item,hot} (plan 002), /api/market/search (plan 028), /api/today (plan 003),
 /api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006; plan 014
 adds its `suggested` coupon block),
 /api/deadeye (plan 007), /api/game (plan 008), /api/leveling (plan 011),
@@ -26,8 +26,8 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import (__version__, coupons, deadeye, events, gamewatch, grind, leveling, market, ocr,
-               ports, progress, single, spots, today)
+from . import (__version__, coupons, deadeye, events, gamewatch, grind, itemnames, leveling,
+               market, ocr, ports, progress, single, spots, today)
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -124,6 +124,15 @@ class EWServer(ThreadingHTTPServer):
         self.market = market.MarketService(market_client or market.ArshaClient(),
                                            market.Watchlist(self.store, seed=seed),
                                            settings=config_market())
+        # Plan 028: name index over the seed, util/db and this client's cache;
+        # util/db rides the market client's fetch so a test client stays offline.
+        mc = self.market.client
+        self.names = itemnames.NameIndex(
+            seed=itemnames.load_seed(), market_cache_dir=mc.cache_dir,
+            index_path=(Path(store_root).parent if store_root else RUNTIME) / "market_names.json",
+            utildb=itemnames.UtilDb(fetch=mc.fetch, clock=mc.clock,
+                                    cache_dir=mc.cache_dir / "utildb"),
+            clock=mc.clock)
         self.today = today.TodayService(self.store, clock=today_clock or time.time)
         if profile_client is None:
             cfg = progress.config_profile(REPO_ROOT) if profile_cfg is None else profile_cfg
@@ -240,6 +249,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._market_item(query)
         if path == "/api/market/hot":
             return self._send(200, self.server.market.hot())
+        if path == "/api/market/search":
+            try:
+                rows = self.server.names.search(parse_qs(query).get("q", [None])[0])
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            return self._send(200, {"items": rows})
         if path == "/api/today":
             return self._send(200, self.server.today.view())
         if path == "/api/progress":

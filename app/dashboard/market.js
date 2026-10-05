@@ -75,6 +75,13 @@
     return s;
   }
 
+  // List cell: short silver, exact value on hover (plan 028).
+  function priceEl(n) {
+    const s = el('span', 'ew-mprice', C.fmtSilver(n));
+    if (typeof n === 'number') s.title = C.fmtSilverExact(n) + ' silver';
+    return s;
+  }
+
   // ---- data ----
 
   function poll(force) {
@@ -118,6 +125,8 @@
     if (f) {
       f.id.value = it.id;
       f.sid.value = it.sid || 0;
+      f.q.value = it.name || '';
+      f.hits.textContent = '';
       f.below.value = it.below === null || it.below === undefined ? '' : it.below;
       f.above.value = it.above === null || it.above === undefined ? '' : it.above;
     }
@@ -164,7 +173,7 @@
       row.tabIndex = 0;
       row.setAttribute('role', 'button');
       row.appendChild(el('span', 'ew-mname', label(it)));
-      row.appendChild(el('span', 'ew-mprice', C.fmtSilver(it.price)));
+      row.appendChild(priceEl(it.price));
       row.appendChild(netEl(it));
       const a = alertOf(it);
       const badges = el('span', 'ew-badges');
@@ -204,7 +213,7 @@
         const bar = el('span', 'ew-dbar ' + s[0]);
         bar.style.width = Math.round(l.w * 100) + '%'; // CSSOM, allowed by the CSP
         r.appendChild(bar);
-        r.appendChild(el('span', 'ew-dtxt', C.fmtSilver(l.price) + '  x' + l.count));
+        r.appendChild(el('span', 'ew-dtxt', C.fmtSilverExact(l.price) + '  x' + l.count));
         col.appendChild(r);
       });
       box.appendChild(col);
@@ -234,7 +243,7 @@
     [['min', st.min], ['max', st.max], ['last', last]].forEach(function (s) {
       const x = el('span', null);
       x.appendChild(el('span', 'ew-muted', s[0] + ' '));
-      x.appendChild(el('span', 'ew-mprice', C.fmtSilver(s[1])));
+      x.appendChild(el('span', 'ew-mprice', C.fmtSilverExact(s[1])));
       stats.appendChild(x);
     });
     wrap.appendChild(stats);
@@ -258,16 +267,11 @@
       row.title = 'click to fill the add form';
       row.appendChild(el('span', 'ew-mname', label(it)));
       const price = typeof it.lastSoldPrice === 'number' ? it.lastSoldPrice : it.basePrice;
-      row.appendChild(el('span', 'ew-mprice', C.fmtSilver(price)));
+      row.appendChild(priceEl(price));
       // L6: a pre-order queue gets the badge instead of a bare "stock 0".
       const pre = badgeEl(it);
       row.appendChild(pre || el('span', 'ew-muted', 'stock ' + C.fmtSilver(it.currentStock)));
-      row.addEventListener('click', function () {
-        const f = S.ui.form;
-        f.id.value = it.id;
-        f.sid.value = it.sid || 0;
-        f.msg.textContent = 'set thresholds, then Save';
-      });
+      row.addEventListener('click', function () { pick(it); });
       list.appendChild(row);
     });
     body.appendChild(list);
@@ -328,23 +332,77 @@
     return { box: box, update: update };
   }
 
+  // ---- name typeahead (plan 028) ----
+
+  // Fill the form from a search hit or hot row; raw id/sid stay editable.
+  function pick(it) {
+    const f = S.ui.form;
+    f.id.value = it.id;
+    f.sid.value = it.sid || 0;
+    if (it.name) f.q.value = it.name;
+    f.hits.textContent = '';
+    f.msg.textContent = label(it) + ' #' + it.id + ' - set thresholds, then Save';
+  }
+
+  function drawHits(f, rows) {
+    f.hits.textContent = '';
+    rows.forEach(function (r) {
+      const row = el('div', 'ew-mrow ew-hit', r.label);
+      row.tabIndex = 0;
+      row.setAttribute('role', 'option');
+      row.addEventListener('click', function () { pick(r); });
+      row.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); pick(r); } });
+      f.hits.appendChild(row);
+    });
+  }
+
+  function search(f) {
+    const q = C.searchQuery(f.q.value);
+    const seq = ++f.seq;
+    if (q === null) { f.hits.textContent = ''; return; }
+    getJSON(C.searchPath(q)).then(function (d) {
+      if (seq !== f.seq) return; // a newer keystroke won
+      const rows = C.searchRows(d);
+      drawHits(f, rows);
+      if (!rows.length) f.hits.appendChild(el('div', 'ew-muted', 'no match - use advanced id / sid'));
+    }).catch(function (e) {
+      if (seq === f.seq) { f.hits.textContent = ''; f.hits.appendChild(el('div', 'ew-err', e.message)); }
+    });
+  }
+
   function formCard() {
     const c = card('Add / edit');
     const form = el('form', 'ew-form');
-    const f = {};
-    [['id', 'item id'], ['sid', 'enhance (sid)'], ['below', 'alert below'], ['above', 'alert above']]
-      .forEach(function (x) {
-        const lab = el('label', null);
-        lab.appendChild(el('span', 'ew-muted', x[1]));
-        const inp = el('input');
-        inp.type = 'text';
-        inp.inputMode = 'numeric';
-        inp.autocomplete = 'off';
-        inp.name = x[0];
-        lab.appendChild(inp);
-        form.appendChild(lab);
-        f[x[0]] = inp;
-      });
+    const f = { seq: 0, timer: null };
+    function field(parent, name, text, numeric) {
+      const lab = el('label', null);
+      lab.appendChild(el('span', 'ew-muted', text));
+      const inp = el('input');
+      inp.type = 'text';
+      if (numeric) inp.inputMode = 'numeric';
+      inp.autocomplete = 'off';
+      inp.name = name;
+      lab.appendChild(inp);
+      parent.appendChild(lab);
+      f[name] = inp;
+    }
+    field(form, 'q', 'item name', false);
+    f.q.placeholder = 'e.g. cron, or an id';
+    f.q.addEventListener('input', function () {
+      clearTimeout(f.timer);
+      f.timer = setTimeout(function () { search(f); }, C.SEARCH_DEBOUNCE_MS);
+    });
+    f.q.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') ev.preventDefault(); });
+    f.hits = el('div', 'ew-list ew-hits');
+    f.hits.setAttribute('role', 'listbox');
+    form.appendChild(f.hits);
+    const adv = el('details', 'ew-adv');
+    adv.appendChild(el('summary', 'ew-muted', 'advanced: raw id / sid'));
+    field(adv, 'id', 'item id', true);
+    field(adv, 'sid', 'enhance (sid)', true);
+    form.appendChild(adv);
+    field(form, 'below', 'alert below', true);
+    field(form, 'above', 'alert above', true);
     const btns = el('div', 'ew-btns');
     const save = el('button', 'ew-btn', 'Save');
     save.type = 'submit';

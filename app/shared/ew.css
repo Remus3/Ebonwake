@@ -106,6 +106,12 @@ html, body {
 .ew-btn:hover { border-color: var(--fk-accent); }
 .ew-btn[hidden] { display: none; }
 .ew-msg { min-height: 1.4em; }
+/* Market name typeahead (plan 028). */
+.ew-hits { max-height: 160px; overflow-y: auto; }
+.ew-hit { grid-template-columns: minmax(0, 1fr); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ew-adv { display: flex; flex-direction: column; gap: 6px; }
+.ew-adv summary { cursor: pointer; }
+.ew-adv label { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 6px; }
 /* System tab (plan 020): one freshness pill per /api/state source. */
 .ew-fresh { display: flex; flex-wrap: wrap; gap: 6px; align-content: flex-start; }
 
