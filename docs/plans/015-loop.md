@@ -234,6 +234,40 @@ checklist ends in `[ ] /done`; one push.
        ledger (`outbound_cap.jsonl`) is not read - at worst one extra note on
        the day of the switch. Reverses if: never (read-only shim).
 
+15. Gates = ci, and ROADMAP rows are flipped in main at merge (fix-0130,
+    2026-10-05).
+    a. Pre-merge gates run exactly the `run:` commands of the tree's own
+       `.github/workflows/ci.yml` (in order, minus `pip install` setup):
+       action-pin check, `python -m ruff check server tools tests` (repo
+       `ruff.toml`), pytest, `npm test --prefix app`, `leak_sweep --tree`. No
+       ci.yml or no command = gates fail closed. Why: f5f8857 merged a lane
+       whose unused import (ruff F401) ci rejected; the loop gated on pytest +
+       node only. Alternatives: hard-code ruff into the old list (drifts the
+       next time ci gains a step). Reverses if: ci gains a step that cannot
+       run on this host - then that step is skipped by name, with a test.
+    b. Merge conflicts: 0e4393f (Nfa7953), 013 and 014 all conflicted in
+       `docs/plans/ROADMAP.md`. Root cause: `commit()` flipped the item's row
+       to `[x] done` INSIDE the lane commit, on a worktree cut from an older
+       main; parallel lanes flip ADJACENT rows of one table, which git always
+       reports as one conflicting hunk. Decision: (1) the lane commit never
+       touches ROADMAP.md - `merge()` runs `merge --no-ff --no-commit`, flips
+       the row in main, and commits once; (2) plan and hand-off lane prompts
+       say "Do NOT edit docs/plans/ROADMAP.md"; (3) a conflict whose ONLY
+       unmerged path is ROADMAP.md is resolved row by row
+       (`resolve_roadmap`: rows keyed by plan id; a row only the lane changed
+       or added takes the lane's line, a row both sides changed keeps main's,
+       prose changed on both sides is not guessed -> still `merge-conflict`).
+       (3) covers deep-dive / order lanes, which legitimately add rows, and
+       lanes already in flight with the old flip. Alternatives: rebase the
+       lane commit onto main before merging (still conflicts on adjacent
+       rows; rewrites the verified commit); `merge=union` gitattribute
+       (duplicates both versions of a flipped row); one ROADMAP file per plan
+       (churns every reader of the table). Why: removes the collision at its
+       source with no new file layout, and the fallback never drops a side's
+       row. Real code conflicts (014 vs 012 in `server/ew/app.py`) still
+       abort to `merge-conflict` for a session. Reverses if: a ROADMAP row
+       is measured lost or duplicated by the resolver.
+
 ## CLAUDE.md rules - LANDED 2026-10-05 (CLAUDE.md "Loop (plan 015)"; text below is the proposal, CLAUDE.md is authoritative: cap 6, not 12)
 
 ```

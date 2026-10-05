@@ -755,3 +755,170 @@ def test_no_machine_path_in_sources():
         assert not re.search(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]", src)
         assert "\\" + "Users" + "\\" not in src
         src.encode("ascii")
+
+
+# ---------------------------------------------------------------- fix-0130: ci-equal gates
+
+CI_YML = ROOT / ".github" / "workflows" / "ci.yml"
+
+
+def test_ci_gate_commands_are_read_from_the_ci_workflow():
+    cmds = ew_loop.ci_gate_commands(CI_YML.read_text(encoding="utf-8"))
+    assert "python -m ruff check server tools tests" in cmds
+    assert "python -m pytest -q" in cmds and "npm test --prefix app" in cmds
+    assert not any("pip install" in c for c in cmds)  # environment setup, not a gate
+    assert cmds.index("python -m ruff check server tools tests") < cmds.index("python -m pytest -q")
+
+
+def _ci_tree(tmp_path, text=None):
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "ci.yml").write_text(text if text is not None else CI_YML.read_text(encoding="utf-8"),
+                               newline="\n")
+    return tmp_path
+
+
+def test_loop_gates_run_exactly_what_ci_runs(tmp_path):
+    cwd, ran = _ci_tree(tmp_path), []
+
+    def run(argv, cwd):
+        ran.append(argv)
+        return 0, ""
+
+    ok, detail = ew_loop._gates(cwd, run=run)
+    assert ok, detail
+    want = ew_loop.ci_gate_commands(CI_YML.read_text(encoding="utf-8"))
+    assert len(ran) == len(want)
+    for argv, cmd in zip(ran, want):
+        words = cmd.split()
+        if words[0] == "python":
+            assert argv[0] == ew_loop._python() and argv[1:] == words[1:]
+        elif words[0] == "npm":
+            assert Path(argv[0]).stem == "npm" and argv[1:] == words[1:]
+        else:
+            assert argv == words
+
+
+def test_loop_gates_stop_red_at_ruff(tmp_path):
+    cwd, ran = _ci_tree(tmp_path), []
+
+    def run(argv, cwd):
+        ran.append(argv)
+        return (1, "F401 unused import") if "ruff" in argv else (0, "")
+
+    ok, detail = ew_loop._gates(cwd, run=run)
+    assert not ok and "ruff" in detail and "F401" in detail
+    assert not any("pytest" in a for a in ran)
+
+
+def test_loop_gates_fail_closed_without_ci_workflow(tmp_path):
+    ok, detail = ew_loop._gates(tmp_path, run=lambda argv, cwd: (0, ""))
+    assert not ok and "ci.yml" in detail
+    _ci_tree(tmp_path / "x", "name: ci\njobs: {}\n")
+    ok, detail = ew_loop._gates(tmp_path / "x", run=lambda argv, cwd: (0, ""))
+    assert not ok
+
+
+# ---------------------------------------------------------------- fix-0130: ROADMAP collisions
+
+def test_resolve_roadmap_takes_both_sides_row_changes():
+    base = ROADMAP
+    ours = ROADMAP.replace("| 012 | Grind spot recommender | [ ] open |",
+                           "| 012 | Grind spot recommender | [x] done A |")
+    theirs = ROADMAP.replace("| 013 | Season pass tracker | [ ] open |",
+                             "| 013 | Season pass tracker | [x] done B |") + \
+        "| 020 | New idea | [ ] open |\n"
+    out = ew_loop.resolve_roadmap(base, ours, theirs)
+    assert "| 012 | Grind spot recommender | [x] done A |" in out
+    assert "| 013 | Season pass tracker | [x] done B |" in out
+    assert "| 020 | New idea | [ ] open |" in out
+    assert out.index("| 013 |") < out.index("| 020 |")
+    # both sides changed one row: main (ours) wins
+    both = theirs.replace("[ ] open |\n| 013", "[x] lane says |\n| 013")
+    assert "[x] done A" in ew_loop.resolve_roadmap(base, ours, both)
+    # a non-row (prose) change on both sides is not auto-resolved
+    assert ew_loop.resolve_roadmap(base, ours + "prose A\n", theirs + "prose B\n") is None
+
+
+def _lane(root, tmp_path, name, iid, edit):
+    wt = tmp_path / "ew-worktrees" / name
+    git(root, "worktree", "add", "-q", "--detach", str(wt))
+    edit(wt)
+    ew_loop.Items(root).put({"id": iid, "kind": "plan", "title": f"plan {iid}",
+                             "label": f"plan {iid}: t", "state": "ran", "worktree": str(wt),
+                             "rc": 0, "lane": name, "rounds": 0})
+    return wt
+
+
+def _flip_in(wt, iid):
+    rm = wt / "docs/plans/ROADMAP.md"
+    rm.write_text(ew_loop.flip_roadmap(rm.read_text(), iid, "done by lane"), newline="\n")
+
+
+def _two_lane_world(tmp_path, edit_a, edit_b):
+    root = make_root(tmp_path, handoff="")
+    git(root, "init", "-q", "-b", "main")
+    (root / ".gitignore").write_text("ops/\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "init")
+    _lane(root, tmp_path, "lane-0", "012", edit_a)
+    _lane(root, tmp_path, "lane-1", "013", edit_b)
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: PASS"}] * 2)
+    d = deps(root, spawn=sp, git=real_git,
+             lane_state=lambda: [{"index": i, "state": "RUNNING", "lane": n}
+                                 for i, n in enumerate(("build", "data", "review"))])
+    ew_loop.tick(deps=d, no_push=True)
+    return root
+
+
+def test_lane_commit_never_flips_roadmap_merge_does(tmp_path):
+    root, wt = git_world(tmp_path)
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: PASS"}])
+    d = deps(root, spawn=sp, git=real_git,
+             lane_state=lambda: [{"index": i, "state": "RUNNING", "lane": n}
+                                 for i, n in enumerate(("build", "data", "review"))])
+    ew_loop.tick(deps=d, no_push=True)
+    rec = ew_loop.Items(root).get("012")
+    assert rec["state"] == "merged"
+    lane_files = git(root, "show", "--name-only", "--format=", rec["commit"]).split()
+    assert "docs/plans/ROADMAP.md" not in lane_files
+    assert "| 012 | Grind spot recommender | [x] done" in git(root, "show", "main:docs/plans/ROADMAP.md")
+    assert len(git(root, "log", "-1", "--format=%P", "main").split()) == 2
+    assert git(root, "status", "--porcelain") == ""
+
+
+def test_parallel_lanes_flipping_adjacent_rows_both_merge(tmp_path):
+    # the Nfa7953 / 013 / 014 shape: two lanes from one base, adjacent ROADMAP rows
+    def a(wt):
+        (wt / "a.txt").write_text("a\n")
+        _flip_in(wt, "012")
+
+    def b(wt):
+        (wt / "b.txt").write_text("b\n")
+        _flip_in(wt, "013")
+
+    root = _two_lane_world(tmp_path, a, b)
+    items = ew_loop.Items(root)
+    assert items.get("012")["state"] == "merged" and items.get("013")["state"] == "merged"
+    rm = (root / "docs/plans/ROADMAP.md").read_text()
+    assert "<<<<" not in rm and rm.count("| 012 |") == 1 and rm.count("| 013 |") == 1
+    assert "| 012 | Grind spot recommender | [x] done" in rm
+    assert "| 013 | Season pass tracker | [x] done" in rm
+    assert (root / "a.txt").exists() and (root / "b.txt").exists()
+    assert git(root, "status", "--porcelain") == ""
+
+
+def test_real_code_conflict_still_aborts_cleanly(tmp_path):
+    root = _two_lane_world(tmp_path, lambda wt: (wt / "f.txt").write_text("a\n"),
+                           lambda wt: (wt / "f.txt").write_text("b\n"))
+    states = sorted(ew_loop.Items(root).get(i)["state"] for i in ("012", "013"))
+    assert states == ["merge-conflict", "merged"]
+    assert git(root, "status", "--porcelain") == ""
+    assert not (root / ".git" / "MERGE_HEAD").exists()
+
+
+def test_plan_and_handoff_prompts_keep_lanes_off_roadmap_and_name_ruff():
+    item = {"id": "012", "title": "t", "text": "x"}
+    for prompt in (ew_loop.plan_prompt(item), ew_loop.handoff_prompt(item)):
+        assert "Do NOT edit docs/plans/ROADMAP.md" in prompt
+        assert "python -m ruff check server tools tests" in prompt

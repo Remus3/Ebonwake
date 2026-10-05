@@ -16,7 +16,9 @@ One tick, under ops/loop/control/loop.lock (fleet_watch.watch_lock):
      day). No governor slot (kit ruling: acknowledgements stay outside).
   d. Finished lane worktrees (before c, so a dirty worktree never blocks a
      claim): gates, review-lane verifier (refute rounds capped at 3, then
-     accept and record), commit, merge --no-ff into main, flip the ROADMAP row.
+     accept and record), commit, merge --no-ff into main, flip the ROADMAP row
+     in main inside the merge commit (never in the lane commit); a conflict in
+     ROADMAP.md alone is resolved row by row (resolve_roadmap).
   c. Work list = open ROADMAP rows + hand-off items not tagged OPERATOR /
      physical / MAIN / NOTE. Each item is dispatched to a free lane as a
      DETACHED `ew_loop.py lane <ID>` process that runs tools/ew_lane.run_lane
@@ -42,6 +44,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -58,6 +61,7 @@ CODE = "EW"
 CONTROL_REL = Path("ops/loop/control")
 HALT_REL = CONTROL_REL / "HALT"
 LOCK_REL = CONTROL_REL / "loop.lock"
+ROADMAP_REL = Path("docs/plans/ROADMAP.md")
 BACKOFF_REL = CONTROL_REL / "backoff.json"
 ITEMS_REL = CONTROL_REL / "loop_items"
 WATCH_REL = CONTROL_REL / "loop_inbox_watch.json"
@@ -205,6 +209,42 @@ def flip_roadmap(text, plan_id, note):
     return "\n".join(out)
 
 
+def resolve_roadmap(base, ours, theirs):
+    """Row-level three-way merge of ROADMAP.md (fix-0130), or None. Rows are
+    keyed by plan id: a row only the lane changed or added takes the lane's
+    line, a row both sides changed keeps main's (main is the ledger). Any
+    prose (non-row) change on both sides is not guessed at: None."""
+    def split(text):
+        rows, prose = {}, []
+        for line in text.split("\n"):
+            m = ROW_RX.match(line)
+            if m:
+                rows[m.group(1)] = line
+            else:
+                prose.append(line)
+        return rows, prose
+
+    (b_rows, b_prose), (o_rows, o_prose), (t_rows, t_prose) = \
+        split(base), split(ours), split(theirs)
+    if t_prose != b_prose and t_prose != o_prose:
+        return None
+    lines = ours.split("\n")
+    for iid, line in t_rows.items():
+        if line == b_rows.get(iid):
+            continue
+        if iid not in o_rows:
+            at = [i for i, x in enumerate(lines) if ROW_RX.match(x)]
+            last = at[-1] if at else len(lines) - 1
+            lines.insert(last + 1, line)
+            o_rows[iid] = line
+        elif o_rows[iid] == b_rows.get(iid):
+            lines[lines.index(o_rows[iid])] = line
+    for iid, line in b_rows.items():
+        if iid not in t_rows and o_rows.get(iid) == line:
+            lines.remove(line)
+    return "\n".join(lines)
+
+
 def _norm_words(text):
     return re.findall(r"[a-z0-9]+", text.lower())
 
@@ -265,8 +305,8 @@ def next_number(root, rel, pattern, width):
 
 # ---------------------------------------------------------------- prompts
 
-GATES = ("Gates before you finish: `python -m pytest -q` and `npm test --prefix app` "
-         "green; every authored file ASCII + LF; no absolute machine path, drive "
+GATES = ("Gates before you finish (exactly what ci runs): `python -m ruff check server "
+         "tools tests`, `python -m pytest -q` and `npm test --prefix app` green; every authored file ASCII + LF; no absolute machine path, drive "
          "letter, account id or email in a tracked file. Game ToS floor in CLAUDE.md "
          "is absolute (no game memory, injection, packets, client files or input to "
          "the game window; read-only GETs; robots.txt respected). Do NOT commit, do "
@@ -279,18 +319,22 @@ GATES = ("Gates before you finish: `python -m pytest -q` and `npm test --prefix 
          "remaining steps only, ASCII, updated after each step.")
 
 
+NO_ROADMAP = ("Do NOT edit docs/plans/ROADMAP.md: the loop flips your row in main when "
+              "it merges (parallel lanes editing it collided). ")
+
+
 def plan_prompt(item):
     return (f"You are an Ebonwake (EW) build lane in a detached git worktree. Read "
             f"CLAUDE.md first. Task: implement plan {item['id']} per docs/plans/"
             f"{item['id']}-*.md ({item['title']}) - TDD, stdlib only for Python. "
-            + GATES.format(task=f"p{item['id']}-build"))
+            + NO_ROADMAP + GATES.format(task=f"p{item['id']}-build"))
 
 
 def handoff_prompt(item):
     return ("You are an Ebonwake (EW) build lane in a detached git worktree. Read "
             "CLAUDE.md first. Work this hand-off item: " + item["text"] + " If it needs "
             "no repo change, change nothing and say why in one line. "
-            + GATES.format(task=item["id"]))
+            + NO_ROADMAP + GATES.format(task=item["id"]))
 
 
 def deep_dive_prompt(root, date, max_plans, today_titles):
@@ -400,20 +444,64 @@ def _git(args, cwd, input=None):
                           input=input, env=env, timeout=600, creationflags=_NO_WINDOW)
 
 
-def _gates(cwd):
-    """(ok, detail): pytest then node tests in cwd."""
-    npm = "npm.cmd" if sys.platform == "win32" else "npm"
-    for argv in ([_python(), "-m", "pytest", "-q"], [npm, "test", "--prefix", "app"]):
+CI_WORKFLOW_REL = Path(".github/workflows/ci.yml")
+CI_SETUP_RX = re.compile(r"\bpip\s+install\b")
+
+
+def ci_gate_commands(text):
+    """The `run:` commands of the ci workflow, in order, minus environment
+    setup (pip install). The loop's gates ARE these commands (fix-0130), so a
+    lane can never merge what ci rejects."""
+    cmds, block, indent = [], False, 0
+    for line in text.splitlines():
+        if block:
+            if line.strip() and len(line) - len(line.lstrip()) > indent:
+                cmds.append(line.strip())
+                continue
+            block = False
+        m = re.match(r"^(\s*)(?:-\s+)?run:\s*(.*?)\s*$", line)
+        if not m:
+            continue
+        if m.group(2) in ("|", ">", "|-", ">-"):
+            block, indent = True, len(m.group(1))
+        elif m.group(2):
+            cmds.append(m.group(2).strip("\"'"))
+    return [c for c in cmds if not CI_SETUP_RX.search(c)]
+
+
+def _run_gate(argv, cwd):
+    r = subprocess.run(argv, cwd=str(cwd), capture_output=True, text=True,
+                       timeout=GATE_TIMEOUT_S, creationflags=_NO_WINDOW,
+                       encoding="utf-8", errors="replace")
+    return r.returncode, (r.stdout or "")[-1500:] + (r.stderr or "")[-500:]
+
+
+def _gate_argv(cmd):
+    argv = shlex.split(cmd)
+    if argv[0] == "python":
+        argv[0] = _python()
+    elif argv[0] == "npm" and sys.platform == "win32":
+        argv[0] = "npm.cmd"
+    return argv
+
+
+def _gates(cwd, run=_run_gate):
+    """(ok, detail): exactly the ci workflow's gate commands, in cwd's own
+    .github/workflows/ci.yml, in order; fail closed without one."""
+    try:
+        cmds = ci_gate_commands((Path(cwd) / CI_WORKFLOW_REL).read_text(encoding="utf-8"))
+    except OSError:
+        return False, f"no {CI_WORKFLOW_REL.as_posix()}: gates fail closed"
+    if not cmds:
+        return False, f"no gate command in {CI_WORKFLOW_REL.as_posix()}: gates fail closed"
+    for cmd in cmds:
         try:
-            r = subprocess.run(argv, cwd=str(cwd), capture_output=True, text=True,
-                               timeout=GATE_TIMEOUT_S, creationflags=_NO_WINDOW,
-                               encoding="utf-8", errors="replace")
-        except (OSError, subprocess.SubprocessError) as exc:
-            return False, f"{argv[1]}: {type(exc).__name__}"
-        if r.returncode != 0:
-            tail = (r.stdout or "")[-1500:] + (r.stderr or "")[-500:]
-            return False, f"{' '.join(argv[1:3])} rc={r.returncode}\n{tail}"
-    return True, "pytest + node green"
+            rc, tail = run(_gate_argv(cmd), cwd)
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            return False, f"{cmd}: {type(exc).__name__}"
+        if rc != 0:
+            return False, f"{cmd} rc={rc}\n{tail}"
+    return True, f"ci gates green ({len(cmds)})"
 
 
 def _leak_pre_push(cwd, ref_line):
@@ -799,15 +887,10 @@ class Tick:
         return out
 
     def commit(self, rec, wt, gates_ok):
-        date = _dt.datetime.fromtimestamp(self.d.clock()).strftime("%Y-%m-%d")
         rounds = rec.get("rounds", 0)
         passed = rec.get("verdict") == "PASS"
-        if gates_ok and passed and rec.get("kind") == "plan":
-            rm = wt / "docs" / "plans" / "ROADMAP.md"
-            text = rm.read_text(encoding="utf-8")
-            atomic_write(rm, flip_roadmap(text, rec["id"],
-                                          f"done {date} (loop; refute {rounds}/{MAX_ROUNDS} "
-                                          f"{rec.get('verdict', 'PASS')})"))
+        # the ROADMAP row is flipped in main at merge, never in the lane commit
+        # (fix-0130: lane flips of adjacent rows collided on every parallel merge)
         if not gates_ok:
             head = f"WIP (gates failed, not merged): {rec['label']}"
         elif not passed:
@@ -839,17 +922,60 @@ class Tick:
             self.step(f"{rec['id']}: main not clean on main, merge deferred")
             return
         lane = Path(rec["worktree"]).name
-        r = self.d.git(["merge", "--no-ff", "-q", "-m",
-                        f"merge {lane}: {rec['label']}\n\nrefute-rounds: "
-                        f"{rec.get('rounds', 0)}/{MAX_ROUNDS}", rec["commit"]], main)
-        if r.returncode != 0:
-            self.d.git(["merge", "--abort"], main)
+        g = self.d.git
+        r = g(["merge", "--no-ff", "--no-commit", "-q", rec["commit"]], main)
+        why = None
+        if r.returncode != 0 and not self.resolve_roadmap_conflict(main):
+            why = "merge conflict"
+        if why is None and rec.get("kind") == "plan":
+            rounds = rec.get("rounds", 0)
+            date = _dt.datetime.fromtimestamp(self.d.clock()).strftime("%Y-%m-%d")
+            rm = main / ROADMAP_REL
+            try:
+                text = rm.read_text(encoding="utf-8")
+                flipped = flip_roadmap(text, rec["id"],
+                                       f"done {date} (loop; refute {rounds}/{MAX_ROUNDS} "
+                                       f"{rec.get('verdict', 'PASS')})")
+                if flipped != text:
+                    atomic_write(rm, flipped)
+                    if g(["add", ROADMAP_REL.as_posix()], main).returncode != 0:
+                        why = "roadmap stage refused"
+            except OSError:
+                pass
+        if why is None:
+            msg = (f"merge {lane}: {rec['label']}\n\nrefute-rounds: "
+                   f"{rec.get('rounds', 0)}/{MAX_ROUNDS}\n")
+            if g(["commit", "-q", "-F", "-"], main, input=msg).returncode != 0:
+                why = "merge commit refused"
+        if why:
+            g(["merge", "--abort"], main)
             rec["state"] = "merge-conflict"
-            self.step(f"{rec['id']}: merge conflict, aborted")
+            self.step(f"{rec['id']}: {why}, aborted")
         else:
             rec["state"] = "merged"
             self.step(f"{rec['id']}: merged")
         self.items.put(rec)
+
+    def resolve_roadmap_conflict(self, main):
+        """True when the only unmerged path is ROADMAP.md and the row-level
+        resolver settles it (staged); False leaves the merge for --abort."""
+        g, rel = self.d.git, ROADMAP_REL.as_posix()
+        u = g(["diff", "--name-only", "--diff-filter=U"], main)
+        if u.returncode != 0 or u.stdout.split() != [rel]:
+            return False
+
+        def stage(n):
+            s = g(["show", f":{n}:{rel}"], main)
+            return s.stdout if s.returncode == 0 else ""
+
+        out = resolve_roadmap(stage(1), stage(2), stage(3))
+        if out is None:
+            return False
+        atomic_write(main / ROADMAP_REL, out)
+        if g(["add", rel], main).returncode != 0:
+            return False
+        self.step("ROADMAP-only conflict auto-resolved by row")
+        return True
 
     # -- c. work list
     def work_list(self):
