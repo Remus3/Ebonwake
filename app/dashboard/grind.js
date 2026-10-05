@@ -232,8 +232,8 @@
       const min = el('input');
       min.type = 'text';
       min.inputMode = 'numeric';
-      min.maxLength = 4;
-      min.title = 'minutes (1-1440)';
+      min.maxLength = 5;
+      min.title = 'minutes (1-43200)';
       min.value = S.buffMin[row.name.toLowerCase()] || String(row.minutes);
       min.addEventListener('input', function () { S.buffMin[row.name.toLowerCase()] = min.value; });
       r.appendChild(min);

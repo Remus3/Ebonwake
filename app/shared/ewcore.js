@@ -532,19 +532,21 @@
   // time since that fetch.
 
   const NAME_MAX = 60;
-  const MINUTES = [1, 1440];
+  const MINUTES = [1, 1440];        // sessions (log)
+  const BUFF_MINUTES = [1, 43200];  // buffs: 30 days (server MAX_BUFF_MINUTES)
   const SILVER = [0, 1e13];
   const TRASH = [0, 1e6];
 
-  // Operator-editable defaults; minutes capped by the server's 1440 limit.
+  // The one default buff list: names are exactly the server's SEED_BUFFS
+  // (server/ew/grind.py, test-pinned); minutes are the arm defaults, within
+  // BUFF_MINUTES.
   const BUFF_DEFAULTS = [
-    { name: 'Combat XP scroll', minutes: 30 },
-    { name: 'Skill XP scroll', minutes: 30 },
-    { name: 'Item drop scroll', minutes: 60 },
+    { name: 'XP scroll', minutes: 30 },
+    { name: 'Drop rate scroll', minutes: 60 },
     { name: 'Hot Time', minutes: 60 },
-    { name: 'Value Pack', minutes: 1440 },
+    { name: 'Value Pack', minutes: 43200 },
     { name: 'Old Moon book', minutes: 60 },
-    { name: 'Kamasylve blessing', minutes: 1440 }
+    { name: 'Kamasylve blessing', minutes: 43200 }
   ];
 
   function silverPerHour(silver, minutes) {
@@ -597,16 +599,28 @@
     return d ? d.minutes : 60;
   }
 
-  // Buffs card rows: armed buffs (soonest first) then every default not armed.
+  // Buffs card rows: every server buff (armed soonest first, then unarmed or
+  // expired in server order, ids kept), then only the defaults whose names
+  // (case-insensitive) the server did not list. One row per name.
   function buffRows(buffs, fetchedMs, now) {
-    const armed = buffsLive(buffs, fetchedMs, now).filter(function (b) { return typeof b.name === 'string'; })
-      .map(function (b) {
-        return { id: b.id === undefined ? null : b.id, name: b.name, left_s: b.left_s, minutes: defaultMinutes(b.name) };
-      });
-    const seen = armed.map(function (b) { return b.name.toLowerCase(); });
-    const idle = BUFF_DEFAULTS.filter(function (d) { return seen.indexOf(d.name.toLowerCase()) < 0; })
+    const seen = [];
+    const rows = [];
+    (Array.isArray(buffs) ? buffs : []).filter(function (b) {
+      return plainObject(b) && typeof b.name === 'string';
+    }).forEach(function (b) {
+      const n = b.name.toLowerCase();
+      if (seen.indexOf(n) >= 0) return;
+      seen.push(n);
+      const left = buffLeft(b, fetchedMs, now);
+      rows.push({ id: b.id === undefined ? null : b.id, name: b.name,
+        left_s: left !== null && left > 0 ? left : null, minutes: defaultMinutes(b.name) });
+    });
+    const armed = rows.filter(function (r) { return r.left_s !== null; })
+      .sort(function (a, b) { return a.left_s - b.left_s; });
+    const idle = rows.filter(function (r) { return r.left_s === null; });
+    const extra = BUFF_DEFAULTS.filter(function (d) { return seen.indexOf(d.name.toLowerCase()) < 0; })
       .map(function (d) { return { id: null, name: d.name, left_s: null, minutes: d.minutes }; });
-    return armed.concat(idle);
+    return armed.concat(idle, extra);
   }
 
   // Best silver/h first; spots without an average last.
@@ -627,11 +641,10 @@
       !/[\u0000-\u001f\u007f]/.test(t);
   }
 
-  // Session / buff ids: a short string or a whole number (server picks).
-  function validRef(v) {
-    return (typeof v === 'string' && v.length > 0 && v.length <= NAME_MAX && !/[\u0000-\u001f\u007f]/.test(v)) ||
-      isInt(v, 0);
-  }
+  // Ids exactly as the server mints them (grind.py SID_RE / ID_RE).
+  const SESSION_ID_RE = /^s[0-9]{1,9}$/;
+  const BUFF_ID_RE = /^[a-z0-9-]{1,40}$/;
+  function validRef(v, re) { return typeof v === 'string' && re.test(v); }
 
   function exact(o, keys) {
     return plainObject(o) && Object.keys(o).length === keys.length && onlyKeys(o, keys);
@@ -647,13 +660,14 @@
     const k = keys[0];
     const v = body[k];
     if (k === 'start' || k === 'add_spot') return validName(v);
-    if (k === 'delete' || k === 'clear_buff') return validRef(v);
+    if (k === 'delete') return validRef(v, SESSION_ID_RE);
+    if (k === 'clear_buff') return validRef(v, BUFF_ID_RE);
     if (k === 'stop') return exact(v, ['silver', 'trash']) && validLoot(v);
     if (k === 'log') {
       return exact(v, ['spot', 'minutes', 'silver', 'trash']) && validName(v.spot) &&
         inRange(v.minutes, MINUTES) && validLoot(v);
     }
-    if (k === 'buff') return exact(v, ['name', 'minutes']) && validName(v.name) && inRange(v.minutes, MINUTES);
+    if (k === 'buff') return exact(v, ['name', 'minutes']) && validName(v.name) && inRange(v.minutes, BUFF_MINUTES);
     return false;
   }
 
@@ -670,8 +684,8 @@
       if (trash === null) return { error: 'trash must be a whole number 0-1000000' };
       return { silver: silver, trash: trash };
     };
-    const minutes = function () { return wholeIn(f.minutes, MINUTES); };
-    const minErr = 'minutes must be a whole number ' + MINUTES[0] + '-' + MINUTES[1];
+    const minutes = function (r) { return wholeIn(f.minutes, r); };
+    const minErr = function (r) { return 'minutes must be a whole number ' + r[0] + '-' + r[1]; };
     const name = function (k) { return typeof f[k] === 'string' ? f[k].trim() : ''; };
     if (kind === 'stop') {
       const l = loot();
@@ -679,16 +693,16 @@
     }
     if (kind === 'log') {
       if (!validName(f.spot)) return { ok: false, error: 'pick a spot' };
-      const m = minutes();
-      if (m === null) return { ok: false, error: minErr };
+      const m = minutes(MINUTES);
+      if (m === null) return { ok: false, error: minErr(MINUTES) };
       const l = loot();
       if (l.error) return { ok: false, error: l.error };
       return { ok: true, body: { log: { spot: f.spot, minutes: m, silver: l.silver, trash: l.trash } } };
     }
     if (kind === 'buff') {
       if (!validName(name('name'))) return { ok: false, error: 'buff name: 1-' + NAME_MAX + ' plain characters' };
-      const m = minutes();
-      if (m === null) return { ok: false, error: minErr };
+      const m = minutes(BUFF_MINUTES);
+      if (m === null) return { ok: false, error: minErr(BUFF_MINUTES) };
       return { ok: true, body: { buff: { name: name('name'), minutes: m } } };
     }
     if (kind === 'spot') {
@@ -756,6 +770,7 @@
     profilePill: profilePill,
     profileRows: profileRows,
     BUFF_DEFAULTS: BUFF_DEFAULTS,
+    BUFF_MINUTES: BUFF_MINUTES,
     silverPerHour: silverPerHour,
     fmtElapsed: fmtElapsed,
     liveElapsed: liveElapsed,

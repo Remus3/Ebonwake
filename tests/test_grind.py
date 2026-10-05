@@ -313,6 +313,38 @@ def test_corrupt_entries_skipped(tmp_path, clock):
     assert doc["active"] is None and doc["buffs"] == []
 
 
+@pytest.mark.parametrize("bad", ["0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"])
+def test_out_of_range_stamps_degrade_to_none(tmp_path, clock, bad):
+    st = Store(tmp_path / "store")
+    st.put("grind", {"spots": [{"id": "a", "name": "A"}],
+                     "buffs": [{"id": "hot-time", "name": "Hot Time", "ends": bad}],
+                     "updated": bad})
+    svc = grind.GrindService(st, clock=clock)
+    b = _buff(svc.view(), "Hot Time")
+    assert b["ends"] is None and b["left_s"] is None
+    assert svc.source() == {"updated": None, "status": "ok"}
+    doc = svc.buff({"name": "Hot Time", "minutes": 5})
+    assert _buff(doc, "Hot Time")["left_s"] == 300
+
+
+def test_out_of_range_stamp_route_ok(tmp_path, clock):
+    st = Store(tmp_path / "store")
+    st.put("grind", {"spots": [],
+                     "buffs": [{"id": "x", "name": "X", "ends": "0001-01-01T00:00:00+01:00"}],
+                     "updated": "0001-01-01T00:00:00+01:00"})
+    s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
+                          sse_interval=0.05, market_seed=[], grind_clock=clock)
+    threading.Thread(target=s.serve_forever, daemon=True).start()
+    try:
+        status, doc, _ = _req(s, "GET", "/api/grind")
+        assert status == 200 and _buff(doc, "X")["ends"] is None
+        status, doc, _ = _req(s, "POST", "/api/grind", {"buff": {"name": "X", "minutes": 5}})
+        assert status == 200 and _buff(doc, "X")["left_s"] == 300
+    finally:
+        s.shutdown()
+        s.server_close()
+
+
 def test_source(svc):
     src = svc.source()
     assert src["status"] == "ok" and src["updated"] == T0.isoformat()

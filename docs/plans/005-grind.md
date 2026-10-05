@@ -76,10 +76,17 @@ widgets per spec section 3; default on). Fits 1280x800.
   stores names also renders. Alternatives: send names. Why: `spots` carries
   ids and sessions reference a spot. Reverses if: slice A keys by name - then
   `spotRef` in `grind.js` returns `s.name`.
-- Buff list. GET returns only armed buffs, so the Buffs card merges them with
-  client defaults (`ewcore.BUFF_DEFAULTS`, the plan's buff kinds, minutes
-  capped at 1440) by case-insensitive name. Session / buff ids are accepted as
-  a short string or a whole number by `validGrindBody`.
+- Buff list. GET returns every stored buff (armed or not, `ends: null` when
+  unarmed or expired), so `ewcore.buffRows` lists ALL server buffs (armed
+  soonest first, then the rest in server order, server ids kept) and appends
+  only the `ewcore.BUFF_DEFAULTS` whose names (case-insensitive) are not
+  already listed. `BUFF_DEFAULTS` names are exactly the server `SEED_BUFFS`
+  (pinned by `app/test/grind.test.js`); buff minutes use
+  `ewcore.BUFF_MINUTES` = 1-43200 like the server (sessions stay 1-1440).
+  `validGrindBody` ids match the server: `delete` `^s[0-9]{1,9}$`,
+  `clear_buff` `^[a-z0-9-]{1,40}$`. (Revised 2026-10-04 after the plan 005
+  verifier: the first cut capped buffs at 1440, dropped unarmed server buffs
+  and used client-only default names.)
 - `app/test/progress.test.js` route check loosened from an exact list to
   membership (the exact list now lives in `grind.test.js`).
 

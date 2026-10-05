@@ -72,6 +72,18 @@ def _unique(base, taken):
 
 # -- stored-entry cleaning (corrupt docs degrade, never raise) -----------------
 
+def _iso_or_none(s):
+    """Normalised UTC stamp, or None when unparseable or out of datetime range
+    once shifted to UTC (e.g. "0001-01-01T00:00:00+01:00")."""
+    when = _parse_iso(s)
+    if when is None:
+        return None
+    try:
+        return _iso(when)
+    except (OverflowError, ValueError):
+        return None
+
+
 def _ok_int(v, lo, hi):
     return isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi
 
@@ -129,7 +141,7 @@ class GrindService:
 
         spots = [{"id": s["id"], "name": s["name"]} for s in lst("spots", _clean_named)]
         buffs = [{"id": b["id"], "name": b["name"],
-                  "ends": _iso(_parse_iso(b.get("ends"))) if _parse_iso(b.get("ends")) else None}
+                  "ends": _iso_or_none(b.get("ends"))}
                  for b in lst("buffs", _clean_named)]
         sessions = lst("sessions", _clean_session)
         act = doc.get("active")
@@ -201,8 +213,7 @@ class GrindService:
 
     def source(self):
         """`/api/state` sources.grind: {updated, status: "ok"}."""
-        upd = _parse_iso(self.store.get("grind").get("updated"))
-        return {"updated": _iso(upd) if upd is not None else None, "status": "ok"}
+        return {"updated": _iso_or_none(self.store.get("grind").get("updated")), "status": "ok"}
 
     # -- writes (each returns the GET body) -----------------------------------
 

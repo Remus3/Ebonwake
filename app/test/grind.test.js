@@ -89,10 +89,11 @@ test('validGrindBody accepts exactly the slice A POST shapes', () => {
     { stop: { silver: 0, trash: 0 } }, { stop: { silver: 1e13, trash: 1e6 } },
     { log: { spot: 'gyfin', minutes: 60, silver: 123456789, trash: 4000 } },
     { log: { spot: 'gyfin', minutes: 1440, silver: 0, trash: 0 } },
-    { delete: 'abc123' }, { delete: 7 },
+    { delete: 's1' }, { delete: 's123456789' },
     { add_spot: 'Olun\'s Valley' }, { add_spot: 'x'.repeat(60) },
     { buff: { name: 'Hot Time', minutes: 60 } }, { buff: { name: 'Value Pack', minutes: 1 } },
-    { clear_buff: 'hot' }, { clear_buff: 3 }
+    { buff: { name: 'Value Pack', minutes: 1441 } }, { buff: { name: 'Value Pack', minutes: 43200 } },
+    { clear_buff: 'hot' }, { clear_buff: 'hot-time' }, { clear_buff: 'x'.repeat(40) }
   ];
   for (const b of ok) assert.strictEqual(C.validGrindBody(b), true, JSON.stringify(b));
   const bad = [
@@ -105,10 +106,12 @@ test('validGrindBody accepts exactly the slice A POST shapes', () => {
     { log: { spot: '', minutes: 60, silver: 1, trash: 1 } }, { log: { minutes: 60, silver: 1, trash: 1 } },
     { log: { spot: 'a', minutes: 60, silver: '1', trash: 1 } }, { log: { spot: 'a', minutes: 60, silver: 1, trash: 1, y: 2 } },
     { delete: '' }, { delete: -1 }, { delete: 1.5 }, { delete: null }, { delete: 'x'.repeat(61) },
+    { delete: 7 }, { delete: 'abc123' }, { delete: 's' }, { delete: 's1234567890' }, { delete: 'S1' }, { delete: 's1 ' },
     { add_spot: '' }, { add_spot: 'x'.repeat(61) }, { add_spot: 3 },
-    { buff: { name: 'Hot', minutes: 0 } }, { buff: { name: 'Hot', minutes: 1441 } }, { buff: { name: '', minutes: 5 } },
+    { buff: { name: 'Hot', minutes: 0 } }, { buff: { name: 'Hot', minutes: 43201 } }, { buff: { name: '', minutes: 5 } },
     { buff: { name: 'Hot' } }, { buff: { name: 'Hot', minutes: 5, ends: 1 } },
-    { clear_buff: '' }, { clear_buff: {} }
+    { clear_buff: '' }, { clear_buff: {} }, { clear_buff: 3 }, { clear_buff: 'Hot' }, { clear_buff: 'hot time' },
+    { clear_buff: 'x'.repeat(41) }, { clear_buff: 'hot_time' }
   ];
   for (const b of bad) assert.strictEqual(C.validGrindBody(b), false, JSON.stringify(b));
 });
@@ -128,7 +131,17 @@ test('parseGrindForm: stop / log / buff / spot strings -> bodies or operator err
   assert.strictEqual(C.parseGrindForm('log', { spot: 'a', minutes: '', silver: '5', trash: '1' }).ok, false);
   assert.deepStrictEqual(C.parseGrindForm('buff', { name: 'Hot Time', minutes: '60' }),
     { ok: true, body: { buff: { name: 'Hot Time', minutes: 60 } } });
-  assert.strictEqual(C.parseGrindForm('buff', { name: 'Hot Time', minutes: '1441' }).ok, false);
+  assert.deepStrictEqual(C.parseGrindForm('buff', { name: 'Value Pack', minutes: '43200' }),
+    { ok: true, body: { buff: { name: 'Value Pack', minutes: 43200 } } }, 'buffs run up to 30 days');
+  assert.strictEqual(C.parseGrindForm('buff', { name: 'Hot Time', minutes: '1441' }).ok, true);
+  const over = C.parseGrindForm('buff', { name: 'Hot Time', minutes: '43201' });
+  assert.strictEqual(over.ok, false);
+  assert.match(over.error, /1-43200/);
+  assert.strictEqual(C.parseGrindForm('buff', { name: 'Hot Time', minutes: '0' }).ok, false);
+  const logOver = C.parseGrindForm('log', { spot: 'a', minutes: '1441', silver: '5', trash: '1' });
+  assert.strictEqual(logOver.ok, false, 'sessions stay 1-1440');
+  assert.match(logOver.error, /1-1440/);
+  assert.deepStrictEqual(C.BUFF_MINUTES, [1, 43200]);
   assert.deepStrictEqual(C.parseGrindForm('spot', { name: '  Olun  ' }), { ok: true, body: { add_spot: 'Olun' } });
   assert.strictEqual(C.parseGrindForm('spot', { name: ' ' }).ok, false);
   assert.strictEqual(C.parseGrindForm('spot', { name: 'x'.repeat(61) }).ok, false);
@@ -146,6 +159,51 @@ test('BUFF_DEFAULTS: the plan\'s buff kinds, each armable with its default minut
   for (const b of C.BUFF_DEFAULTS) {
     assert.strictEqual(C.validGrindBody({ buff: { name: b.name, minutes: b.minutes } }), true, b.name);
   }
+});
+
+test('BUFF_DEFAULTS names are exactly the server SEED_BUFFS (one list, both sides)', () => {
+  const py = fs.readFileSync(path.join(__dirname, '..', '..', 'server', 'ew', 'grind.py'), 'utf8');
+  const m = py.match(/SEED_BUFFS = \(([^)]*)\)/);
+  assert.ok(m, 'SEED_BUFFS tuple found');
+  const seeds = Array.from(m[1].matchAll(/"([^"]+)"/g), (x) => x[1]);
+  assert.ok(seeds.length >= 6);
+  assert.deepStrictEqual(C.BUFF_DEFAULTS.map((b) => b.name), seeds);
+});
+
+test('buffRows: every server buff listed (armed or not), defaults only for missing names', () => {
+  const t0 = Date.parse('2026-10-04T12:00:00Z');
+  const server = [
+    { id: 'xp-scroll', name: 'XP scroll', ends: null, left_s: null },
+    { id: 'hot-time', name: 'Hot Time', ends: '2026-10-04T12:30:00Z', left_s: 1800 },
+    { id: 'elixir-set', name: 'Elixir set', ends: null, left_s: null },
+    { id: 'old', name: 'Expired one', ends: '2026-10-04T11:00:00Z', left_s: null }
+  ];
+  const rows = C.buffRows(server, t0, t0);
+  assert.deepStrictEqual(rows[0].name, 'Hot Time', 'armed first');
+  for (const b of server) {
+    const r = rows.filter((x) => x.name.toLowerCase() === b.name.toLowerCase());
+    assert.strictEqual(r.length, 1, b.name);
+    assert.strictEqual(r[0].id, b.id, b.name + ' keeps its server id');
+  }
+  assert.strictEqual(rows.filter((r) => r.name === 'Elixir set')[0].left_s, null);
+  assert.strictEqual(rows.filter((r) => r.name === 'Expired one')[0].left_s, null);
+  const lower = rows.map((r) => r.name.toLowerCase());
+  assert.strictEqual(new Set(lower).size, lower.length, 'no duplicate names');
+  for (const d of C.BUFF_DEFAULTS) assert.ok(lower.indexOf(d.name.toLowerCase()) >= 0, d.name);
+  assert.strictEqual(rows.length, server.length + C.BUFF_DEFAULTS.length - 2);
+  // A full server seed list: nothing injected client-side.
+  const seeded = C.BUFF_DEFAULTS.map((d, i) => ({ id: 'b' + i, name: d.name.toUpperCase(), ends: null, left_s: null }));
+  const r2 = C.buffRows(seeded, t0, t0);
+  assert.strictEqual(r2.length, seeded.length);
+  assert.ok(r2.every((r) => r.id !== null));
+  assert.ok(r2.every((r) => r.minutes >= 1));
+});
+
+test('grind.js: buff minutes input fits 43200', () => {
+  const src = read('dashboard/grind.js');
+  assert.match(src, /min\.maxLength = 5;/);
+  assert.match(src, /1-43200/);
+  assert.doesNotMatch(src, /minutes \(1-1440\)/);
 });
 
 test('buffRows: server buffs merged with defaults by name, armed first by time left', () => {
