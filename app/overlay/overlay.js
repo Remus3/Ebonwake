@@ -12,7 +12,10 @@
    each SSE `game` event. Always shown; offline keeps the last state, muted.
    Leveling (plan 011): opt-in (default off) one line from GET /api/leveling,
    same cadence plus each SSE `leveling` event; ETA and Hot Time count down
-   locally. */
+   locally.
+   Season (plan 013): opt-in (default off) one line from GET /api/progress
+   `season` ("Pass 23/40 - next: Lv 50 (2 lv)"), same cadence plus each SSE
+   `leveling` event (a new XP sample can auto-tick a level objective). */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -35,6 +38,8 @@
   let lev = null;
   let levAt = 0;
   let levStale = false;
+  let season = null;
+  let seasonStale = false;
 
   function drawToday(now) {
     const t = document.getElementById('ov-today');
@@ -96,6 +101,13 @@
     v.className = 'ew-mname' + (levStale ? ' ew-stale' : '');
   }
 
+  function drawSeason() {
+    const v = document.getElementById('ov-season');
+    v.textContent = season ? C.seasonLine(season.season) : (seasonStale ? 'Pass offline' : 'Pass -');
+    v.title = v.textContent;
+    v.className = 'ew-mname' + (seasonStale ? ' ew-stale' : '');
+  }
+
   function tick() {
     const now = Date.now();
     document.getElementById('ov-daily').textContent = C.fmtDuration(C.nextDailyReset(now) - now);
@@ -146,6 +158,16 @@
     }).then(function () { drawLeveling(Date.now()); });
   }
 
+  function loadSeason() {
+    getJSON('/api/progress').then(function (d) {
+      if (!d || typeof d !== 'object' || !Array.isArray(d.tracks)) throw new Error('bad body');
+      season = d;
+      seasonStale = false;
+    }).catch(function () {
+      seasonStale = true;
+    }).then(drawSeason);
+  }
+
   function loadGame() {
     getJSON('/api/game').then(function (d) {
       const g = C.normalizeGame(d);
@@ -171,6 +193,7 @@
     if (GRIND_ON) loadGrind();
     if (W.eventsSoon) loadEvents();
     if (W.leveling) loadLeveling();
+    if (W.season) loadSeason();
     loadGame();
   }
 
@@ -182,7 +205,10 @@
       loadToday(false);
     };
     src.addEventListener('game', function () { loadGame(); });
-    src.addEventListener('leveling', function () { if (W.leveling) loadLeveling(); });
+    src.addEventListener('leveling', function () {
+      if (W.leveling) loadLeveling();
+      if (W.season) loadSeason();
+    });
     src.onerror = function () {
       document.getElementById('ov-server').textContent = 'offline';
       todayStale = true;
@@ -193,6 +219,8 @@
       if (W.eventsSoon) drawEvents(Date.now());
       levStale = true;
       if (W.leveling) drawLeveling(Date.now());
+      seasonStale = true;
+      if (W.season) drawSeason();
       gameStale = true;
       drawGame();
       src.close();
@@ -204,6 +232,7 @@
   document.getElementById('ov-buff-row').hidden = !W.grindBuff;
   document.getElementById('ov-events-row').hidden = !W.eventsSoon;
   document.getElementById('ov-leveling-row').hidden = !W.leveling;
+  document.getElementById('ov-season-row').hidden = !W.season;
   tick();
   setInterval(tick, 1000);
   setInterval(function () { loadToday(true); }, TODAY_MS);

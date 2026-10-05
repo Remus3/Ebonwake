@@ -3,13 +3,16 @@
    track (progress bar + scrollable step list, click toggles), add track. Reads
    GET /api/progress; writes go through the dashboard preload (window.ewApi)
    because the server refuses renderer POSTs. Step toggles are optimistic and
-   reverted on error. Every node is built with DOM APIs - no HTML from data. */
+   reverted on error. Every node is built with DOM APIs - no HTML from data.
+   Season tracks (plan 013) render as a season card: n/N, done-but-unclaimed
+   highlighted with a claim mark (claiming itself stays the operator's act in
+   game), next 3 open objectives, the full list, and an add-objective row. */
 (function () {
   'use strict';
   const C = window.EWCore;
   const POLL_MS = 60000;
   const KIND_LABEL = { quest: 'quest', season: 'season', gear: 'gear' };
-  const S = { data: null, err: null, last: null, timer: null, ui: null, pending: {}, dirty: false };
+  const S = { data: null, err: null, last: null, timer: null, ui: null, pending: {}, dirty: false, editing: null };
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -67,12 +70,14 @@
     S.last = now;
     clearTimeout(S.timer);
     S.timer = setTimeout(function () { poll(true); }, POLL_MS);
-    getJSON('/api/progress').then(accept, function (e) { S.err = e.message; }).then(draw);
+    getJSON('/api/progress').then(accept, function (e) { S.err = e.message; }).then(function () { draw(); });
   }
 
   function msg(where, text) { if (S.ui) S.ui[where].textContent = text; }
 
   function send(body, where, okText) {
+    // Acting on another row abandons an open objective edit so cards redraw.
+    if (S.editing && !body.obj_edit) S.editing = null;
     const b = bridge();
     if (!b) { msg(where, 'saving needs the Ebonwake app window'); return Promise.resolve(false); }
     msg(where, 'saving...');
@@ -91,6 +96,7 @@
   function toggle(track, step) {
     const k = key(track.id, step.id);
     if (k in S.pending) return;
+    S.editing = null;
     const b = bridge();
     if (!b) { msg('addMsg', 'toggling needs the Ebonwake app window'); return; }
     const prev = step.done_at || null;
@@ -246,6 +252,166 @@
     return c;
   }
 
+  // ---- season pass by objective (plan 013) ----
+
+  function claim(t, o, btn) {
+    btn.disabled = true;
+    send({ claim: { track: t.id, objective: o.id, claimed: !o.claimed_at } }, 'addMsg', o.claimed_at ? 'unclaimed' : 'claimed');
+  }
+
+  function removeObjective(t, o, btn) {
+    if (btn.dataset.armed !== '1') {
+      btn.dataset.armed = '1';
+      btn.textContent = 'sure?';
+      setTimeout(function () { btn.dataset.armed = ''; btn.textContent = 'x'; }, 3000);
+      return;
+    }
+    send({ obj_del: { track: t.id, objective: o.id } }, 'addMsg', 'removed');
+  }
+
+  function objLabel(o) {
+    const tg = C.fmtTarget(o.kind, o.target);
+    return o.kind === 'level' && tg ? tg : String(o.title || o.id);
+  }
+
+  function objRow(t, o, opts) {
+    const done = !!o.done_at;
+    const r = el('div', 'ew-trow' + (done ? ' done' : '') + (opts.unclaimed ? ' ew-unclaimed' : ''));
+    const lab = el('label', 'ew-tlabel');
+    if (opts.check) {
+      const cb = el('input');
+      cb.type = 'checkbox';
+      cb.checked = done;
+      // A reached level objective is ticked by the level feed; fix the level to untick.
+      cb.disabled = key(t.id, o.id) in S.pending || (done && o.auto === true);
+      if (o.auto === true) cb.title = 'auto: level reached';
+      cb.addEventListener('change', function () { toggle(t, o); });
+      lab.appendChild(cb);
+    }
+    lab.appendChild(el('span', 'ew-mname', opts.short ? objLabel(o) : String(o.title || o.id)));
+    r.appendChild(lab);
+    const meta = el('span', 'ew-tmeta');
+    const tg = C.fmtTarget(o.kind, o.target);
+    if (opts.short && o.kind === 'level' && typeof o.gap === 'number' && o.gap > 0) {
+      meta.appendChild(el('span', 'ew-muted', o.gap + ' lv'));
+    } else if (!opts.short) {
+      meta.appendChild(el('span', 'ew-muted', o.kind + (tg && o.kind !== 'level' ? ' ' + tg : '')));
+    }
+    if (o.reward) meta.appendChild(el('span', 'ew-muted ew-mname', String(o.reward)));
+    if (done && (opts.unclaimed || !opts.short)) {
+      const b = el('button', 'ew-tx', o.claimed_at ? 'claimed' : 'claim');
+      b.type = 'button';
+      b.title = o.claimed_at ? 'marked claimed (click to unmark)' : 'mark claimed after claiming in game';
+      b.addEventListener('click', function () { claim(t, o, b); });
+      meta.appendChild(b);
+    }
+    if (opts.del) {
+      const e = el('button', 'ew-tx', 'edit');
+      e.type = 'button';
+      e.title = 'edit title, kind, target, reward';
+      e.addEventListener('click', function () { S.editing = key(t.id, o.id); draw(true); });
+      meta.appendChild(e);
+      const x = el('button', 'ew-tx', 'x');
+      x.type = 'button';
+      x.title = 'remove objective (click twice)';
+      x.addEventListener('click', function () { removeObjective(t, o, x); });
+      meta.appendChild(x);
+    }
+    r.appendChild(meta);
+    return r;
+  }
+
+  // Add form (no `o`) or inline edit form for objective `o` (obj_edit keeps
+  // its done/claim marks and list position).
+  function objectiveForm(t, o) {
+    const form = el('form', 'ew-form');
+    const text = function (max, ph, v) {
+      const i = el('input');
+      i.type = 'text';
+      i.maxLength = max;
+      i.placeholder = ph;
+      i.autocomplete = 'off';
+      i.value = v || '';
+      return i;
+    };
+    const title = text(80, 'title', o ? String(o.title || '') : '');
+    const kind = el('select');
+    C.OBJ_KINDS.forEach(function (k) {
+      const op = el('option', null, k);
+      op.value = k;
+      kind.appendChild(op);
+    });
+    if (o) kind.value = o.kind;
+    const target = text(3, 'target', o ? C.targetInput(o.kind, o.target) : '');
+    const reward = text(80, 'reward', o ? String(o.reward || '') : '');
+    [title, kind, target, reward].forEach(function (i) { form.appendChild(i); });
+    const save = el('button', 'ew-btn', o ? 'Save' : 'Add');
+    save.type = 'submit';
+    form.appendChild(save);
+    if (o) {
+      const cancel = el('button', 'ew-tx', 'cancel');
+      cancel.type = 'button';
+      cancel.addEventListener('click', function () { S.editing = null; draw(); });
+      form.appendChild(cancel);
+    }
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      const r = C.parseObjectiveForm(t.id, { title: title.value, kind: kind.value, target: target.value, reward: reward.value },
+        o ? o.id : undefined);
+      if (!r.ok) { msg('addMsg', r.error); return; }
+      send(r.body, 'addMsg', o ? 'objective saved' : 'objective added').then(function (ok) {
+        if (ok && o) { S.editing = null; draw(); }
+      });
+    });
+    if (o) return form;
+    const d = el('details', 'ew-objadd');
+    d.appendChild(el('summary', 'ew-muted', 'add objective'));
+    d.appendChild(form);
+    return d;
+  }
+
+  function seasonCard(t) {
+    const c = el('section', 'ew-card ew-mcard ew-track ew-season');
+    const h = el('h2', null);
+    h.appendChild(el('span', 'ew-mname', String(t.title || t.id)));
+    const meta = el('span', 'ew-tmeta');
+    const g = C.seasonGroups(t);
+    meta.appendChild(el('span', 'ew-muted ew-tdays', 'season'));
+    meta.appendChild(el('span', 'ew-pill ' + (g.total && g.done === g.total ? 'ok' : 'unknown'), g.done + '/' + g.total));
+    if (g.unclaimed.length) meta.appendChild(el('span', 'ew-pill warn', g.unclaimed.length + ' to claim'));
+    const x = el('button', 'ew-tx', 'x');
+    x.type = 'button';
+    x.title = 'remove track (click twice)';
+    x.addEventListener('click', function () { removeTrack(t, x); });
+    meta.appendChild(x);
+    h.appendChild(meta);
+    c.appendChild(h);
+    const bar = el('div', 'ew-bar');
+    const fill = el('div', 'ew-bar-fill');
+    fill.style.width = C.trackPct(t).pct + '%';
+    bar.appendChild(fill);
+    c.appendChild(bar);
+    const body = el('div', 'ew-cbody');
+    if (t.seed === true) body.appendChild(el('div', 'ew-muted', 'seed, verify against the in-game pass'));
+    const list = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
+    if (g.unclaimed.length) {
+      list.appendChild(el('div', 'ew-muted', 'done - claim in game'));
+      g.unclaimed.forEach(function (o) { list.appendChild(objRow(t, o, { short: true, unclaimed: true })); });
+    }
+    list.appendChild(el('div', 'ew-muted', g.next.length ? 'next' : 'all objectives done'));
+    g.next.forEach(function (o) { list.appendChild(objRow(t, o, { short: true, check: true })); });
+    list.appendChild(el('div', 'ew-muted', 'all objectives'));
+    (Array.isArray(t.objectives) ? t.objectives : []).forEach(function (o) {
+      if (!o || typeof o.id !== 'string') return;
+      if (S.editing === key(t.id, o.id)) list.appendChild(objectiveForm(t, o));
+      else list.appendChild(objRow(t, o, { check: true, del: true }));
+    });
+    body.appendChild(list);
+    body.appendChild(objectiveForm(t));
+    c.appendChild(body);
+    return c;
+  }
+
   // Track cards keep their list scroll position across redraws.
   function drawTracks() {
     const ui = S.ui;
@@ -259,7 +425,7 @@
     const tracks = S.data && Array.isArray(S.data.tracks) ? S.data.tracks : [];
     tracks.forEach(function (t) {
       if (!t || typeof t.id !== 'string') return;
-      const c = trackCard(t);
+      const c = t.kind === 'season' && Array.isArray(t.objectives) ? seasonCard(t) : trackCard(t);
       c.dataset.track = t.id;
       ui.panel.insertBefore(c, ui.addCard);
       const b = c.querySelector('.ew-cbody');
@@ -268,12 +434,15 @@
     });
   }
 
-  function draw() {
+  // While an objective edit form is open, background redraws (poll, saves
+  // elsewhere) leave the track cards alone so typing is never clobbered;
+  // opening, cancelling or saving the edit redraws with force.
+  function draw(force) {
     const ui = S.ui;
     if (!ui || !ui.panel.isConnected) return;
     drawCharacter();
     drawProfile();
-    drawTracks();
+    if (!S.editing || force === true) drawTracks();
   }
 
   // ---- mount ----
@@ -386,6 +555,7 @@
     const ad = addCard();
     [ch, pr, ad].forEach(function (c) { panel.appendChild(c.card); });
     S.dirty = false;
+    S.editing = null;
     S.ui = {
       panel: panel, char: ch.form, charMsg: ch.msg, profile: pr, add: ad.form, addMsg: ad.msg,
       addCard: ad.card, tracks: []

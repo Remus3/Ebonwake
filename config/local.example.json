@@ -13,7 +13,7 @@
     "_example_ocr_key": {"env": "EW_OCR_API_KEY"}
   },
   "overlay": {
-    "widgets": {"grindSession": true, "grindBuff": true, "eventsSoon": true, "leveling": false}
+    "widgets": {"grindSession": true, "grindBuff": true, "eventsSoon": true, "leveling": false, "season": false}
   },
   "ocr": {
     "_doc": "engine: auto (Tesseract if found, else Windows OCR) | tesseract | windows. tesseract: optional path to tesseract.exe when not on PATH or in the default install dir.",

@@ -306,6 +306,11 @@ class LevelingService:
                 "hot_windows": doc["hot_windows"],
                 "samples": list(reversed(samples[-VIEW_SAMPLES:]))}
 
+    def current_level(self):
+        """Level of the newest sample, or None (plan 013 season auto-tick)."""
+        samples = self._load()["samples"]
+        return samples[-1]["level"] if samples else None
+
     def source(self):
         """`/api/state` sources.leveling: {updated, status: "ok"}."""
         when = _parse_iso(self.store.get("leveling").get("updated"))
