@@ -180,6 +180,44 @@
     return '-';
   }
 
+  // Exact silver with thousands separators (plan 028): 1,234,567,890.
+  function fmtSilverExact(n) {
+    if (!isNum(n)) return '-';
+    const r = Math.round(Math.abs(n));
+    const sign = n < 0 && r !== 0 ? '-' : '';
+    return sign + String(r).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  // ---- Market name search (plan 028) ----
+
+  const SEARCH_DEBOUNCE_MS = 250;
+  const SEARCH_MIN = 2;
+  const SEARCH_MAX = 40;
+
+  // Typed text -> the query the server accepts (trimmed, 2-40 printable
+  // ASCII), or null when it would only earn a 400.
+  function searchQuery(text) {
+    if (typeof text !== 'string') return null;
+    const q = text.trim();
+    if (q.length < SEARCH_MIN || q.length > SEARCH_MAX) return null;
+    return /^[\x20-\x7e]+$/.test(q) ? q : null;
+  }
+
+  function searchPath(q) { return '/api/market/search?q=' + encodeURIComponent(q); }
+
+  function isId(v) { return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 2147483647; }
+
+  // /api/market/search body -> [{id, sid, name, label}] (junk rows dropped).
+  function searchRows(body) {
+    const items = body && Array.isArray(body.items) ? body.items : [];
+    return items.filter(function (r) {
+      return r && isId(r.id) && isId(r.sid) && typeof r.name === 'string' && r.name !== '';
+    }).map(function (r) {
+      return { id: r.id, sid: r.sid, name: r.name,
+        label: r.name + (r.sid ? ' [' + r.sid + ']' : '') + '  #' + r.id };
+    });
+  }
+
   // [[epoch_ms, price], ...] -> valid points sorted by time.
   function cleanPoints(points) {
     if (!Array.isArray(points)) return [];
@@ -2252,6 +2290,11 @@
     validPost: validPost,
     POST_ROUTES: POST_ROUTES,
     fmtSilver: fmtSilver,
+    fmtSilverExact: fmtSilverExact,
+    SEARCH_DEBOUNCE_MS: SEARCH_DEBOUNCE_MS,
+    searchQuery: searchQuery,
+    searchPath: searchPath,
+    searchRows: searchRows,
     sparkPath: sparkPath,
     historyStats: historyStats,
     alertFor: alertFor,

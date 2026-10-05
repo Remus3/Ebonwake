@@ -37,3 +37,31 @@ ToS check: arsha.io v2 / util GET only through the plan 002 client
 (cache, UA, backoff); never an authenticated market action.
 
 Depends on: none.
+
+## As-built deviations
+
+Self-adjudicated by the build lane (2026-10-05).
+
+1. Seed holds only the three research-verified ids (Cron Stone 16080,
+   Essence of Dawn 820979, Caphras Stone 721003). Alternatives: add
+   staples from memory; confirm more via `/util/db`. Why: the lane had no
+   network grant, and the plan allows extra ids only when confirmed.
+   Reverses if: a later run confirms more ids via `/util/db` and adds them.
+2. `/util/db` is called only for an all-digit query (an id the operator
+   types) whose id the seed does not already name; results (including
+   "unknown id" misses) live in the persisted index file
+   `ops/runtime/market_names.json` with a per-id 7-day TTL, and the
+   endpoint has ONE shared backoff key (`utildb`) rather than per-chunk
+   httpcache keys. Alternatives: per-chunk `cached_get` files; a lookup for
+   every unnamed watch id. Why: one endpoint-wide backoff is politer under
+   Imperva and a single runtime file is the index the plan asks for; a
+   failed refresh keeps the stale name. Reverses if: watch rows need names
+   arsha `/item` does not return.
+3. `/util/db` has no sid, so its names index at sid 0; cached `/item` and
+   `/hot` rows keep their own sid. Cache rescan is throttled to once per
+   30 s. Reverses if: names must appear the instant a cache file lands.
+4. Optional arsha `/search` fourth source not added (still 500 code 103).
+   Reverses if: it answers 200 again.
+5. Item detail's order-book depth rows also use the exact formatter (they
+   are detail, not list cells); the hot list "stock" count keeps the short
+   form. Reverses if: depth rows get too wide for the card.

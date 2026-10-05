@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "note": "Plan 028 seed for the market name index. Only ids verified against arsha /util/db; source = where the id was confirmed.",
+  "items": [
+    {"id": 16080, "sid": 0, "name": "Cron Stone", "source": "research 0004 (arsha util/db 2026-10-05)", "verified": "2026-10-05"},
+    {"id": 820979, "sid": 0, "name": "Essence of Dawn", "source": "research 0004 (arsha util/db 2026-10-05)", "verified": "2026-10-05"},
+    {"id": 721003, "sid": 0, "name": "Caphras Stone", "source": "research 0004 (arsha util/db 2026-10-05)", "verified": "2026-10-05"}
+  ]
+}
