@@ -2,8 +2,9 @@
 
 Routes: /api/health, /api/version (fleet P0-5), /api/state, /events (SSE),
 / and /app/* (static dashboard + overlay assets, browser fallback),
-/api/market/{watch,item,hot} (plan 002), /api/today (plan 003), and
-POST /api/market/watch + POST /api/today behind one shared guard.
+/api/market/{watch,item,hot} (plan 002), /api/today (plan 003),
+/api/progress (plan 004), and POST /api/market/watch + /api/today +
+/api/progress behind one shared guard.
 """
 
 import datetime as _dt
@@ -20,7 +21,7 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import __version__, market, ports, today
+from . import __version__, market, ports, progress, today
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -82,7 +83,8 @@ class EWServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, addr, store_root=None, commit=None, sse_interval=15.0,
-                 market_client=None, market_seed=None, today_clock=None):
+                 market_client=None, market_seed=None, today_clock=None,
+                 profile_client=None, profile_cfg=None):
         super().__init__(addr, Handler)
         self.started = _now_iso()
         self.commit = commit
@@ -93,6 +95,12 @@ class EWServer(ThreadingHTTPServer):
         self.market = market.MarketService(market_client or market.ArshaClient(),
                                            market.Watchlist(self.store, seed=seed))
         self.today = today.TodayService(self.store, clock=today_clock or time.time)
+        if profile_client is None:
+            cfg = progress.config_profile(REPO_ROOT) if profile_cfg is None else profile_cfg
+            family = progress.family_from_config(cfg)
+            if family is not None:
+                profile_client = progress.ProfileClient(family, base_url=cfg.get("base_url"))
+        self.progress = progress.ProgressService(self.store, profile_client)
 
     def version(self):
         return {"commit": self.commit, "started": self.started, "pid": os.getpid(),
@@ -100,7 +108,8 @@ class EWServer(ThreadingHTTPServer):
 
     def state(self):
         return {"app": "ebonwake", "version": __version__, "tabs": TABS,
-                "sources": {"market": self.market.source(), "today": self.today.source()},
+                "sources": {"market": self.market.source(), "today": self.today.source(),
+                            "profile": self.progress.source()},
                 "now": _now_iso()}
 
 
@@ -156,6 +165,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.market.hot())
         if path == "/api/today":
             return self._send(200, self.server.today.view())
+        if path == "/api/progress":
+            return self._send(200, self.server.progress.view())
         if path == "/events":
             return self._sse()
         if path == "/":
@@ -181,7 +192,16 @@ class Handler(BaseHTTPRequestHandler):
         (op, arg), = body.items()
         return getattr(self.server.today, op)(arg)
 
-    POST_ROUTES = {"/api/market/watch": _post_market_watch, "/api/today": _post_today}
+    def _post_progress(self, body):
+        ops = {"character": "set_character", "step": "step", "add_track": "add_track",
+               "remove_track": "remove_track"}
+        if len(body) != 1 or not (set(ops) & set(body)):
+            raise ValueError("body must be one of {character|step|add_track|remove_track: ...}")
+        (op, arg), = body.items()
+        return getattr(self.server.progress, ops[op])(arg)
+
+    POST_ROUTES = {"/api/market/watch": _post_market_watch, "/api/today": _post_today,
+                   "/api/progress": _post_progress}
 
     def do_POST(self):  # noqa: N802
         """Shared guard for every POST route: loopback Host + application/json +
@@ -256,10 +276,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15.0,
-                market_client=None, market_seed=None, today_clock=None):
+                market_client=None, market_seed=None, today_clock=None,
+                profile_client=None, profile_cfg=None):
     return EWServer(("127.0.0.1", port), store_root=store_root, commit=commit,
                     sse_interval=sse_interval, market_client=market_client,
-                    market_seed=market_seed, today_clock=today_clock)
+                    market_seed=market_seed, today_clock=today_clock,
+                    profile_client=profile_client, profile_cfg=profile_cfg)
 
 
 def main(argv=None):
