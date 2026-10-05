@@ -223,7 +223,8 @@ def test_ps1_ascii_lf_and_pattern():
 
 @pytest.mark.skipif(sys.platform != "win32", reason="powershell.exe 5.1 is Windows only")
 @pytest.mark.parametrize("PS1", [PS1, ROOT / "tools" / "ocr_prep.ps1",
-                                 ROOT / "tools" / "ocr_bench.ps1"], ids=lambda p: p.name)
+                                 ROOT / "tools" / "ocr_bench.ps1",
+                                 ROOT / "tools" / "ocr_ink.ps1"], ids=lambda p: p.name)
 def test_ps1_parses_in_windows_powershell(PS1):
     exe = ocr.powershell_exe()
     if not Path(exe).is_file() and not shutil.which(exe):
@@ -643,3 +644,201 @@ def test_parse_tsv_keeps_comma_read_as_space_together():
         + _tsv_row(1, 2, 66, 0, 38, 15, "1,234") \
         + _tsv_row(1, 3, 109, 0, 25, 15, "567")
     assert ocr.extract_silver(ocr.parse_tsv(out)["lines"]) == 1234567
+
+
+# -- word-gap fix: digit|digit boundaries + ink probe -------------------------------
+
+def _gap_tsv(gap, h2=30, y2=0, h1=30):
+    """"Silver 1,234,567 100" at x3-like sizes; `gap` px between amount and 100."""
+    return TSV_HEAD + _tsv_row(1, 1, 0, 0, 120, 30, "Silver") \
+        + _tsv_row(1, 2, 132, 0, 200, h1, "1,234,567") \
+        + _tsv_row(1, 3, 332 + gap, y2, 54, h2, "100")
+
+
+def test_parse_tsv_two_spaces_split_digit_words():
+    doc = ocr.parse_tsv(_gap_tsv(gap=20))  # 0.67 h: two spaces
+    assert [ln["text"] for ln in doc["lines"]] == ["Silver 1,234,567", "100"]
+    assert ocr.extract_silver(doc["lines"]) == 1234567
+
+
+def test_parse_tsv_dropped_comma_gap_045_kept_together():
+    doc = ocr.parse_tsv(_gap_tsv(gap=13))  # 0.43 h: a comma Tesseract dropped
+    assert [ln["text"] for ln in doc["lines"]] == ["Silver 1,234,567 100"]
+
+
+def test_parse_tsv_non_digit_boundary_keeps_wide_split():
+    out = TSV_HEAD + _tsv_row(1, 1, 0, 0, 120, 30, "Silver") \
+        + _tsv_row(1, 2, 140, 0, 200, 30, "1,234,567")  # 0.67 h after a word: kept
+    assert ocr.parse_tsv(out)["lines"][0]["text"] == "Silver 1,234,567"
+
+
+@pytest.mark.parametrize("kw", [{"h2": 22}, {"y2": 9}], ids=["height", "bottom"])
+def test_parse_tsv_height_or_bottom_mismatch_splits(kw):
+    doc = ocr.parse_tsv(_gap_tsv(gap=8, **kw))
+    assert [ln["text"] for ln in doc["lines"]] == ["Silver 1,234,567", "100"]
+
+
+def test_parse_tsv_bounds_rect_for_probe():
+    doc, bounds = ocr._parse_tsv(_gap_tsv(gap=13), scale=2)
+    assert len(bounds) == 1
+    b = bounds[0]
+    assert doc["lines"][0]["text"][b["at"]] == " " and b["line"] == 0
+    assert b["at"] == len("Silver 1,234,567")
+    # x: prev right + 1 .. next left - 1; y: baseline 30 - 0.15 h .. + 0.40 h
+    assert b["rect"] == (333, 26, 11, 16)
+    assert b["cut"] == (166, 172)  # original px (scale 2)
+    _, none = ocr._parse_tsv(_gap_tsv(gap=5))  # under PROBE_GAP: never probed
+    assert none == []
+
+
+class FakeProbe:
+    def __init__(self, ink=None, exc=None):
+        self.ink, self.exc, self.calls = ink, exc, []
+
+    def __call__(self, image, rects):
+        self.calls.append((image, list(rects)))
+        if self.exc:
+            raise self.exc
+        return self.ink
+
+
+def _one_space():
+    return ocr._parse_tsv(_gap_tsv(gap=13))
+
+
+def test_probe_no_ink_is_a_space_and_cuts():
+    doc, bounds = _one_space()
+    probe = FakeProbe([0.0])
+    out = ocr.split_spaced_amount(doc, bounds, "prep.png", probe)
+    assert len(probe.calls) == 1 and probe.calls[0] == ("prep.png", [bounds[0]["rect"]])
+    assert [ln["text"] for ln in out["lines"]] == ["Silver 1,234,567", "100"]
+    assert out["lines"][1]["x"] == 345 and out["lines"][0]["w"] == 332
+    assert ocr.extract_silver(out["lines"]) == 1234567
+    assert ocr._sanitise(out) == out  # still the public {text, lines} shape
+
+
+def test_probe_ink_is_a_dropped_comma_and_joins():
+    doc, bounds = _one_space()
+    out = ocr.split_spaced_amount(doc, bounds, "prep.png", FakeProbe([0.2]))
+    assert out == doc and ocr.extract_silver(out["lines"]) == 1234567100
+
+
+@pytest.mark.parametrize("probe", [FakeProbe(exc=ocr.OcrError("ps failed")),
+                                   FakeProbe(exc=OSError("gone")), FakeProbe(ink=[])],
+                         ids=["ocrerror", "oserror", "short"])
+def test_probe_failure_falls_back_to_join(probe):
+    doc, bounds = _one_space()
+    assert ocr.split_spaced_amount(doc, bounds, "prep.png", probe) == doc
+
+
+def test_probe_only_when_amount_spans_the_gap():
+    out = TSV_HEAD + _tsv_row(1, 1, 0, 0, 54, 30, "100") \
+        + _tsv_row(1, 2, 67, 0, 54, 30, "200") \
+        + _tsv_row(2, 1, 0, 100, 120, 30, "Silver") \
+        + _tsv_row(2, 2, 132, 100, 200, 30, "1,234,567")
+    doc, bounds = ocr._parse_tsv(out)
+    assert len(bounds) == 1  # "100 200" is probe-able, but not the silver amount
+    probe = FakeProbe([0.0])
+    assert ocr.split_spaced_amount(doc, bounds, "p.png", probe) == doc
+    assert probe.calls == []
+
+
+def test_ink_probe_command_and_parse(tmp_path):
+    seen = {}
+
+    def fake(args, **kw):
+        seen["args"], seen["kw"] = args, kw
+        return subprocess.CompletedProcess(args, 0, '{"ink":[0.0,0.25]}', "")
+
+    got = ocr.ink_probe(tmp_path / "p.png", [(1, 2, 3, 4), (5, 6, 7, 8)], run=fake)
+    assert got == [0.0, 0.25]
+    a = seen["args"]
+    assert a[a.index("-File") + 1] == str(ocr.INK_PS1)
+    assert a[a.index("-Rects") + 1] == "1,2,3,4;5,6,7,8"
+    if sys.platform == "win32":
+        assert seen["kw"]["creationflags"] == subprocess.CREATE_NO_WINDOW
+
+
+@pytest.mark.parametrize("stdout,rc", [('{"ink":0.5}', 0), ('{"error":"x"}', 1),
+                                       ('{"ink":[0.1]}', 0), ("junk", 0),
+                                       ('{"ink":[2.0,0]}', 0)])
+def test_ink_probe_bad_output(stdout, rc):
+    def fake(args, **kw):
+        return subprocess.CompletedProcess(args, rc, stdout, "")
+    with pytest.raises(ocr.OcrError):
+        ocr.ink_probe("p.png", [(1, 2, 3, 4), (5, 6, 7, 8)], run=fake)
+
+
+def test_ink_probe_single_rect_scalar_accepted():
+    def fake(args, **kw):
+        return subprocess.CompletedProcess(args, 0, '{"ink":0.5}', "")
+    assert ocr.ink_probe("p.png", [(1, 2, 3, 4)], run=fake) == [0.5]
+
+
+def test_chain_probes_prepped_image_and_cuts(tmp_path):
+    tsv = _gap_tsv(gap=13)
+    seen = []
+
+    def run(args, **kw):
+        if "-File" in args:
+            out = json.dumps({"out": args[args.index("-Out") + 1], "scale": 3.0})
+            return subprocess.CompletedProcess(args, 0, out, "")
+        return subprocess.CompletedProcess(args, 0, tsv, "")
+
+    def probe(image, rects):
+        seen.append((Path(image).parent, Path(image).name.startswith("prep-"), len(rects)))
+        return [0.0]
+
+    doc = ocr.run_tesseract_chain(tmp_path / "a.png", tmp_path / "w", "t.exe", run=run,
+                                  probe=probe)
+    assert ocr.extract_silver(doc["lines"]) == 1234567
+    assert seen == [(tmp_path / "w", True, 1)]  # the prepped image, one call
+
+
+def test_cache_version_bumped_for_gap_fix():
+    assert ocr.CACHE_VERSION == "3"
+
+
+def test_ink_ps1_ascii_lf():
+    raw = ocr.INK_PS1.read_bytes()
+    assert b"\r" not in raw and all(b < 128 for b in raw)
+    assert b"GetBrightness" in raw and b"ConvertTo-Json" in raw
+
+
+def test_bench_gap_cases():
+    sys.path.insert(0, str(ROOT / "tools"))
+    import ocr_bench
+    gs = ocr_bench.gap_cases(quick=True)
+    assert {c["kind"] for c in gs} == {"gap1", "gap2"}
+    c = next(c for c in gs if c["kind"] == "gap1")
+    assert c["text"].endswith(" 100") and not c["text"].endswith("  100")
+    assert ocr_bench.score(c, {"lines": [L(c["text"][:-4]), L("100", x=400)]})
+    assert not ocr_bench.score(c, {"lines": [L(c["text"])]})
+
+
+def test_probe_never_cuts_before_a_grouped_tail():
+    # bench c0004: "21 187,096,269" (comma invisible after prep, no ink) must
+    # stay one number - a grouped tail is the rest of the amount.
+    out = TSV_HEAD + _tsv_row(1, 1, 0, 0, 120, 30, "Silver:") \
+        + _tsv_row(1, 2, 132, 0, 40, 30, "21") \
+        + _tsv_row(1, 3, 182, 0, 200, 30, "187,096,269")
+    doc, bounds = ocr._parse_tsv(out)
+    assert len(bounds) == 1
+    probe = FakeProbe([0.0])
+    assert ocr.split_spaced_amount(doc, bounds, "p.png", probe) == doc
+    assert probe.calls == [] and ocr.extract_silver(doc["lines"]) == 21187096269
+
+
+@pytest.mark.parametrize("words,ink,want", [
+    (["1", "234", "567"], [0.0, 0.3], 1234567),        # space-grouped, first gap clean
+    (["1,234", "567", "100"], [0.0, 0.0], 1234567),    # cut only at the last gap
+])
+def test_probe_cuts_only_the_last_gap(words, ink, want):
+    rows, x = _tsv_row(1, 1, 0, 0, 120, 30, "Silver"), 132
+    for i, w in enumerate(words):
+        width = 18 * len(w)
+        rows += _tsv_row(1, 2 + i, x, 0, width, 30, w)
+        x += width + 13  # 0.43 h: one space / a dropped comma
+    doc, bounds = ocr._parse_tsv(TSV_HEAD + rows)
+    out = ocr.split_spaced_amount(doc, bounds, "p.png", FakeProbe(ink[-1:]))
+    assert ocr.extract_silver(out["lines"]) == want

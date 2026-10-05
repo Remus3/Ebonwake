@@ -43,11 +43,25 @@ PREP_PS1 = REPO_ROOT / "tools" / "ocr_prep.ps1"
 # or fails (config `ocr.engine`: auto | tesseract | windows).
 TESS_PASSES = ((3.0, 6), (3.0, 11), (1.0, 6))
 PREP_MAX_DIM = 8000
-CACHE_VERSION = "2"  # bump when the engine chain changes; old reads re-OCR once
+CACHE_VERSION = "3"  # bump when the engine chain changes; old reads re-OCR once
 ENGINES = ("auto", "tesseract", "windows")
 # A word gap wider than this many word heights starts a new line (a space or a
 # comma read as a space is ~0.4 h; separate UI numbers on one row sit further).
 GAP_SPLIT = 0.8
+# Digit word to digit word (009 word-gap fix, measured at x3, gap / max height):
+# a comma Tesseract dropped 0.12-0.55, one real space 0.32-0.58, two 0.59-1.00.
+# Wider than DIGIT_GAP_SPLIT, or heights / bottoms that do not match (another UI
+# element), starts a new line; a kept gap of PROBE_GAP or more inside the silver
+# amount is decided by the ink probe (a dropped comma leaves its tail below the
+# baseline, a space leaves nothing).
+DIGIT_GAP_SPLIT = 0.57
+DIGIT_HEIGHT_DIFF = 0.20
+DIGIT_BOTTOM_DIFF = 0.25
+PROBE_GAP = 0.25
+PROBE_ABOVE = 0.15  # probe rectangle: baseline - 0.15 h .. baseline + 0.40 h
+PROBE_BELOW = 0.40
+INK_SPACE_MAX = 0.02  # ink fraction below this in the gap = a real space
+INK_PS1 = REPO_ROOT / "tools" / "ocr_ink.ps1"
 OCR_TIMEOUT_S = 60
 MAX_TEXT = 20000
 MAX_LINE_TEXT = 500
@@ -177,16 +191,38 @@ def tesseract_exe(cfg_path=None):
     return None
 
 
-def parse_tsv(stdout, scale=1.0):
-    """Tesseract `tsv` output -> {text, lines}; words grouped by (block, par, line),
-    boxes mapped back to original pixels by dividing by `scale`."""
+def _digit_split(prev, w):
+    """Line break between two digit words: wide gap, or a height / bottom mismatch."""
+    hp, hw = max(prev[4], 1), max(w[4], 1)
+    h = max(hp, hw)
+    gap = w[1] - (prev[1] + prev[3])
+    return gap > DIGIT_GAP_SPLIT * h or abs(hp - hw) > DIGIT_HEIGHT_DIFF * h \
+        or abs((prev[2] + prev[4]) - (w[2] + w[4])) > DIGIT_BOTTOM_DIFF * h
+
+
+def _probe_rect(prev, w):
+    """Prepped-image rectangle (x, y, w, h) of the gap below and just above the
+    digit baseline, or None when the gap is too narrow to be a real space."""
+    h = max(prev[4], w[4], 1)
+    x0, x1 = prev[1] + prev[3] + 1, w[1] - 1
+    if w[1] - (prev[1] + prev[3]) < PROBE_GAP * h or x1 <= x0:
+        return None
+    base = min(prev[2] + prev[4], w[2] + w[4])  # a comma-tailed word sits lower
+    y0 = round(base - PROBE_ABOVE * h)
+    return (x0, y0, x1 - x0, max(1, round(base + PROBE_BELOW * h) - y0))
+
+
+def _parse_tsv(stdout, scale=1.0):
+    """parse_tsv plus the probe-able digit|digit boundaries kept inside a line:
+    [{line, at (index of the joining space), rect (prepped px), cut (x end of the
+    left word, x start of the right word, original px)}]."""
     groups = {}
     order = []
     for row in (stdout or "").splitlines()[1:]:
         f = row.split("\t")
         if len(f) < 12 or f[0] != "5":
             continue
-        word = f[11].strip()
+        word = _clean_text(f[11].strip(), MAX_LINE_TEXT)
         try:
             x, y, w, h = (int(v) for v in f[6:10])
             conf = float(f[10])
@@ -207,27 +243,111 @@ def parse_tsv(stdout, scale=1.0):
         seg = [ws[0]]
         for w in ws[1:]:
             prev = seg[-1]
-            if w[1] - (prev[1] + prev[3]) > GAP_SPLIT * max(prev[4], w[4], 1):
+            if prev[0][-1].isdigit() and w[0][0].isdigit():
+                split = _digit_split(prev, w)
+            else:
+                split = w[1] - (prev[1] + prev[3]) > GAP_SPLIT * max(prev[4], w[4], 1)
+            if split:
                 segs.append(seg)
                 seg = [w]
             else:
                 seg.append(w)
         segs.append(seg)
-    lines = []
-    for ws in segs:
+    lines, bounds = [], []
+    for ws in segs[:MAX_LINES]:
         x0 = min(w[1] for w in ws)
         y0 = min(w[2] for w in ws)
         x1 = max(w[1] + w[3] for w in ws)
         y1 = max(w[2] + w[4] for w in ws)
+        at = -1
+        for prev, w in zip(ws, ws[1:]):
+            at += len(prev[0]) + 1
+            if prev[0][-1].isdigit() and w[0][0].isdigit() and at < MAX_LINE_TEXT:
+                rect = _probe_rect(prev, w)
+                if rect:
+                    bounds.append({"line": len(lines), "at": at, "rect": rect,
+                                   "cut": (round((prev[1] + prev[3]) / scale),
+                                           round(w[1] / scale))})
         lines.append({"text": " ".join(w[0] for w in ws), "x": round(x0 / scale),
                       "y": round(y0 / scale), "w": round((x1 - x0) / scale),
                       "h": round((y1 - y0) / scale)})
-    return _sanitise({"text": "\n".join(ln["text"] for ln in lines), "lines": lines})
+    doc = _sanitise({"text": "\n".join(ln["text"] for ln in lines), "lines": lines})
+    return doc, bounds
+
+
+def parse_tsv(stdout, scale=1.0):
+    """Tesseract `tsv` output -> {text, lines}; words grouped by (block, par, line),
+    boxes mapped back to original pixels by dividing by `scale`."""
+    return _parse_tsv(stdout, scale)[0]
+
+
+PROBE_TIMEOUT_S = 10  # measured ~0.4 s; a hung probe must not stall a read for 60 s
+
+
+def ink_probe(image, rects, run=subprocess.run, timeout=PROBE_TIMEOUT_S):
+    """tools/ocr_ink.ps1: dark-pixel fraction per rectangle of a prepped image."""
+    spec = ";".join(",".join(str(int(v)) for v in r) for r in rects)
+    args = [powershell_exe(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", str(INK_PS1), "-In", str(image), "-Rects", spec]
+    try:
+        out = run(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                  timeout=timeout, creationflags=_NO_WINDOW)
+    except subprocess.TimeoutExpired:
+        raise OcrError(f"ink probe timed out after {timeout} s") from None
+    except (OSError, subprocess.SubprocessError) as e:
+        raise OcrError(_clean_text(f"ink probe did not start: {e}", MAX_ERROR)) from None
+    doc = _load_json(out.stdout)
+    ink = doc.get("ink") if isinstance(doc, dict) else None
+    if isinstance(ink, (int, float)) and not isinstance(ink, bool):
+        ink = [ink]  # PowerShell 5.1 may flatten a one-element array
+    if out.returncode != 0 or not isinstance(ink, list) or len(ink) != len(rects) \
+            or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                       and 0 <= v <= 1 for v in ink):
+        raise OcrError("ink probe returned no fractions")
+    return [float(v) for v in ink]
+
+
+def _cut_line(doc, b):
+    """doc with line b["line"] split in two at the space b["at"]."""
+    lines = list(doc["lines"])
+    ln = lines[b["line"]]
+    left_x1, right_x0 = b["cut"]
+    right_x1 = ln["x"] + ln["w"]
+    lines[b["line"]:b["line"] + 1] = [
+        dict(ln, text=ln["text"][:b["at"]], w=max(0, left_x1 - ln["x"])),
+        dict(ln, text=ln["text"][b["at"] + 1:], x=right_x0, w=max(0, right_x1 - right_x0))]
+    return {"text": "\n".join(x["text"] for x in lines), "lines": lines}
+
+
+def split_spaced_amount(doc, bounds, image, probe):
+    """When the silver amount runs across a probe-able digit|digit gap, ask the
+    ink probe (ONE call) and cut the line at the first gap with no ink (a real
+    space, not a dropped comma). Probe failure keeps the joined read."""
+    hit = _silver_hit(doc["lines"])
+    if hit is None:
+        return doc
+    _, li, start, end = hit
+    text = doc["lines"][li]["text"]
+    # A grouped tail ("21 187,096,269", "1 234 567") is the rest of one number,
+    # never a second one: only the LAST gap, before a plain digit run, may be cut.
+    spans = [b for b in bounds if b["line"] == li and start < b["at"] < end
+             and not re.search(r"[,. ]", text[b["at"] + 1:end])]  # last gap only (r1)
+    if not spans:
+        return doc
+    try:
+        ink = list(probe(image, [b["rect"] for b in spans]))
+    except Exception:  # noqa: BLE001 - any probe failure = today's joined read
+        return doc
+    for b, f in zip(spans, ink):
+        if f < INK_SPACE_MAX:
+            return _cut_line(doc, b)
+    return doc
 
 
 def run_tesseract(path, exe=None, psm=11, scale=1.0, run=subprocess.run,
-                  timeout=OCR_TIMEOUT_S):
-    """Tesseract over one (already preprocessed) image -> {text, lines}."""
+                  timeout=OCR_TIMEOUT_S, with_bounds=False):
+    """Tesseract over one (already preprocessed) image -> {text, lines}, or
+    (doc, probe-able digit gaps) with `with_bounds`."""
     exe = exe or tesseract_exe()
     if not exe:
         raise OcrError("tesseract not found")
@@ -241,7 +361,8 @@ def run_tesseract(path, exe=None, psm=11, scale=1.0, run=subprocess.run,
         raise OcrError(_clean_text(f"tesseract did not start: {e}", MAX_ERROR)) from None
     if out.returncode != 0:
         raise OcrError(f"tesseract exited {out.returncode}")
-    return parse_tsv(out.stdout, scale)
+    doc, bounds = _parse_tsv(out.stdout, scale)
+    return (doc, bounds) if with_bounds else doc
 
 
 def ocr_engine(cfg_path=None):
@@ -278,8 +399,11 @@ def prep_image(src, dst, scale, run=subprocess.run, timeout=OCR_TIMEOUT_S):
     return float(applied)
 
 
-def run_tesseract_chain(path, work_dir, exe, run=subprocess.run, passes=TESS_PASSES):
-    """Preprocess + Tesseract per pass until a silver amount is read."""
+def run_tesseract_chain(path, work_dir, exe, run=subprocess.run, passes=TESS_PASSES,
+                        probe=None):
+    """Preprocess + Tesseract per pass until a silver amount is read; a silver
+    amount read across a one-space-wide digit gap goes to the ink probe."""
+    probe = probe or (lambda image, rects: ink_probe(image, rects, run=run))
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
     first, preps = None, {}
@@ -289,11 +413,12 @@ def run_tesseract_chain(path, work_dir, exe, run=subprocess.run, passes=TESS_PAS
                 dst = work / f"prep-{os.getpid()}-{threading.get_ident()}-{len(preps)}.png"
                 preps[scale] = (dst, prep_image(path, dst, scale, run=run))
             dst, applied = preps[scale]
-            doc = run_tesseract(dst, exe=exe, psm=psm, scale=applied, run=run)
+            doc, bounds = run_tesseract(dst, exe=exe, psm=psm, scale=applied, run=run,
+                                        with_bounds=True)
             if first is None:
                 first = doc
             if extract_silver(doc["lines"]) is not None:
-                return doc
+                return split_spaced_amount(doc, bounds, dst, probe)
         return first
     finally:
         for dst, _ in preps.values():
@@ -347,34 +472,45 @@ def _neighbours(lines, i):
 
 # -- extractors ------------------------------------------------------------------
 
-def _amount(text):
-    for m in AMOUNT.finditer(text):
+def _amount_at(text, pos=0, endpos=None):
+    """(value, start, end) of the first plausible amount in text[pos:endpos]."""
+    for m in AMOUNT.finditer(text[pos:endpos]):  # a slice: no lookbehind past pos
         v = int(re.sub(r"[^0-9]", "", m.group(1)))
         if 0 <= v <= MAX_SILVER:
-            return v
+            return v, pos + m.start(1), pos + m.end(1)
+    return None
+
+
+def _amount(text):
+    hit = _amount_at(text)
+    return hit[0] if hit else None
+
+
+def _silver_hit(lines):
+    """(value, line index, start, end) of the silver amount, or None."""
+    lines = _lines(lines)
+    idx = {id(ln): i for i, ln in enumerate(lines)}
+    for i, ln in enumerate(lines):
+        m = SILVER_WORD.search(ln["text"])
+        if not m:
+            continue
+        hit = _amount_at(ln["text"], m.end()) or _amount_at(ln["text"], 0, m.start())
+        if hit is not None:
+            return (hit[0], i) + hit[1:]
+        for b in _neighbours(lines, i):
+            if SILVER_WORD.search(b["text"]):
+                continue
+            hit = _amount_at(b["text"])
+            if hit is not None:
+                return (hit[0], idx[id(b)]) + hit[1:]
     return None
 
 
 def extract_silver(lines):
     """Silver amount: digits (comma or dot grouped) on a "Silver" line, else on
     the same row, else just below it. None when nothing plausible is found."""
-    lines = _lines(lines)
-    for i, ln in enumerate(lines):
-        m = SILVER_WORD.search(ln["text"])
-        if not m:
-            continue
-        v = _amount(ln["text"][m.end():])
-        if v is None:
-            v = _amount(ln["text"][:m.start()])
-        if v is not None:
-            return v
-        for b in _neighbours(lines, i):
-            if SILVER_WORD.search(b["text"]):
-                continue
-            v = _amount(b["text"])
-            if v is not None:
-                return v
-    return None
+    hit = _silver_hit(lines)
+    return hit[0] if hit else None
 
 
 def duration_minutes(text):

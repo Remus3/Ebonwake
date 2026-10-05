@@ -2,6 +2,7 @@
 """Synthetic OCR benchmark for BDO-style silver / number strings (plan 009 follow-up).
 
     python tools/ocr_bench.py [--out DIR] [--quick] [--json REPORT]
+                              [--set old|gap|all] [--live]
 
 Renders BDO-like strings ("Silver 1,234,567", bare comma-grouped amounts,
 "Silver: 98,765") in several UI fonts at in-game pixel sizes (11-28 px), light on
@@ -73,6 +74,26 @@ def cases(quick=False, seed=9):
     return out
 
 
+def gap_cases(quick=False, seed=11):
+    """009 word-gap fix: "Silver <amount>" then "100" after one or two normal
+    spaces; the extractor must return the amount alone. Ids g0000..."""
+    rng = random.Random(seed)
+    out = []
+    sizes = SIZES[::2] if quick else SIZES
+    for font in FONTS:
+        for px in sizes:
+            for si, (fg, bg) in enumerate(STYLES):
+                for frame in (0, 1):
+                    if frame and si:
+                        continue
+                    for spaces in (1, 2):
+                        n, s = _amount_text(rng)
+                        out.append({"id": f"g{len(out):04d}", "text": f"Silver {s}{' ' * spaces}100",
+                                    "want": n, "kind": f"gap{spaces}", "font": font, "px": px,
+                                    "fg": fg, "bg": bg, "frame": frame})
+    return out
+
+
 def score(case, doc):
     """True when the production extractor returns the exact number."""
     lines = ocr._lines(doc.get("lines"))
@@ -119,6 +140,11 @@ def main(argv=None):
     ap.add_argument("--json", help="write the full report here")
     ap.add_argument("--rescore", action="store_true",
                     help="re-score the raw reads already in --out (no OCR)")
+    ap.add_argument("--set", choices=("old", "gap", "all"), default="old",
+                    help="old = the 288 engine cases, gap = 'Silver N 100' word-gap cases")
+    ap.add_argument("--live", action="store_true",
+                    help="only the production chain run live per image (prep, passes, "
+                         "ink probe) - the word-gap fix needs the prepped pixels")
     a = ap.parse_args(argv)
     work = Path(a.out) if a.out else Path(tempfile.mkdtemp(prefix="ew_ocr_bench_"))
     work.mkdir(parents=True, exist_ok=True)
@@ -127,12 +153,22 @@ def main(argv=None):
         configs = {p.stem[4:].replace("_", " "): (json.loads(p.read_text(encoding="ascii")), 0)
                    for p in sorted(work.glob("raw_*.json"))}
         return report_out(cs, configs, a.json)
-    cs = cases(a.quick)
+    cs = (cases(a.quick) if a.set != "gap" else []) + (gap_cases(a.quick) if a.set != "old" else [])
     (work / "manifest.json").write_text(json.dumps(cs), encoding="ascii")
     _ps("render", work / "manifest.json", work / "img")
     paths = [work / "img" / f"{c['id']}.png" for c in cs]
 
     configs = {}
+    if a.live:
+        exe = ocr.tesseract_exe()
+        if not exe:
+            print("tesseract: not found", file=sys.stderr)
+            return 1
+        t = time.time()
+        docs = {Path(p).name: ocr.run_tesseract_chain(p, work / "live", exe) for p in paths}
+        configs["chain live"] = (docs, time.time() - t)
+        (work / "raw_chain_live.json").write_text(json.dumps(docs), encoding="ascii")
+        return report_out(cs, configs, a.json)
     t = time.time()
     configs["win x1"] = (run_winocr(paths, 1, work), time.time() - t)
     t = time.time()
