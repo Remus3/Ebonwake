@@ -1,13 +1,10 @@
 EW NEXT SESSION
 ---------------
-Next action: plan 010 (packaging: single instance, tray, start-on-login task,
-real capture of an occluded dashboard) - spec already in
-docs/plans/010-packaging.md. One lane: write a prompt like the plan 006-009
-ones, run `python tools/ew_lane.py run build --writes-code --prompt-file F`
-in the background, commit in the printed lane worktree (detached), merge
---no-ff into main, verifier (refute cap 3), install + read back the logon
-task, self-test, push. Roadmap is then complete; next pick new work from
-docs/design/0001-ebonwake-spec.md gaps.
+Next action: roadmap 001-010 complete. Pick new work from
+docs/design/0001-ebonwake-spec.md gaps: write a plan 011 spec, add it to
+docs/plans/ROADMAP.md, run it through one lane (`python tools/ew_lane.py run
+build --writes-code --prompt-file F` in the background, commit in the printed
+lane worktree, merge --no-ff, verifier capped at 3 rounds, one push).
 
 Carried forward (not acted on yet):
 - OPERATOR (physical): press Ctrl+Alt+E with the EW dashboard focused and
@@ -18,60 +15,63 @@ Carried forward (not acted on yet):
   on an alt account first, watch for XIGNCODE3 complaints (ADR 0001 reversal
   condition).
 - OPERATOR: set profile.family in gitignored config/local.json to enable the
-  Progress tab profile card (BDO-REST-API, hourly). (config/local.json was
-  MISSING on this host this session; recreated from the example with only
-  bdo.install_dir / bdo.documents_dir filled.)
+  Progress tab profile card (BDO-REST-API, hourly).
 - OPERATOR (plan 008 check): launch BDO, log in, log out; the System card must
-  walk not running -> running -> logged in -> running. Live read this session
-  already showed logged_in from a selectServerGroup line. A missed step = one
+  walk not running -> running -> logged in -> running. A missed step = one
   classifier row in server/ew/gamewatch.py CLASSIFIERS (data change).
-- OPERATOR (plan 009 check): take ~10 real screenshots with silver and buffs
-  visible, press Read on each in System > screenshots. Verifier measured
-  Windows.Media.Ocr reading rendered "Silver 1,234,567" as "Silver 1"; if real
-  silver digits misread in >1 of 10, re-adjudicate Tesseract (009 reversal).
+- OPERATOR (plan 009 QA, now optional): take ~10 real screenshots with silver
+  and buffs visible, press Read on each in System > screenshots. Engine is now
+  Tesseract (chain) with Windows OCR fallback; if real silver misreads in >1
+  of 10, set config ocr.engine=windows and re-bench with real crops.
+- OPERATOR (plan 010 QA): tray icon shows Show dashboard / Toggle overlay /
+  Restart server / Quit; logon task "Ebonwake" starts EW 60 s after next login.
 - MAIN to record EW's port block 8940-8959 in the machine-wide registry and
   add EW to the roster / lane widget (MAIN 2237 4c/4d says RC/MAIN do this
   under the v6 round; re-check the inbox).
 - Write gitignored config/leak_needles.json on any new host before pushing.
   Lane worktrees get config/leak_needles.json and config/local.json copied
   automatically by tools/ew_lane.py (seed_config) when present in the main tree.
-- Self-test captures of an occluded dashboard return the last painted frame
-  (plan 010 item 4).
 - Non-blocking notes from verifiers: OCR cache key mtime is whole seconds (same
   name+size rewrite within 1 s serves the old result); bridge timeout 10 s vs
-  server OCR timeout 60 s; normalizeOcr hides buffs found without a time;
-  main.js postLocal keeps only the first 64 KiB of a reply (deadeye replies can
-  exceed it; the client re-GETs, nothing lost).
-- FLAKY: tests/test_deadeye.py::test_route_cap_is_per_route failed 1 of 4
-  verifier runs with ConnectionAborted (server closes before reading an
-  oversized body). Fix before plan 010 push: drain or tolerate the abort.
-- OCR edge notes: "XP scroll XP scroll 20 min" -> minutes None (empty first
-  span); equal-start names keep the shorter one, contrary to the comment in
-  server/ew/ocr.py _find_names (no SEED_BUFFS overlap today).
+  server OCR timeout 60 s (Tesseract chain measured ~0.7 s crop, ~1.8-2.3 s per
+  1080p/1440p frame, up to 3 passes when no silver - a 4K shot could near 10 s);
+  normalizeOcr hides buffs found without a time; main.js postLocal keeps only
+  the first 64 KiB of a reply (deadeye replies can exceed it; the client
+  re-GETs, nothing lost).
+- OCR residual (009 follow-up round 2, accepted): "Silver 1,234,567  100" with
+  one or two normal spaces still merges to 1234567100 (gap under GAP_SPLIT 0.8
+  word heights; text identical to a comma read as a space). 1 glyph misreads at
+  14 px Arial (3,456,789 -> 3,456,769). Bench chain 284/288.
+- Lane tests must not hold drive-path literals (leak sweep HALTs); plan 010's
+  test_logon_task.py was fixed in the lane commit.
 - SS's 2245 ANSWER to MAIN (v6) was misdelivered into EW's inbox; not acted on,
   reported to MAIN in EW's ANSWER note.
 
-Context: CLAUDE.md, docs/plans/ROADMAP.md, docs/plans/006-009 (as-built
-deviation sections), docs/adr/0007-fleet-kit-v6-lanes.md, tools/ew_lane.py
-(v6: fleet_lanes.run_lane cap 3, worktrees ../ew-worktrees/lane-<i> detached,
-spawn(governor="queued"); lanes never commit - main session commits in the
-worktree, merges --no-ff; a dirty lane worktree is refused on next claim).
-Endpoints: /api/health, /api/events, /api/deadeye, /api/game, POST /api/ocr.
-app/selftest.js (EW_SELFTEST=<out.json>; drives only EW windows).
+Context: CLAUDE.md, docs/plans/ROADMAP.md, docs/plans/009-ocr.md (follow-up:
+engine benchmark), docs/plans/010-packaging.md (as-built deviations),
+tools/ocr_bench.py (python tools/ocr_bench.py [--quick] [--rescore --out DIR]),
+server/ew/ocr.py (run_auto, TESS_PASSES, GAP_SPLIT, CACHE_VERSION),
+tools/logon_task.py status, server/ew/single.py, app/shared/tray.js.
+Endpoints: /api/health, /api/version, /api/events, /api/deadeye, /api/game,
+POST /api/ocr. app/selftest.js (EW_SELFTEST=<out.json>; drives only EW
+windows; quit the dashboard first - the single-instance lock makes a second
+Electron exit without writing output).
 
-Acceptance: plan 010 acceptance list true; CI green on main.
+Acceptance: plan 011 spec + roadmap row; lane run merged; verifier PASS within
+3 rounds; CI green on main.
 
-Do NOT redo: kit v6 adoption (vendored b7043fc, conformance green, ANSWER
-note delivered to MAIN 1/1 sha256 f32410da...), plans 006-009 (done, verified,
-pushed), plan 007-010 specs, OCR engine adjudication, config/local.json bdo
-paths, old lane/build + lane/data worktrees (removed, merged).
+Do NOT redo: OCR engine adjudication (Tesseract chain shipped 5ad69b6 +
+ccf1336, refute 2/3 PASS), 413 drain fix (flaky deadeye route-cap test, fixed
+5ad69b6), buff-name edge cases (fixed 5ad69b6), plan 010 (313ef2e merged
+c69ed32, refute 1/3 PASS), logon task install (read back: exists, command
+pythonw, args launch.py, delay PT1M, enabled), kit v6 adoption, plans 001-009.
 
 In flight: none. Lanes 0-2 FREE.
 
-Status: 26 commits de0c302..143c804 pushed; CI 37266473369 and 37269466465
-green. Gates: pytest 680 pass, node 127 pass, leak sweep ARMED clean. Desktop
-self-test 7/7 tabs fit, overlay alpha 0, hotkeys registered. EW server healthy
-on 8940 (restarted on 1881683 code with config); dashboard relaunched. Session
-file small (<1 MB).
+Status: 4 commits 5ad69b6..ccf1336 pushed (08caa5c..ccf1336); CI 37274249362 green
+for ccf1336. Prior hand-off CI 37269591396 green.
+Gates: pytest pass (exit 0), node 139 pass, leak sweep ARMED clean. Desktop
+self-test 7/7 painted, overlay alpha 0, hotkeys registered. EW server healthy
+on 8940 on c69ed32 code (second server exits 0); dashboard relaunched.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
