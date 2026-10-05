@@ -43,7 +43,7 @@ PREP_PS1 = REPO_ROOT / "tools" / "ocr_prep.ps1"
 # or fails (config `ocr.engine`: auto | tesseract | windows).
 TESS_PASSES = ((3.0, 6), (3.0, 11), (1.0, 6))
 PREP_MAX_DIM = 8000
-CACHE_VERSION = "3"  # bump when the engine chain changes; old reads re-OCR once
+CACHE_VERSION = "4"  # bump when the engine chain changes; old reads re-OCR once
 ENGINES = ("auto", "tesseract", "windows")
 # A word gap wider than this many word heights starts a new line (a space or a
 # comma read as a space is ~0.4 h; separate UI numbers on one row sit further).
@@ -61,6 +61,13 @@ PROBE_GAP = 0.25
 PROBE_ABOVE = 0.15  # probe rectangle: baseline - 0.15 h .. baseline + 0.40 h
 PROBE_BELOW = 0.40
 INK_SPACE_MAX = 0.02  # ink fraction below this in the gap = a real space
+# Plan 016: Tesseract can drop a comma from the text yet keep its pixels in the
+# RIGHT word's box ("4,521 372" from "4,521,372", bench c0017), so the probed gap
+# is clean paper. A comma word's box runs 0.13-0.19 h below the digit baseline
+# (measured, x3); a plain digit word whose bottom is within COMMA_TAIL h of a
+# comma-tailed left word (or COMMA_TAIL h below a plain one) holds the dropped
+# comma and its gap is never probed (kept joined).
+COMMA_TAIL = 0.07
 INK_PS1 = REPO_ROOT / "tools" / "ocr_ink.ps1"
 OCR_TIMEOUT_S = 60
 MAX_TEXT = 20000
@@ -212,6 +219,15 @@ def _probe_rect(prev, w):
     return (x0, y0, x1 - x0, max(1, round(base + PROBE_BELOW * h) - y0))
 
 
+def _swallowed_comma(prev, w, tailed):
+    """The plain digit word w sits as low as a comma tail: its box holds a comma
+    Tesseract dropped from the text (plan 016). `tailed`: prev descends too."""
+    if not w[0].isdigit():
+        return False
+    drop = (w[2] + w[4]) - (prev[2] + prev[4])
+    return drop >= (-1 if tailed else 1) * COMMA_TAIL * max(prev[4], w[4], 1)
+
+
 def _parse_tsv(stdout, scale=1.0):
     """parse_tsv plus the probe-able digit|digit boundaries kept inside a line:
     [{line, at (index of the joining space), rect (prepped px), cut (x end of the
@@ -259,10 +275,13 @@ def _parse_tsv(stdout, scale=1.0):
         y0 = min(w[2] for w in ws)
         x1 = max(w[1] + w[3] for w in ws)
         y1 = max(w[2] + w[4] for w in ws)
-        at = -1
+        at, swallowed = -1, False
         for prev, w in zip(ws, ws[1:]):
             at += len(prev[0]) + 1
-            if prev[0][-1].isdigit() and w[0][0].isdigit() and at < MAX_LINE_TEXT:
+            digits = prev[0][-1].isdigit() and w[0][0].isdigit()
+            tailed = swallowed or re.search(r"[,.]", prev[0]) is not None
+            swallowed = digits and _swallowed_comma(prev, w, tailed)
+            if digits and not swallowed and at < MAX_LINE_TEXT:
                 rect = _probe_rect(prev, w)
                 if rect:
                     bounds.append({"line": len(lines), "at": at, "rect": rect,
