@@ -536,6 +536,7 @@
   const BUFF_MINUTES = [1, 43200];  // buffs: 30 days (server MAX_BUFF_MINUTES)
   const SILVER = [0, 1e13];
   const TRASH = [0, 1e6];
+  const XP_PCT = [0, 1000];         // buff xp_pct and hot window pct (plan 011)
 
   // The one default buff list: names are exactly the server's SEED_BUFFS
   // (server/ew/grind.py, test-pinned); minutes are the arm defaults, within
@@ -613,13 +614,14 @@
       seen.push(n);
       const left = buffLeft(b, fetchedMs, now);
       rows.push({ id: b.id === undefined ? null : b.id, name: b.name,
-        left_s: left !== null && left > 0 ? left : null, minutes: defaultMinutes(b.name) });
+        left_s: left !== null && left > 0 ? left : null, minutes: defaultMinutes(b.name),
+        xp_pct: inRange(b.xp_pct, XP_PCT) ? b.xp_pct : null });
     });
     const armed = rows.filter(function (r) { return r.left_s !== null; })
       .sort(function (a, b) { return a.left_s - b.left_s; });
     const idle = rows.filter(function (r) { return r.left_s === null; });
     const extra = BUFF_DEFAULTS.filter(function (d) { return seen.indexOf(d.name.toLowerCase()) < 0; })
-      .map(function (d) { return { id: null, name: d.name, left_s: null, minutes: d.minutes }; });
+      .map(function (d) { return { id: null, name: d.name, left_s: null, minutes: d.minutes, xp_pct: null }; });
     return armed.concat(idle, extra);
   }
 
@@ -667,7 +669,11 @@
       return exact(v, ['spot', 'minutes', 'silver', 'trash']) && validName(v.spot) &&
         inRange(v.minutes, MINUTES) && validLoot(v);
     }
-    if (k === 'buff') return exact(v, ['name', 'minutes']) && validName(v.name) && inRange(v.minutes, BUFF_MINUTES);
+    if (k === 'buff') {
+      // xp_pct is optional (plan 011): absent = not counted in the XP stack.
+      return (exact(v, ['name', 'minutes']) || (exact(v, ['name', 'minutes', 'xp_pct']) && inRange(v.xp_pct, XP_PCT))) &&
+        validName(v.name) && inRange(v.minutes, BUFF_MINUTES);
+    }
     return false;
   }
 
@@ -703,7 +709,13 @@
       if (!validName(name('name'))) return { ok: false, error: 'buff name: 1-' + NAME_MAX + ' plain characters' };
       const m = minutes(BUFF_MINUTES);
       if (m === null) return { ok: false, error: minErr(BUFF_MINUTES) };
-      return { ok: true, body: { buff: { name: name('name'), minutes: m } } };
+      const buff = { name: name('name'), minutes: m };
+      if (!blank('xp_pct')) {
+        const xp = wholeIn(f.xp_pct, XP_PCT);
+        if (xp === null) return { ok: false, error: 'XP % must be a whole number 0-1000 (blank = none)' };
+        buff.xp_pct = xp;
+      }
+      return { ok: true, body: { buff: buff } };
     }
     if (kind === 'spot') {
       const n = name('name');
@@ -1160,28 +1172,229 @@
     return b.name + ' - ' + (m < 60 ? m + 'm' : fmtDuration(m * 60000));
   }
 
-  // Overlay widgets (spec section 3: each opt-in, default on). Main reads
-  // config.overlay.widgets and hands the overlay a query string; only a literal
-  // false turns a widget off.
-  const WIDGETS = ['grindSession', 'grindBuff', 'eventsSoon'];
+  // ---- Leveling (plan 011) ----
+  // Operator-typed level + XP percent samples; rate, ETA and Hot Time windows
+  // come from the server (server/ew/leveling.py). Countdowns run locally from
+  // the fetch time; an ended window leaves the XP stack until the next poll.
+
+  const PCT_RE = /^\d{1,3}(\.\d{1,3})?$/;
+  const HHMM_RE = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+  const HOT_ID_RE = /^h[0-9]{1,9}$/;
+  const HOT_LABEL_MAX = 40;
+  const MILESTONES_MAX = 20;
+  const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  // 0..100 with at most 3 decimals (server _ok_pct).
+  function validXpPct(v) {
+    return isNum(v) && v >= 0 && v <= 100 && Math.abs(v * 1000 - Math.round(v * 1000)) < 1e-6;
+  }
+
+  function validLabel(t) {
+    return typeof t === 'string' && t.trim().length > 0 && t.length <= HOT_LABEL_MAX &&
+      !/[\u0000-\u001f\u007f]/.test(t);
+  }
+
+  function validDays(v) {
+    return Array.isArray(v) && v.length > 0 && v.every(function (d) { return inRange(d, [0, 6]); }) &&
+      v.filter(function (d, i) { return v.indexOf(d) === i; }).length === v.length;
+  }
+
+  function validMilestones(v) {
+    return Array.isArray(v) && v.length <= MILESTONES_MAX && v.every(function (m) { return inRange(m, LEVEL); }) &&
+      v.filter(function (m, i) { return v.indexOf(m) === i; }).length === v.length;
+  }
+
+  // Exact shape check for POST /api/leveling bodies (main-process IPC guard).
+  function validLevelingBody(body) {
+    if (!plainObject(body)) return false;
+    const keys = Object.keys(body);
+    if (keys.length !== 1) return false;
+    const k = keys[0];
+    const v = body[k];
+    if (k === 'sample') return exact(v, ['level', 'pct']) && inRange(v.level, LEVEL) && validXpPct(v.pct);
+    if (k === 'sample_del') return typeof v === 'string' && ISO_TS.test(v);
+    if (k === 'hot_del') return validRef(v, HOT_ID_RE);
+    if (k === 'milestones') return validMilestones(v);
+    if (k === 'hot_add') {
+      return exact(v, ['days', 'start', 'end', 'label', 'pct']) && validDays(v.days) &&
+        typeof v.start === 'string' && HHMM_RE.test(v.start) && typeof v.end === 'string' &&
+        HHMM_RE.test(v.end) && v.start !== v.end && validLabel(v.label) && inRange(v.pct, XP_PCT);
+    }
+    return false;
+  }
+
+  // Quick entry strings ("52", "37.512" / "37,5%") -> {sample} body or an error.
+  function parseSampleForm(form) {
+    const f = form || {};
+    const level = wholeIn(f.level, LEVEL);
+    if (level === null) return { ok: false, error: 'level must be a whole number 1-70' };
+    const t = (f.pct === undefined || f.pct === null ? '' : String(f.pct)).trim().replace(/%$/, '').trim().replace(',', '.');
+    const pct = PCT_RE.test(t) ? Number(t) : NaN;
+    if (!validXpPct(pct)) return { ok: false, error: 'XP % must be 0-100, up to 3 decimals' };
+    return { ok: true, body: { sample: { level: level, pct: pct } } };
+  }
+
+  // Hot window editor -> {hot_add} body or an error. days: weekday numbers
+  // (Monday=0) as numbers or strings; times are UTC HH:MM.
+  function parseHotForm(form) {
+    const f = form || {};
+    const raw = Array.isArray(f.days) ? f.days : [];
+    const days = [];
+    for (const d of raw) {
+      const n = wholeIn(d, [0, 6]);
+      if (n === null) return { ok: false, error: 'bad weekday' };
+      if (days.indexOf(n) < 0) days.push(n);
+    }
+    days.sort(function (a, b) { return a - b; });
+    if (!days.length) return { ok: false, error: 'pick at least one day' };
+    const start = typeof f.start === 'string' ? f.start.trim() : '';
+    const end = typeof f.end === 'string' ? f.end.trim() : '';
+    if (!HHMM_RE.test(start) || !HHMM_RE.test(end)) return { ok: false, error: 'start / end must be HH:MM (UTC)' };
+    if (start === end) return { ok: false, error: 'start and end must differ' };
+    const label = typeof f.label === 'string' ? f.label.trim() : '';
+    if (!validLabel(label)) return { ok: false, error: 'label: 1-' + HOT_LABEL_MAX + ' plain characters' };
+    const pct = wholeIn(f.pct, XP_PCT);
+    if (pct === null) return { ok: false, error: 'XP % must be a whole number 0-1000' };
+    return { ok: true, body: { hot_add: { days: days, start: start, end: end, label: label, pct: pct } } };
+  }
+
+  // "61, 50 56" -> {milestones: [50, 56, 61]}; blank clears the list.
+  function parseMilestones(s) {
+    const parts = String(s === undefined || s === null ? '' : s).split(/[\s,]+/).filter(function (x) { return x; });
+    const out = [];
+    for (const p of parts) {
+      const n = wholeIn(p, LEVEL);
+      if (n === null) return { ok: false, error: 'milestones: whole levels 1-70' };
+      if (out.indexOf(n) >= 0) return { ok: false, error: 'milestones: level ' + n + ' twice' };
+      out.push(n);
+    }
+    if (out.length > MILESTONES_MAX) return { ok: false, error: 'at most ' + MILESTONES_MAX + ' milestones' };
+    out.sort(function (a, b) { return a - b; });
+    return { ok: true, body: { milestones: out } };
+  }
+
+  function fmtRate(r) {
+    if (!isNum(r)) return '-';
+    return (r >= 1 ? r.toFixed(1) : r.toFixed(2)) + ' %/h';
+  }
+
+  // Seconds -> "15h12m" / "45m" / "5d05h" (100 h and up).
+  function fmtEta(s) {
+    if (!isNum(s)) return '-';
+    const v = Math.max(0, Math.floor(s));
+    const h = Math.floor(v / 3600);
+    const m = Math.floor((v % 3600) / 60);
+    if (h >= 100) return Math.floor(h / 24) + 'd' + pad2(h % 24) + 'h';
+    return h > 0 ? h + 'h' + pad2(m) + 'm' : m + 'm';
+  }
+
+  function fmtDays(days) {
+    const d = (Array.isArray(days) ? days : []).filter(function (x) { return inRange(x, [0, 6]); });
+    if (d.length === 7) return 'daily';
+    return d.map(function (x) { return DAY_NAMES[x]; }).join(' ');
+  }
+
+  function normalizeLeveling(d) {
+    if (!plainObject(d) || !Array.isArray(d.milestones)) return null;
+    const hot = plainObject(d.hot) ? d.hot : {};
+    const nx = hot.next;
+    return {
+      now: typeof d.now === 'string' ? d.now : null,
+      level: inRange(d.level, LEVEL) ? d.level : null,
+      pct: validXpPct(d.pct) ? d.pct : null,
+      rate_pct_h: isNum(d.rate_pct_h) && d.rate_pct_h > 0 ? d.rate_pct_h : null,
+      eta_next_s: isNum(d.eta_next_s) ? d.eta_next_s : null,
+      next_milestone: inRange(d.next_milestone, LEVEL) ? d.next_milestone : null,
+      xp_stack_pct: isNum(d.xp_stack_pct) ? d.xp_stack_pct : 0,
+      xp_parts: (Array.isArray(d.xp_parts) ? d.xp_parts : []).filter(function (p) {
+        return plainObject(p) && isNum(p.pct);
+      }),
+      hot: {
+        active: (Array.isArray(hot.active) ? hot.active : []).filter(function (a) {
+          return plainObject(a) && isNum(a.pct) && isNum(a.ends_in_s);
+        }),
+        next: plainObject(nx) && isNum(nx.pct) && isNum(nx.starts_in_s) ? nx : null
+      },
+      milestones: d.milestones.filter(function (m) { return inRange(m, LEVEL); }),
+      milestones_seed: d.milestones_seed === true,
+      hot_windows: (Array.isArray(d.hot_windows) ? d.hot_windows : []).filter(function (w) {
+        return plainObject(w) && typeof w.id === 'string';
+      }),
+      samples: (Array.isArray(d.samples) ? d.samples : []).filter(plainObject)
+    };
+  }
+
+  // Live hot status `since` the fetch: {active, next, stack, due}. due = a
+  // window ended or started locally, so the caller should re-poll.
+  function hotLive(hot, stack, fetchedMs, now) {
+    const el = sinceFetch(fetchedMs, now);
+    const h = plainObject(hot) ? hot : {};
+    let total = isNum(stack) ? stack : 0;
+    let due = false;
+    const active = [];
+    (Array.isArray(h.active) ? h.active : []).forEach(function (a) {
+      if (!plainObject(a) || !isNum(a.ends_in_s)) return;
+      const left = Math.floor(a.ends_in_s - el);
+      if (left > 0) active.push(Object.assign({}, a, { ends_in_s: left }));
+      else { due = true; if (isNum(a.pct)) total -= a.pct; }
+    });
+    let next = null;
+    if (plainObject(h.next) && isNum(h.next.starts_in_s)) {
+      const left = Math.floor(h.next.starts_in_s - el);
+      if (left > 0) next = Object.assign({}, h.next, { starts_in_s: left });
+      else due = true;
+    }
+    return { active: active, next: next, stack: Math.max(0, total), due: due };
+  }
+
+  // Overlay one-liner: "Lv 52 37.5% | 4.1 %/h | ETA 15h12m | HOT 1h03m +50%".
+  function levelingLine(body, fetchedMs, now) {
+    const d = normalizeLeveling(body);
+    if (!d || d.level === null || d.pct === null) return 'no XP sample yet';
+    const el = sinceFetch(fetchedMs, now);
+    const parts = ['Lv ' + d.level + ' ' + (Math.floor(d.pct * 10) / 10).toFixed(1) + '%'];
+    parts.push(d.rate_pct_h === null ? '- %/h' : fmtRate(d.rate_pct_h));
+    parts.push('ETA ' + (d.eta_next_s === null ? '-' : fmtEta(d.eta_next_s - el)));
+    const h = hotLive(d.hot, d.xp_stack_pct, fetchedMs, now);
+    if (h.active.length) {
+      const ends = Math.min.apply(null, h.active.map(function (a) { return a.ends_in_s; }));
+      parts.push('HOT ' + fmtEta(ends) + ' +' + h.stack + '%');
+    } else {
+      if (h.next) parts.push('HOT in ' + fmtEta(h.next.starts_in_s));
+      if (h.stack > 0) parts.push('XP +' + h.stack + '%');
+    }
+    return parts.join(' | ');
+  }
+
+  // Overlay widgets (spec section 3). Main reads config.overlay.widgets and
+  // hands the overlay a query string. Default on (only a literal false turns
+  // one off), except the WIDGETS_OPT_IN ones: default off, only a literal true
+  // turns them on (plan 011 leveling).
+  const WIDGETS = ['grindSession', 'grindBuff', 'eventsSoon', 'leveling'];
+  const WIDGETS_OPT_IN = ['leveling'];
+
+  function optIn(k) { return WIDGETS_OPT_IN.indexOf(k) >= 0; }
 
   function overlayWidgets(config) {
     const w = config && plainObject(config.overlay) && plainObject(config.overlay.widgets) ? config.overlay.widgets : {};
     const out = {};
-    WIDGETS.forEach(function (k) { out[k] = w[k] !== false; });
+    WIDGETS.forEach(function (k) { out[k] = optIn(k) ? w[k] === true : w[k] !== false; });
     return out;
   }
 
   function widgetsQuery(widgets) {
     const out = {};
-    WIDGETS.forEach(function (k) { out[k] = widgets && widgets[k] === false ? '0' : '1'; });
+    WIDGETS.forEach(function (k) {
+      if (optIn(k)) out[k] = widgets && widgets[k] === true ? '1' : '0';
+      else out[k] = widgets && widgets[k] === false ? '0' : '1';
+    });
     return out;
   }
 
   function widgetsFromQuery(search) {
     const q = new URLSearchParams(typeof search === 'string' ? search : '');
     const out = {};
-    WIDGETS.forEach(function (k) { out[k] = q.get(k) !== '0'; });
+    WIDGETS.forEach(function (k) { out[k] = optIn(k) ? q.get(k) === '1' : q.get(k) !== '0'; });
     return out;
   }
 
@@ -1189,7 +1402,7 @@
   const POST_VALIDATORS = {
     '/api/market/watch': validWatchBody, '/api/today': validTodayBody, '/api/progress': validProgressBody,
     '/api/grind': validGrindBody, '/api/events': validEventsBody, '/api/deadeye': validDeadeyeBody,
-    '/api/ocr': validOcrBody
+    '/api/ocr': validOcrBody, '/api/leveling': validLevelingBody
   };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
@@ -1260,6 +1473,17 @@
     renderMarkdown: renderMarkdown,
     validDeadeyeBody: validDeadeyeBody,
     parseStepForm: parseStepForm,
+    validLevelingBody: validLevelingBody,
+    parseSampleForm: parseSampleForm,
+    parseHotForm: parseHotForm,
+    parseMilestones: parseMilestones,
+    fmtRate: fmtRate,
+    fmtEta: fmtEta,
+    fmtDays: fmtDays,
+    DAY_NAMES: DAY_NAMES,
+    normalizeLeveling: normalizeLeveling,
+    hotLive: hotLive,
+    levelingLine: levelingLine,
     overlayWidgets: overlayWidgets,
     widgetsQuery: widgetsQuery,
     widgetsFromQuery: widgetsFromQuery,

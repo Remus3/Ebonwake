@@ -4,8 +4,9 @@ Routes: /api/health, /api/version (fleet P0-5), /api/state, /events (SSE),
 / and /app/* (static dashboard + overlay assets, browser fallback),
 /api/market/{watch,item,hot} (plan 002), /api/today (plan 003),
 /api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006),
-/api/deadeye (plan 007), /api/game (plan 008), and POST /api/market/watch + /api/today + /api/progress +
-/api/grind + /api/events + /api/deadeye + /api/ocr (plan 009) behind one shared guard.
+/api/deadeye (plan 007), /api/game (plan 008), /api/leveling (plan 011), and POST
+/api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
+/api/ocr (plan 009) + /api/leveling behind one shared guard.
 """
 
 import datetime as _dt
@@ -22,7 +23,8 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import __version__, deadeye, events, gamewatch, grind, market, ocr, ports, progress, single, today
+from . import (__version__, deadeye, events, gamewatch, grind, leveling, market, ocr, ports,
+               progress, single, today)
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -39,6 +41,7 @@ MAX_DEADEYE_POST_BYTES = 131072
 # made test_route_cap_is_per_route flaky with ConnectionAborted on Windows).
 DRAIN_MAX_BYTES = 1 << 20
 POST_CAPS = {"/api/deadeye": MAX_DEADEYE_POST_BYTES}
+SSE_TICK_S = 0.25  # SSE wakes this often to notice a leveling change (plan 011)
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 
 TABS = [
@@ -95,7 +98,7 @@ class EWServer(ThreadingHTTPServer):
                  market_client=None, market_seed=None, today_clock=None,
                  profile_client=None, profile_cfg=None, grind_clock=None, events_clock=None,
                  deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
-                 ocr_runner=None, ocr_cache_dir=None):
+                 ocr_runner=None, ocr_cache_dir=None, leveling_clock=None):
         super().__init__(addr, Handler)
         self.started = _now_iso()
         self.commit = commit
@@ -113,6 +116,9 @@ class EWServer(ThreadingHTTPServer):
                 profile_client = progress.ProfileClient(family, base_url=cfg.get("base_url"))
         self.progress = progress.ProgressService(self.store, profile_client)
         self.grind = grind.GrindService(self.store, clock=grind_clock or time.time)
+        # XP stack counts armed grind buffs that carry an xp_pct (plan 011).
+        self.leveling = leveling.LevelingService(self.store, clock=leveling_clock or time.time,
+                                                 buffs=lambda: self.grind.view()["buffs"])
         self.events = events.EventsService(self.store, clock=events_clock or time.time)
         self.deadeye = deadeye.DeadeyeService(self.store, clock=deadeye_clock or time.time)
         if game_watch is None:
@@ -140,7 +146,7 @@ class EWServer(ThreadingHTTPServer):
                 "sources": {"market": self.market.source(), "today": self.today.source(),
                             "profile": self.progress.source(), "grind": self.grind.source(),
                             "events": self.events.source(), "deadeye": self.deadeye.source(),
-                            "game": self.game.source()},
+                            "game": self.game.source(), "leveling": self.leveling.source()},
                 "now": _now_iso()}
 
 
@@ -206,6 +212,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.deadeye.view())
         if path == "/api/game":
             return self._send(200, self.server.game.view())
+        if path == "/api/leveling":
+            return self._send(200, self.server.leveling.view())
         if path == "/events":
             return self._sse()
         if path == "/":
@@ -265,10 +273,19 @@ class Handler(BaseHTTPRequestHandler):
     def _post_ocr(self, body):
         return self.server.ocr.read(body)
 
+    def _post_leveling(self, body):
+        ops = {"sample": "sample", "sample_del": "sample_del", "hot_add": "hot_add",
+               "hot_del": "hot_del", "milestones": "set_milestones"}
+        if len(body) != 1 or not (set(ops) & set(body)):
+            raise ValueError("body must be one of "
+                             "{sample|sample_del|hot_add|hot_del|milestones: ...}")
+        (op, arg), = body.items()
+        return getattr(self.server.leveling, ops[op])(arg)
+
     POST_ROUTES = {"/api/market/watch": _post_market_watch, "/api/today": _post_today,
                    "/api/progress": _post_progress, "/api/grind": _post_grind,
                    "/api/events": _post_events, "/api/deadeye": _post_deadeye,
-                   "/api/ocr": _post_ocr}
+                   "/api/ocr": _post_ocr, "/api/leveling": _post_leveling}
 
     def do_POST(self):  # noqa: N802
         """Shared guard for every POST route: loopback Host + application/json +
@@ -339,20 +356,37 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        game = self.server.game
-        seq = game.seq
+        game, lev = self.server.game, self.server.leveling
+        seq, lseq = game.seq, lev.seq
+        interval = self.server.sse_interval
         try:
-            beat = True
+            msg = json.dumps({"type": "heartbeat", "now": _now_iso()})
+            self.wfile.write(f"data: {msg}\n\n".encode("utf-8"))
+            self.wfile.flush()
+            quiet = time.monotonic() + interval
             while True:
-                if beat:
+                # Named events (game, leveling) leave onmessage (heartbeat)
+                # consumers untouched. Leveling changes are picked up within one
+                # SSE_TICK_S slice of the game wait.
+                left = quiet - time.monotonic()
+                new = game.wait_change(seq, max(0.0, min(SSE_TICK_S, left)))
+                out = []
+                if new != seq:
+                    seq = new
+                    out.append(f"event: game\ndata: {json.dumps(game.view())}\n\n")
+                if lev.seq != lseq:
+                    lseq = lev.seq
+                    try:  # a bad buff source never ends the stream (refute r1 minor 3)
+                        out.append(f"event: leveling\ndata: {json.dumps(lev.view())}\n\n")
+                    except Exception:  # noqa: BLE001
+                        pass
+                if not out and time.monotonic() >= quiet:
                     msg = json.dumps({"type": "heartbeat", "now": _now_iso()})
-                    self.wfile.write(f"data: {msg}\n\n".encode("utf-8"))
-                else:  # named event: onmessage (heartbeat) consumers stay untouched
-                    body = json.dumps(game.view())
-                    self.wfile.write(f"event: game\ndata: {body}\n\n".encode("utf-8"))
-                self.wfile.flush()
-                new = game.wait_change(seq, self.server.sse_interval)
-                beat, seq = new == seq, new
+                    out.append(f"data: {msg}\n\n")
+                if out:
+                    self.wfile.write("".join(out).encode("utf-8"))
+                    self.wfile.flush()
+                    quiet = time.monotonic() + interval
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
             return
 
@@ -361,7 +395,7 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                 market_client=None, market_seed=None, today_clock=None,
                 profile_client=None, profile_cfg=None, grind_clock=None, events_clock=None,
                 deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
-                ocr_runner=None, ocr_cache_dir=None):
+                ocr_runner=None, ocr_cache_dir=None, leveling_clock=None):
     return EWServer(("127.0.0.1", port), store_root=store_root, commit=commit,
                     sse_interval=sse_interval, market_client=market_client,
                     market_seed=market_seed, today_clock=today_clock,
@@ -369,7 +403,7 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                     grind_clock=grind_clock, events_clock=events_clock,
                     deadeye_clock=deadeye_clock, game_watch=game_watch,
                     game_cfg=game_cfg, game_poll=game_poll, ocr_runner=ocr_runner,
-                    ocr_cache_dir=ocr_cache_dir)
+                    ocr_cache_dir=ocr_cache_dir, leveling_clock=leveling_clock)
 
 
 def main(argv=None, probe=None):

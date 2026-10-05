@@ -1,6 +1,6 @@
 /* EW dashboard shell: tabs from /api/state, server pill, reset clocks.
    Plan 001 renders placeholders; plans 002+ fill each tab (market.js, today.js,
-   progress.js, grind.js, events.js, deadeye.js; game.js on System). */
+   progress.js + leveling.js, grind.js, events.js, deadeye.js; game.js on System). */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -33,6 +33,7 @@
     if (id === 'market' && window.EWMarket) window.EWMarket.show();
     if (id === 'today' && window.EWToday) window.EWToday.show();
     if (id === 'progress' && window.EWProgress) window.EWProgress.show();
+    if (id === 'progress' && window.EWLeveling) window.EWLeveling.show();
     if (id === 'grind' && window.EWGrind) window.EWGrind.show();
     if (id === 'events' && window.EWEvents) window.EWEvents.show();
     if (id === 'deadeye' && window.EWDeadeye) window.EWDeadeye.show();
@@ -62,6 +63,7 @@
         p.lastChild.lastChild.id = 'weekly-reset';
       } else if (t.id === 'progress' && window.EWProgress) {
         window.EWProgress.mount(p);
+        if (window.EWLeveling) window.EWLeveling.mount(p);
       } else if (t.id === 'grind' && window.EWGrind) {
         window.EWGrind.mount(p);
       } else if (t.id === 'events' && window.EWEvents) {

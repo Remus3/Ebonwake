@@ -19,6 +19,7 @@ MAX_TRASH = 10 ** 6
 MAX_NAME = 60
 MAX_SPOTS = 100
 MAX_BUFFS = 50
+XP_PCT_RANGE = (0, 1000)  # optional buff XP bonus, counted by the leveling XP stack (plan 011)
 MAX_SESSIONS = 2000  # stored; GET shows the newest VIEW_SESSIONS
 VIEW_SESSIONS = 200
 ID_RE = re.compile(r"^[a-z0-9-]{1,40}$")
@@ -108,7 +109,7 @@ def _clean_session(it):
 class GrindService:
     """Store domain `grind`: {"spots": [{id, name}], "sessions": [{id, spot, started,
     minutes, silver, trash}] (oldest first), "active": {spot, started}|null,
-    "buffs": [{id, name, ends}], "next_sid": int, "updated": "<iso>"}."""
+    "buffs": [{id, name, ends, xp_pct?}], "next_sid": int, "updated": "<iso>"}."""
 
     def __init__(self, store, clock=time.time):
         self.store = store
@@ -141,7 +142,8 @@ class GrindService:
 
         spots = [{"id": s["id"], "name": s["name"]} for s in lst("spots", _clean_named)]
         buffs = [{"id": b["id"], "name": b["name"],
-                  "ends": _iso_or_none(b.get("ends"))}
+                  "ends": _iso_or_none(b.get("ends")),
+                  "xp_pct": b.get("xp_pct") if _ok_int(b.get("xp_pct"), *XP_PCT_RANGE) else None}
                  for b in lst("buffs", _clean_named)]
         sessions = lst("sessions", _clean_session)
         act = doc.get("active")
@@ -204,9 +206,10 @@ class GrindService:
             left = int((ends - now).total_seconds()) if ends is not None else 0
             if left > 0:
                 buffs.append({"id": b["id"], "name": b["name"], "ends": b["ends"],
-                              "left_s": left})
+                              "left_s": left, "xp_pct": b["xp_pct"]})
             else:  # unarmed or expired: listed so it can be re-armed in one tap
-                buffs.append({"id": b["id"], "name": b["name"], "ends": None, "left_s": None})
+                buffs.append({"id": b["id"], "name": b["name"], "ends": None, "left_s": None,
+                              "xp_pct": b["xp_pct"]})
         sessions = list(reversed(doc["sessions"][-VIEW_SESSIONS:]))
         return {"now": _iso(now), "active": active, "sessions": sessions, "spots": spots,
                 "buffs": buffs}
@@ -281,23 +284,29 @@ class GrindService:
         return self.view()
 
     def buff(self, arg):
-        """`{name, minutes}`: ends = now + minutes. Same name (case-insensitive)
-        re-arms in place; a new name is added."""
-        arg = _fields(arg, "buff", ("name", "minutes"))
+        """`{name, minutes, xp_pct?}`: ends = now + minutes. Same name
+        (case-insensitive) re-arms in place, keeping a stored xp_pct unless one
+        is given; a new name is added. xp_pct (0-1000, plan 011) is optional."""
+        has_xp = isinstance(arg, dict) and "xp_pct" in arg
+        arg = _fields(arg, "buff", ("name", "minutes", "xp_pct") if has_xp
+                      else ("name", "minutes"))
         name = _name(arg["name"])
         minutes = _int(arg["minutes"], "minutes", 1, MAX_BUFF_MINUTES)
+        xp = _int(arg["xp_pct"], "xp_pct", *XP_PCT_RANGE) if has_xp else None
         with self._lock:
             doc = self._load()
             ends = _iso(self._now() + _dt.timedelta(minutes=minutes))
             for b in doc["buffs"]:
                 if b["name"].lower() == name.lower():
                     b["ends"] = ends
+                    if has_xp:
+                        b["xp_pct"] = xp
                     break
             else:
                 if len(doc["buffs"]) >= MAX_BUFFS:
                     raise ValueError(f"at most {MAX_BUFFS} buffs")
                 bid = _unique(slug(name), {b["id"] for b in doc["buffs"]})
-                doc["buffs"].append({"id": bid, "name": name, "ends": ends})
+                doc["buffs"].append({"id": bid, "name": name, "ends": ends, "xp_pct": xp})
             self._save(doc)
         return self.view()
 
