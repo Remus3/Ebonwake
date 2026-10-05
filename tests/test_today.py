@@ -373,3 +373,15 @@ def test_state_reports_today_source(tsrv):
     assert doc["sources"]["today"]["status"] == "ok"
     assert doc["sources"]["today"]["updated"].endswith("+00:00")
     assert "market" in doc["sources"]
+
+
+@pytest.mark.parametrize("raw", ["{not json", "[1, 2]", '{"schema": 1, "data": [1]}'])
+def test_corrupt_store_file_degrades_and_is_kept(tmp_path, raw):
+    from server.ew.store import Store as _Store
+    root = tmp_path / "store"
+    root.mkdir()
+    (root / "today.json").write_text(raw, encoding="utf-8")
+    st = _Store(root)
+    assert st.get("today") == {}
+    kept = list(root.glob("today.json.corrupt-*"))
+    assert len(kept) == 1 and kept[0].read_text(encoding="utf-8") == raw

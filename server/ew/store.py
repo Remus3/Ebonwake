@@ -39,12 +39,24 @@ class Store:
 
     def get(self, domain, default=None):
         p = self._path(domain)
-        try:
-            with _LOCK:
+        empty = {} if default is None else default
+        with _LOCK:
+            try:
                 doc = json.loads(p.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return {} if default is None else default
-        return doc.get("data", {})
+            except FileNotFoundError:
+                return empty
+            except (ValueError, UnicodeDecodeError, OSError):
+                doc = None
+            data = doc.get("data") if isinstance(doc, dict) else None
+            if not isinstance(data, dict):
+                # Corrupt doc degrades to empty, never a 500. The bad bytes are
+                # kept beside it (renamed, never deleted) for a human to inspect.
+                try:
+                    p.replace(p.with_name(f"{p.name}.corrupt-{int(time.time())}"))
+                except OSError:
+                    pass
+                return empty
+            return data
 
     def put(self, domain, data):
         with _LOCK:
