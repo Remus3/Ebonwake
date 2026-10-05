@@ -309,3 +309,16 @@ html.ew-overlay, html.ew-overlay body { background: transparent; height: auto; o
 }
 .ew-game .ew-bbtn:disabled { opacity: .5; cursor: default; }
 .ew-card h2 .ew-pill { text-transform: none; letter-spacing: 0; font-weight: 400; }
+
+/* Home / Now tab (plan 025): glance cards; rows are name, note, value. */
+.ew-hrow { display: flex; align-items: center; gap: 6px; padding: 2px 4px; border-radius: var(--ew-radius); }
+.ew-hrow:hover { background: var(--fk-surface); }
+.ew-hrow .ew-mname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ew-hnote { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+.ew-hval { font: 12px var(--ew-mono); white-space: nowrap; }
+.ew-hrow.warn .ew-hval { color: var(--fk-status-warn); }
+.ew-hrow.ok .ew-hval { color: var(--fk-status-ok); }
+.ew-hrow.bad .ew-hval { color: var(--fk-status-bad); }
+.ew-htick { padding: 0 6px; font-size: 11px; }
+.ew-herr { margin-top: 6px; font-size: 12px; }
+.ew-hcard h2 .ew-tx:hover { color: var(--fk-text); }

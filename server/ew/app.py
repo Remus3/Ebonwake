@@ -49,6 +49,7 @@ SSE_TICK_S = 0.25  # SSE wakes this often to notice a leveling change (plan 011)
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 
 TABS = [
+    {"id": "home", "title": "Home", "plan": "025"},
     {"id": "today", "title": "Today", "plan": "003"},
     {"id": "market", "title": "Market", "plan": "002"},
     {"id": "progress", "title": "Progress", "plan": "004"},

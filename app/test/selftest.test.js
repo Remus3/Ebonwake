@@ -9,7 +9,7 @@ const os = require('os');
 const path = require('path');
 const selftest = require('../selftest');
 
-const TABS = ['today', 'market', 'progress', 'grind', 'events', 'deadeye', 'system'];
+const TABS = ['home', 'today', 'market', 'progress', 'grind', 'events', 'deadeye', 'system'];
 
 function fakeImage(empty) {
   return {
@@ -22,7 +22,7 @@ function fakes(log, opts) {
   let active = TABS[0];
   let visible = false;
   const dash = {
-    getContentSize: () => [1280, 800],
+    getContentSize: () => [1264, 761], // plan 025: the operator's dashboard size
     isVisible: () => visible,
     showInactive: () => { visible = true; log.push('showInactive'); },
     webContents: {
@@ -37,7 +37,7 @@ function fakes(log, opts) {
         }
         const m = /data-tab="([a-z]+)"/.exec(src);
         if (m && src.indexOf('.click()') >= 0) { active = m[1]; log.push('click:' + active); return null; }
-        return { scrollH: 700, clientH: 800, scrollW: 1200, clientW: 1280, active: active,
+        return { scrollH: 700, clientH: 761, scrollW: 1200, clientW: 1264, active: active,
           activeH: 500, tabs: TABS, pill: 'server ok' };
       },
       capturePage: async () => { log.push('capture:' + active); return fakeImage(false); }
@@ -73,7 +73,10 @@ async function runFake(opts) {
 test('every tab capture follows showInactive and a paint after its click', async () => {
   const { log, res } = await runFake();
   assert.ok(res.ok, JSON.stringify(res));
-  assert.strictEqual(res.tabs.length, 7);
+  assert.strictEqual(res.tabs.length, 8);
+  assert.strictEqual(res.tabs[0].id, 'home', 'Home paints first');
+  assert.deepStrictEqual(res.dashboardSize, [1264, 761]);
+  assert.ok(res.tabs.every((t) => t.fits), 'every tab fits 1264x761');
   assert.ok(log.indexOf('showInactive') >= 0);
   assert.ok(log.indexOf('throttle:false') >= 0);
   for (const id of TABS) {
@@ -88,7 +91,7 @@ test('every tab capture follows showInactive and a paint after its click', async
 
 test('a paint that never comes is reported, not hung on', async () => {
   const { res } = await runFake({ noPaint: true });
-  assert.strictEqual(res.tabs.length, 7);
+  assert.strictEqual(res.tabs.length, 8);
   assert.ok(res.tabs.every((t) => t.painted === false));
   assert.strictEqual(res.ok, false);
 });

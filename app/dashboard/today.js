@@ -5,13 +5,16 @@
    through the dashboard preload (window.ewApi) because the server refuses
    renderer POSTs. Ticks are optimistic and reverted on error. Done-state is
    re-derived locally from ticked_at, so a reset flips the lists without a
-   reload. Every node is built with DOM APIs - no HTML from data. */
+   reload. Plan 025 (M8): the Events card keeps existing `event` items but also
+   lists Events-tab items ending before the weekly reset (read-only, GET
+   /api/events), and the add form no longer offers `event` - events are added
+   once, on the Events tab. Every node is built with DOM APIs - no HTML from data. */
 (function () {
   'use strict';
   const C = window.EWCore;
   const POLL_MS = 60000;
   const S = { data: null, err: null, last: null, timer: null, ui: null, pending: {}, resetKey: null,
-    resetEls: [], presets: [] };
+    resetEls: [], presets: [], ev: null, evAt: 0, evEls: [] };
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -62,6 +65,10 @@
     clearTimeout(S.timer);
     S.timer = setTimeout(function () { poll(true); }, POLL_MS);
     getJSON('/api/today').then(accept, function (e) { S.err = e.message; }).then(draw);
+    // Events-tab items for the read-only Events card; a failure keeps the last list.
+    getJSON('/api/events').then(function (d) {
+      if (d && Array.isArray(d.items)) { S.ev = d.items; S.evAt = Date.now(); }
+    }, function () { /* the Events tab reports its own errors */ }).then(draw);
   }
 
   function msg(text) { if (S.ui) S.ui.form.msg.textContent = text; }
@@ -121,7 +128,7 @@
 
   function add() {
     const f = S.ui.form;
-    const r = C.parseTodayForm({ title: f.title.value, kind: f.kind.value, until: f.until.value,
+    const r = C.parseTodayForm({ title: f.title.value, kind: f.kind.value, until: '',
       reset_weekday: f.reset_weekday.value, reset_at: f.reset_at.value });
     if (!r.ok) { msg(r.error); return; }
     send(r.body, 'added').then(function (ok) { if (ok) f.title.value = ''; });
@@ -156,11 +163,22 @@
     ui.count.className = 'ew-pill ' + (S.data && group.total && group.done === group.total ? 'ok' : 'unknown');
     if (S.err) body.appendChild(el('div', 'ew-err', (S.data ? 'last data - ' : '') + S.err));
     if (!S.data) { if (!S.err) body.appendChild(el('div', 'ew-muted', 'loading...')); return; }
-    if (!group.items.length) {
-      body.appendChild(el('div', 'ew-muted', kind === 'event' ? 'No active events.' : 'Nothing here - add an item.'));
+    const week = kind === 'event' ? C.eventsThisWeek(S.ev, S.evAt, Date.now()) : [];
+    if (!group.items.length && !week.length) {
+      body.appendChild(el('div', 'ew-muted', kind === 'event'
+        ? 'No events end this week - add events on the Events tab.' : 'Nothing here - add an item.'));
       return;
     }
     const list = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
+    week.forEach(function (ev) {
+      const r = el('div', 'ew-trow');
+      r.title = 'from the Events tab (read-only here)';
+      r.appendChild(el('span', 'ew-mname', ev.title + (typeof ev.code === 'string' ? ' ' + ev.code : '')));
+      const left = el('span', 'ew-muted ew-tdays', C.fmtLeft(ev.left_s));
+      r.appendChild(left);
+      S.evEls.push({ el: left, id: ev.id });
+      list.appendChild(r);
+    });
     group.items.forEach(function (it) {
       let extra = null;
       if (kind === 'event') {
@@ -181,6 +199,7 @@
     const items = S.data ? S.data.items : [];
     S.resetKey = C.resetKey(items, now);
     S.resetEls = [];
+    S.evEls = [];
     drawPresets();
     const g = C.groupItems(items, now);
     drawList(ui.daily, g.daily, 'daily');
@@ -195,6 +214,9 @@
     ui.daily.clock.textContent = 'reset ' + C.fmtDuration(C.nextDailyReset(now) - now);
     ui.weekly.clock.textContent = 'reset ' + C.fmtDuration(C.nextWeeklyReset(now) - now);
     S.resetEls.forEach(function (r) { r.el.textContent = C.fmtResetCountdown(r.rule, now); });
+    const left = {};
+    C.eventsThisWeek(S.ev, S.evAt, now).forEach(function (ev) { left[ev.id] = ev.left_s; });
+    S.evEls.forEach(function (r) { r.el.textContent = r.id in left ? C.fmtLeft(left[r.id]) : 'ended'; });
   }
 
   // Preset select from GET /api/today reset_presets; rebuilt only on change.
@@ -219,7 +241,7 @@
     const p = f.preset.value ? S.presets[Number(f.preset.value)] : null;
     if (!p) return;
     const v = C.presetForm(p);
-    ['title', 'kind', 'until', 'reset_weekday', 'reset_at'].forEach(function (k) { f[k].value = v[k]; });
+    ['title', 'kind', 'reset_weekday', 'reset_at'].forEach(function (k) { f[k].value = v[k]; });
   }
 
   // Every second: countdowns; when a reset passes, re-derive done-state.
@@ -270,15 +292,12 @@
     title.autocomplete = 'off';
     field('title', 'title', title);
     const kind = el('select');
-    ['daily', 'weekly', 'event'].forEach(function (k) {
+    ['daily', 'weekly'].forEach(function (k) { // plan 025: events are added on the Events tab
       const o = el('option', null, k);
       o.value = k;
       kind.appendChild(o);
     });
     field('kind', 'kind', kind);
-    const until = el('input');
-    until.type = 'date';
-    field('until', 'until (event)', until);
     const wd = el('select');
     ['default', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach(function (d, n) {
       const o = el('option', null, d);

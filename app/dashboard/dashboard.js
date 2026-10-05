@@ -1,5 +1,5 @@
 /* EW dashboard shell: tabs from /api/state, server pill, reset clocks.
-   Plan 001 renders placeholders; plans 002+ fill each tab (market.js, today.js,
+   Plan 001 renders placeholders; plans 002+ fill each tab (home.js, market.js, today.js,
    progress.js + leveling.js, grind.js, events.js, deadeye.js; game.js on System).
    Plan 020: the pill re-checks /api/version every 30 s (and on SSE reconnect),
    flags a server older than the app, and the System tab shows data freshness. */
@@ -37,6 +37,7 @@
       p.classList.toggle('active', p.dataset.tab === id);
     });
     try { localStorage.setItem('ew.tab', id); } catch (e) { /* storage optional */ }
+    if (id === 'home' && window.EWHome) window.EWHome.show();
     if (id === 'market' && window.EWMarket) window.EWMarket.show();
     if (id === 'today' && window.EWToday) window.EWToday.show();
     if (id === 'progress' && window.EWProgress) window.EWProgress.show();
@@ -61,7 +62,9 @@
       nav.appendChild(b);
       const p = el('div', 'ew-panel');
       p.dataset.tab = t.id;
-      if (t.id === 'today' && window.EWToday) {
+      if (t.id === 'home' && window.EWHome) {
+        window.EWHome.mount(p);
+      } else if (t.id === 'today' && window.EWToday) {
         window.EWToday.mount(p);
       } else if (t.id === 'today') {
         p.appendChild(card('Daily reset', el('div', 'ew-num', '-')));
