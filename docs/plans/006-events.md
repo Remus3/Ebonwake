@@ -80,3 +80,41 @@ item: title + left. Fits 1280x800; lists scroll inside their card.
 
 pytest + node --test + leak sweep; verifier per merged plan, refute rounds
 capped at 3; one push.
+
+### Slice A deviations (adjudicated in-lane, 2026-10-04)
+
+- Write responses. Decision: every POST op returns the full GET body (as
+  `grind.py` does); `add` also carries `item`, `purge_expired` also carries
+  `purged` (the count). Alternatives: return the bare item / bare count. Why: the
+  dashboard re-renders from one shape after any op. Reverses if: slice B needs a
+  bare item.
+- Time window. Decision: "within 2 years of now" is read as |t - now| <= 730
+  days, applied to both `starts` and `ends`; past dates inside the window are
+  accepted (an item can be logged after it ended). Alternatives: ends must be in
+  the future; window on ends only. Why: back-filling is harmless, and an
+  unbounded `starts` would let starts <= ends be satisfied by nonsense. Reverses
+  if: the operator wants past `ends` refused.
+- Date/time grammar. Decision: `YYYY-MM-DD` or
+  `YYYY-MM-DDTHH:MM[:SS[.ffffff]]` plus `Z` or `+HH:MM`, regex-gated before
+  `fromisoformat` (which in 3.11 accepts many more shapes). Second fractions are
+  dropped on store. Alternatives: raw `fromisoformat`. Why: one grammar the JS
+  side can mirror. Reverses if: slice B must send another shape.
+- `left_s` clamps at 0 once expired (status says `expired`). Alternatives:
+  negative seconds. Why: a countdown never shows negative time. Reverses if:
+  slice B wants "expired N ago".
+- `kind` is fixed at add; `edit` refuses `kind` and `done` keys (done has its own
+  op). Changing kind = delete + re-add. Why: a kind change would re-trigger the
+  coupon-code rules mid-edit. Reverses if: the dashboard needs a kind switch.
+- `edit` with only `id` is a valid no-op; `code: null` on a coupon is refused
+  (code is required for coupons); any non-null `code` on event/drop is refused.
+- Empty or whitespace `rewards` is stored as null. Title/rewards refuse control
+  characters (as grind names do). URL must be ASCII, `https://` + a non-empty
+  host, no whitespace, <= 300 chars.
+- Order ties broken by id number; done items sorted like open items (ends asc,
+  no `ends` last). An item that is done and past its `ends` has status `done`
+  (done wins) but is still removed by `purge_expired`.
+- `soon` applies to `upcoming` items too (not done, not expired, left_s <= 48 h).
+- `/api/state` `sources.events` = `{updated, status: "ok", open, soonest}`
+  (`soonest` = earliest `ends` among open items, or null).
+- SOURCES = NA/EU news page, NA/EU notice board, Twitch drops campaigns; all
+  https.
