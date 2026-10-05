@@ -41,11 +41,21 @@ class Store:
         p = self._path(domain)
         empty = {} if default is None else default
         with _LOCK:
+            for attempt in range(5):
+                try:
+                    raw = p.read_bytes()
+                    break
+                except FileNotFoundError:
+                    return empty
+                except OSError:
+                    # A transient lock (antivirus, indexer) on a GOOD file must
+                    # never look like corruption: retry, then fail loudly.
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.02 * (attempt + 1))
             try:
-                doc = json.loads(p.read_text(encoding="utf-8"))
-            except FileNotFoundError:
-                return empty
-            except (ValueError, UnicodeDecodeError, OSError):
+                doc = json.loads(raw.decode("utf-8"))
+            except ValueError:  # includes UnicodeDecodeError
                 doc = None
             data = doc.get("data") if isinstance(doc, dict) else None
             if not isinstance(data, dict):
