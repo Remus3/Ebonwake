@@ -1,6 +1,6 @@
 # Plan 003 - Today tab
 
-Status: open. Lanes: `build` (slice A), `data` (slice B).
+Status: done (2026-10-04); refute rounds 2/3 PASS (corrupt store doc). Lanes: `build` (slice A), `data` (slice B).
 
 ## Goal
 
