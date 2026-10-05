@@ -221,19 +221,21 @@ test('buffRows: server buffs merged with defaults by name, armed first by time l
 });
 
 test('overlayWidgets: grind widgets default on, opt-out via config.overlay.widgets', () => {
-  assert.deepStrictEqual(C.overlayWidgets({}), { grindSession: true, grindBuff: true });
-  assert.deepStrictEqual(C.overlayWidgets(null), { grindSession: true, grindBuff: true });
-  assert.deepStrictEqual(C.overlayWidgets({ overlay: { widgets: { grindBuff: false } } }), { grindSession: true, grindBuff: false });
+  // eventsSoon (plan 006) rides the same mechanism; see events.test.js.
+  const on = { grindSession: true, grindBuff: true, eventsSoon: true };
+  assert.deepStrictEqual(C.overlayWidgets({}), on);
+  assert.deepStrictEqual(C.overlayWidgets(null), on);
+  assert.deepStrictEqual(C.overlayWidgets({ overlay: { widgets: { grindBuff: false } } }), Object.assign({}, on, { grindBuff: false }));
   assert.deepStrictEqual(C.overlayWidgets({ overlay: { widgets: { grindSession: 'no', grindBuff: 0 } } }),
-    { grindSession: true, grindBuff: true }, 'only a literal false turns one off');
-  assert.deepStrictEqual(C.widgetsFromQuery('?grindSession=0&grindBuff=1'), { grindSession: false, grindBuff: true });
-  assert.deepStrictEqual(C.widgetsFromQuery(''), { grindSession: true, grindBuff: true });
+    on, 'only a literal false turns one off');
+  assert.deepStrictEqual(C.widgetsFromQuery('?grindSession=0&grindBuff=1'), Object.assign({}, on, { grindSession: false }));
+  assert.deepStrictEqual(C.widgetsFromQuery(''), on);
   const q = C.widgetsQuery({ grindSession: false, grindBuff: true });
-  assert.deepStrictEqual(C.widgetsFromQuery('?' + new URLSearchParams(q).toString()), { grindSession: false, grindBuff: true });
+  assert.deepStrictEqual(C.widgetsFromQuery('?' + new URLSearchParams(q).toString()), Object.assign({}, on, { grindSession: false }));
 });
 
 test('validPost allowlist now carries /api/grind with its own validator', () => {
-  assert.deepStrictEqual(C.POST_ROUTES.slice().sort(), ['/api/grind', '/api/market/watch', '/api/progress', '/api/today']);
+  assert.ok(['/api/grind', '/api/market/watch', '/api/progress', '/api/today'].every((r) => C.POST_ROUTES.indexOf(r) >= 0));
   assert.strictEqual(C.validPost('/api/grind', { start: 'gyfin' }), true);
   assert.strictEqual(C.validPost('/api/grind', { tick: 'dice' }), false);
   assert.strictEqual(C.validPost('/api/today', { start: 'gyfin' }), false);

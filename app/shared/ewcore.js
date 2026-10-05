@@ -713,10 +713,187 @@
     return { ok: false, error: 'unknown action' };
   }
 
+  // ---- Events (plan 006) ----
+  // Coupons, events and Twitch drops; all operator input. Status / soon follow
+  // the server rule (events.py) so countdowns flip locally between polls.
+
+  const EVENT_KINDS = ['coupon', 'event', 'drop'];
+  const EVENTS_SOON_S = 172800;            // server: soon when left_s <= 48 h
+  const EVENT_ID_RE = /^e[0-9]{1,9}$/;
+  const COUPON_RE = /^[A-Za-z0-9-]{4,40}$/;
+  const REWARDS_MAX = 200;
+  const URL_MAX = 300;
+  const ISO_TS = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$/;
+  const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+  const LOCAL_TS = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/;
+
+  function realDate(y, mo, d) {
+    const t = new Date(Date.UTC(+y, +mo - 1, +d));
+    return t.getUTCFullYear() === +y && t.getUTCMonth() === +mo - 1 && t.getUTCDate() === +d;
+  }
+
+  // Server-accepted date (ISO with offset or Z, or YYYY-MM-DD) -> ms, else null.
+  // YYYY-MM-DD as `ends` means 23:59:59 UTC that day, as `starts` 00:00 UTC.
+  function eventDateMs(s, asEnd) {
+    if (typeof s !== 'string') return null;
+    let m = ISO_DAY.exec(s);
+    if (m) {
+      if (!realDate(m[1], m[2], m[3])) return null;
+      return Date.UTC(+m[1], +m[2] - 1, +m[3]) + (asEnd ? 86399000 : 0);
+    }
+    m = ISO_TS.exec(s);
+    if (!m || !realDate(m[1], m[2], m[3]) || +m[4] > 23 || +m[5] > 59 || +(m[6] || 0) > 59) return null;
+    const t = Date.parse(s);
+    return isFinite(t) ? t : null;
+  }
+
+  // Seconds left -> countdown text; null when there is no deadline.
+  function fmtLeft(s) {
+    if (!isNum(s)) return '-';
+    if (s <= 0) return 'ended';
+    return fmtDuration(s * 1000);
+  }
+
+  function liveLeft(it, fetchedMs, now) {
+    const end = eventDateMs(it.ends, true);
+    if (end !== null) return Math.floor((end - now) / 1000);
+    if (isNum(it.left_s)) return Math.floor(it.left_s - sinceFetch(fetchedMs, now));
+    return null;
+  }
+
+  // GET /api/events items -> display rows with live left_s / status / soon, in
+  // the server order: open by ends ascending (no ends last), then done, then
+  // expired newest ends first. Junk dropped; input not mutated.
+  function eventRows(items, fetchedMs, now) {
+    const list = Array.isArray(items) ? items : [];
+    const rows = [];
+    list.forEach(function (it, i) {
+      if (!plainObject(it) || typeof it.id !== 'string' || typeof it.title !== 'string') return;
+      const r = Object.assign({}, it);
+      r.left_s = liveLeft(it, fetchedMs, now);
+      const start = eventDateMs(it.starts, false);
+      if (it.done === true) r.status = 'done';
+      else if (r.left_s !== null && r.left_s <= 0) r.status = 'expired';
+      else if (start !== null && start > now) r.status = 'upcoming';
+      else r.status = 'active';
+      r.soon = r.status !== 'done' && r.status !== 'expired' && r.left_s !== null && r.left_s <= EVENTS_SOON_S;
+      r._i = i;
+      rows.push(r);
+    });
+    const rank = { active: 0, upcoming: 0, done: 1, expired: 2 };
+    rows.sort(function (a, b) {
+      const g = rank[a.status] - rank[b.status];
+      if (g) return g;
+      if (a.status === 'expired') return (b.left_s - a.left_s) || (a._i - b._i);
+      if (rank[a.status] === 0) {
+        if (a.left_s === null || b.left_s === null) {
+          if (a.left_s !== b.left_s) return a.left_s === null ? 1 : -1;
+        } else if (a.left_s !== b.left_s) return a.left_s - b.left_s;
+      }
+      return a._i - b._i;
+    });
+    rows.forEach(function (r) { delete r._i; });
+    return rows;
+  }
+
+  function soonestEvent(items, fetchedMs, now) {
+    const rows = eventRows(items, fetchedMs, now).filter(function (r) { return r.soon; });
+    return rows.length ? rows[0] : null;
+  }
+
+  // <input type="datetime-local"> value (local wall time) -> UTC ISO "...Z".
+  function localToUtcIso(v) {
+    const m = typeof v === 'string' ? LOCAL_TS.exec(v) : null;
+    if (!m || +m[4] > 23 || +m[5] > 59 || +(m[6] || 0) > 59) return null;
+    const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+    if (d.getFullYear() !== +m[1] || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[3]) return null;
+    return isFinite(d.getTime()) ? d.toISOString().slice(0, 19) + 'Z' : null;
+  }
+
+  function validCode(v) { return typeof v === 'string' && COUPON_RE.test(v); }
+  function validRewards(v) { return typeof v === 'string' && v.length <= REWARDS_MAX && !/[\u0000-\u0008\u000b-\u001f\u007f]/.test(v); }
+  function validUrl(v) {
+    return typeof v === 'string' && v.length <= URL_MAX && /^https:\/\/[^\s]+$/.test(v) && v.length > 8;
+  }
+
+  // Optional add/edit fields; null (clear) is only valid on edit.
+  const EVENT_FIELDS = {
+    code: validCode, rewards: validRewards, url: validUrl,
+    starts: function (v) { return eventDateMs(v, false) !== null; },
+    ends: function (v) { return eventDateMs(v, true) !== null; }
+  };
+
+  function eventFieldsOk(o, allowNull) {
+    for (const k of Object.keys(EVENT_FIELDS)) {
+      if (!(k in o)) continue;
+      if (o[k] === null && allowNull && k !== 'code') continue;
+      if (!EVENT_FIELDS[k](o[k])) return false;
+    }
+    if (typeof o.starts === 'string' && typeof o.ends === 'string' &&
+        eventDateMs(o.starts, false) > eventDateMs(o.ends, true)) return false;
+    return true;
+  }
+
+  // Exact shape check for POST /api/events bodies (main-process IPC guard).
+  // Ranges the client cannot know (ends within 2 years, duplicates, coupon-only
+  // code on edit) are the server's to refuse.
+  function validEventsBody(body) {
+    if (!plainObject(body)) return false;
+    const keys = Object.keys(body);
+    if (keys.length !== 1) return false;
+    const k = keys[0];
+    const v = body[k];
+    if (k === 'delete') return validRef(v, EVENT_ID_RE);
+    if (k === 'purge_expired') return v === true;
+    if (k === 'done') return exact(v, ['id', 'done']) && validRef(v.id, EVENT_ID_RE) && typeof v.done === 'boolean';
+    if (k === 'add') {
+      if (!plainObject(v) || !onlyKeys(v, ['kind', 'title', 'code', 'rewards', 'starts', 'ends', 'url'])) return false;
+      if (EVENT_KINDS.indexOf(v.kind) < 0 || !validTitle(v.title)) return false;
+      if ((v.kind === 'coupon') !== ('code' in v)) return false;
+      return eventFieldsOk(v, false);
+    }
+    if (k === 'edit') {
+      if (!plainObject(v) || !onlyKeys(v, ['id', 'title', 'code', 'rewards', 'starts', 'ends', 'url'])) return false;
+      if (!validRef(v.id, EVENT_ID_RE) || Object.keys(v).length < 2) return false;
+      if ('title' in v && !validTitle(v.title)) return false;
+      return eventFieldsOk(v, true);
+    }
+    return false;
+  }
+
+  // Add form strings -> POST body, or an error for the operator. form: {kind,
+  // code, title, rewards, ends (datetime-local, local time), url}; blanks omitted.
+  function parseEventForm(form) {
+    const f = form || {};
+    const s = function (k) { return typeof f[k] === 'string' ? f[k].trim() : ''; };
+    const kind = s('kind');
+    if (EVENT_KINDS.indexOf(kind) < 0) return { ok: false, error: 'pick a kind' };
+    const add = { kind: kind, title: s('title') };
+    if (!validTitle(add.title)) return { ok: false, error: 'title: 1-' + TITLE_MAX + ' plain characters' };
+    if (kind === 'coupon') {
+      if (!validCode(s('code'))) return { ok: false, error: 'code: 4-40 letters, digits or -' };
+      add.code = s('code').toUpperCase();
+    }
+    if (s('rewards')) {
+      if (!validRewards(s('rewards'))) return { ok: false, error: 'rewards: up to ' + REWARDS_MAX + ' characters' };
+      add.rewards = s('rewards');
+    }
+    if (s('ends')) {
+      const iso = localToUtcIso(s('ends'));
+      if (!iso) return { ok: false, error: 'ends: pick a valid date and time' };
+      add.ends = iso;
+    }
+    if (s('url')) {
+      if (!validUrl(s('url'))) return { ok: false, error: 'url must start with https:// (max ' + URL_MAX + ')' };
+      add.url = s('url');
+    }
+    return { ok: true, body: { add: add } };
+  }
+
   // Overlay widgets (spec section 3: each opt-in, default on). Main reads
   // config.overlay.widgets and hands the overlay a query string; only a literal
   // false turns a widget off.
-  const WIDGETS = ['grindSession', 'grindBuff'];
+  const WIDGETS = ['grindSession', 'grindBuff', 'eventsSoon'];
 
   function overlayWidgets(config) {
     const w = config && plainObject(config.overlay) && plainObject(config.overlay.widgets) ? config.overlay.widgets : {};
@@ -741,7 +918,7 @@
   // The only routes the dashboard bridge forwards, each with its body check.
   const POST_VALIDATORS = {
     '/api/market/watch': validWatchBody, '/api/today': validTodayBody, '/api/progress': validProgressBody,
-    '/api/grind': validGrindBody
+    '/api/grind': validGrindBody, '/api/events': validEventsBody
   };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
@@ -781,6 +958,14 @@
     spotName: spotName,
     validGrindBody: validGrindBody,
     parseGrindForm: parseGrindForm,
+    EVENT_KINDS: EVENT_KINDS,
+    EVENTS_SOON_S: EVENTS_SOON_S,
+    fmtLeft: fmtLeft,
+    eventRows: eventRows,
+    soonestEvent: soonestEvent,
+    localToUtcIso: localToUtcIso,
+    validEventsBody: validEventsBody,
+    parseEventForm: parseEventForm,
     overlayWidgets: overlayWidgets,
     widgetsQuery: widgetsQuery,
     widgetsFromQuery: widgetsFromQuery,
