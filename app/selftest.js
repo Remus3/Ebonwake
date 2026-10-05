@@ -3,7 +3,8 @@
    captures both windows to PNG (each dashboard capture only after
    showInactive() plus one completed paint, plan 010), checks overlay transparency and hotkey
    registration, and (plan 022) that the overlay sits inside its display's work
-   area and off the minimap. Never touches any other window or the game. */
+   area and off the minimap, and (plan 026) fires one synthetic toast + OS
+   notification. Never touches any other window or the game. */
 'use strict';
 
 const fs = require('fs');
@@ -30,6 +31,8 @@ const MEASURE = '(function(){var d=document.documentElement,b=document.body;' +
 // A double rAF resolves only after the renderer has produced a frame.
 const PAINT = 'new Promise(function(r){requestAnimationFrame(function(){' +
   'requestAnimationFrame(function(){r(true);});});})';
+
+const NOTIFY_SELFTEST = 'window.EWToast ? window.EWToast.selfTest() : null';
 
 // Chromium switches applied before app ready when EW_SELFTEST is set, so an
 // occluded (covered) dashboard still counts as visible and keeps painting.
@@ -86,6 +89,15 @@ async function run(o) {
       }
       m.captured = !img.isEmpty();
       fs.writeFileSync(path.join(outDir, 'ew-dash-' + id + '.png'), img.toPNG());
+    }
+    // Plan 026 merge check: one synthetic market alert -> one toast + one
+    // ew:notify call. Reported only (OS notification support varies by host).
+    const shownBefore = o.notifyShown ? o.notifyShown() : null;
+    const n = await o.dashboard.webContents.executeJavaScript(NOTIFY_SELFTEST);
+    res.notify = n && typeof n === 'object' ? { hits: n.hits, toasts: n.toasts, bridge: n.notify || null } : null;
+    if (res.notify) {
+      res.notify.osShown = shownBefore === null ? null : o.notifyShown() - shownBefore;
+      res.notify.ok = res.notify.hits === 1 && res.notify.toasts >= 1;
     }
     res.hotkeys = {};
     Object.keys(o.keys).forEach(function (k) {

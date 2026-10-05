@@ -20,6 +20,16 @@
     "opacity": 0.85,
     "widgets": {"grindSession": true, "grindBuff": true, "eventsSoon": true, "leveling": false, "season": false}
   },
+  "notify": {
+    "_doc": "Plan 026. Per-rule OS notifications (dashboard toasts follow the same switches). Defaults: marketAlert and buffEnding on, the rest off. silent: no notification sound (default true).",
+    "marketAlert": true,
+    "buffEnding": true,
+    "hotTime": false,
+    "resetPassed": false,
+    "newCoupon": false,
+    "gameExit": false,
+    "silent": true
+  },
   "ocr": {
     "_doc": "engine: auto (Tesseract if found, else Windows OCR) | tesseract | windows. tesseract: optional path to tesseract.exe when not on PATH or in the default install dir.",
     "engine": "auto",

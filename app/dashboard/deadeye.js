@@ -82,7 +82,7 @@
     if (S.busy) return Promise.resolve(false);
     S.busy = true;
     msg('saving...');
-    return b.post('/api/deadeye', body).then(function (res) {
+    return window.EWToast.via(b).post('/api/deadeye', body).then(function (res) {
       S.busy = false;
       if (res && res.ok) {
         if (accept(res.data)) draw();

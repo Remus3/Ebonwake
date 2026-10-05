@@ -74,7 +74,7 @@
       }
       draw();
     };
-    b.post('/api/today', { tick: id }).then(done, function (e) {
+    window.EWToast.via(b).post('/api/today', { tick: id }).then(done, function (e) {
       done({ ok: false, error: String(e && e.message || e) });
     });
   }

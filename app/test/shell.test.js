@@ -64,12 +64,55 @@ test('appCommit is read-only; restart is one allowlisted, sender-checked IPC', (
   const m = read('main.js');
   assert.match(pre, /appCommit: function \(\) \{ return APP_COMMIT; \}/);
   assert.match(pre, /ipcRenderer\.invoke\('ew:restart-server'\)/);
-  assert.strictEqual((pre.match(/ipcRenderer\.\w+\(/g) || []).length, 2, 'post + restart only');
+  assert.strictEqual((pre.match(/ipcRenderer\.\w+\(/g) || []).length, 3, 'post + restart + notify only');
   assert.match(m, /rev-parse', '--short', 'HEAD'/);
   assert.match(m, /windowsHide: true/);
-  assert.match(m, /additionalArguments: \['--ew-app-commit=' \+ APP_COMMIT\]/);
+  assert.match(m, /additionalArguments: \['--ew-app-commit=' \+ APP_COMMIT[,\]]/);
   const h = m.slice(m.indexOf("ipcMain.handle('ew:restart-server'"));
   assert.match(h, /event\.sender !== dashboard\.webContents/);
   assert.match(h, /await restartServer\(\)/);
   assert.match(read('dashboard/index.html'), /id="server-restart"[^>]*hidden/);
+});
+
+// ---- Plan 026 ----
+
+test('ew:notify is the one new allowlisted channel: sender-checked, validated, rate-limited', () => {
+  const pre = read('preload.js');
+  const m = read('main.js');
+  const channels = (pre.match(/ipcRenderer\.\w+\('([^']+)'/g) || []).map((s) => s.replace(/^.*'([^']+)'$/, '$1')).sort();
+  assert.deepStrictEqual(channels, ['ew:notify', 'ew:post', 'ew:restart-server']);
+  assert.match(pre, /notify: function \(n\) \{ return ipcRenderer\.invoke\('ew:notify', n\); \}/);
+  assert.match(pre, /notifyPrefs: function \(\) \{ return NOTIFY_ARG; \}/);
+  const mainChannels = (m.match(/ipcMain\.(handle|on)\('([^']+)'/g) || []).map((s) => s.replace(/^.*'([^']+)'$/, '$1')).sort();
+  assert.deepStrictEqual(mainChannels, ['ew:notify', 'ew:overlay-size', 'ew:post', 'ew:restart-server']);
+  const h = m.slice(m.indexOf("ipcMain.handle('ew:notify'"), m.indexOf("ipcMain.handle('ew:notify'") + 900);
+  assert.match(h, /event\.sender !== dashboard\.webContents/);
+  assert.match(h, /core\.validNotify\(n\)/);
+  assert.match(h, /notifyLimit\.allow\(Date\.now\(\)\)/);
+  assert.match(h, /new Notification\(\{ title: n\.title, body: n\.body, silent: NOTIFY_SILENT \}\)/);
+  assert.match(h, /on\('click', showDashboard\)/);
+  assert.doesNotMatch(h, /actions:/, 'no notification actions');
+  assert.match(m, /core\.rateLimiter\(core\.NOTIFY_RATE\.max, core\.NOTIFY_RATE\.windowMs\)/);
+  assert.match(m, /'--ew-notify=' \+ core\.notifyArg\(core\.notifyPrefs\(cfg\)\)/);
+  // The overlay preload stays one-way: no notify there.
+  assert.doesNotMatch(read('overlay/preload.js'), /ew:notify/);
+});
+
+test('dashboard: toast region, every POST through EWToast.via(...).post, toast.js loads before modules', () => {
+  const html = read('dashboard/index.html');
+  assert.match(html, /<div class="ew-toasts" id="toasts" role="status" aria-live="polite"><\/div>/);
+  assert.ok(html.indexOf('src="toast.js"') > html.indexOf('ewcore.js'));
+  assert.ok(html.indexOf('src="toast.js"') < html.indexOf('src="market.js"'));
+  const dir = path.join(APP, 'dashboard');
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.js') && x !== 'toast.js')) {
+    const src = read('dashboard/' + f);
+    const all = (src.match(/\.post\(/g) || []).length;
+    const via = (src.match(/window\.EWToast\.via\(\w+\)\.post\('\/api\//g) || []).length;
+    assert.strictEqual(via, all, f + ' posts around the toast');
+  }
+  const t = read('dashboard/toast.js');
+  assert.match(t, /C\.postToast\(route, res\)/);
+  assert.match(t, /C\.notifyRules\(/);
+  assert.match(t, /ledger\.take\(/);
+  assert.match(read('dashboard/today.js'), /S\.rowErr\[/);
 });

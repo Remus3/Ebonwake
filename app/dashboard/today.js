@@ -14,7 +14,7 @@
   const C = window.EWCore;
   const POLL_MS = 60000;
   const S = { data: null, err: null, last: null, timer: null, ui: null, pending: {}, resetKey: null,
-    resetEls: [], presets: [], ev: null, evAt: 0, evEls: [] };
+    resetEls: [], presets: [], ev: null, evAt: 0, evEls: [], rowErr: {} };
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -87,14 +87,17 @@
     const done = function (res) {
       delete S.pending[it.id];
       if (res && res.ok) {
+        delete S.rowErr[it.id];
         accept(res.data);
       } else {
         S.data = C.withTick(S.data, it.id, prev);
-        msg('tick failed: ' + ((res && res.error) || 'unknown error'));
+        // Plan 026 (M9): the failure shows on the row itself, not only in the form.
+        S.rowErr[it.id] = 'tick failed: ' + ((res && res.error) || 'unknown error');
+        msg(S.rowErr[it.id]);
       }
       draw();
     };
-    b.post('/api/today', body).then(done, function (e) {
+    window.EWToast.via(b).post('/api/today', body).then(done, function (e) {
       done({ ok: false, error: String(e && e.message || e) });
     });
   }
@@ -103,7 +106,7 @@
     const b = bridge();
     if (!b) { msg('saving needs the Ebonwake app window'); return Promise.resolve(false); }
     msg('saving...');
-    return b.post('/api/today', body).then(function (res) {
+    return window.EWToast.via(b).post('/api/today', body).then(function (res) {
       if (res && res.ok) {
         accept(res.data);
         msg(okText);
@@ -153,6 +156,7 @@
     x.title = 'remove (click twice)';
     x.addEventListener('click', function () { remove(it, x); });
     r.appendChild(x);
+    if (S.rowErr[it.id]) r.appendChild(el('div', 'ew-err ew-terr', S.rowErr[it.id]));
     return r;
   }
 
