@@ -1031,6 +1031,84 @@
     return { ok: true, body: { add_step: add } };
   }
 
+  // ---- Game state (plan 008) ----
+  // GET /api/game -> {state, since, log_file, last_event, screenshots, configured}.
+  // Display only: nothing here ever reaches the game.
+
+  const GAME_STATES = ['not_running', 'running', 'logged_in', 'disconnected', 'unconfigured'];
+  const GAME_LABELS = {
+    not_running: { cls: 'off', label: 'not running' },
+    running: { cls: 'warn', label: 'running' },
+    logged_in: { cls: 'ok', label: 'logged in' },
+    disconnected: { cls: 'bad', label: 'disconnected' },
+    unconfigured: { cls: 'unknown', label: 'unconfigured' },
+    offline: { cls: 'unknown', label: 'offline' }
+  };
+  const GAME_SHOTS_MAX = 50;
+  const GAME_EVENT_MAX = 200;
+  const GAME_CONFIG_HINT = 'set bdo.install_dir and bdo.documents_dir in config/local.json, then restart the server';
+
+  function gameStateLabel(state) {
+    if (typeof state === 'string' && Object.prototype.hasOwnProperty.call(GAME_LABELS, state)) {
+      return Object.assign({}, GAME_LABELS[state]);
+    }
+    return { cls: 'unknown', label: 'unknown' };
+  }
+
+  // Number below 1e12 = epoch seconds (Python time.time()), else millis; or ISO.
+  function gameTimeMs(v) {
+    let ms = null;
+    if (isNum(v)) ms = v < 1e12 ? v * 1000 : v;
+    else if (typeof v === 'string' && v) ms = Date.parse(v);
+    return isNum(ms) && ms > 0 ? Math.round(ms) : null;
+  }
+
+  function gameEventText(ev) {
+    let s = ev;
+    if (plainObject(ev)) s = typeof ev.Log === 'string' ? ev.Log : ev.log;
+    if (typeof s !== 'string') return null;
+    s = s.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim();
+    return s ? s.slice(0, GAME_EVENT_MAX) : null;
+  }
+
+  function gameShot(s) {
+    if (!plainObject(s) || typeof s.name !== 'string' || !s.name) return null;
+    return { name: s.name, size: isNum(s.size) && s.size >= 0 ? s.size : null, mtime: gameTimeMs(s.mtime) };
+  }
+
+  function normalizeGame(d) {
+    if (!plainObject(d)) return null;
+    let state = GAME_STATES.indexOf(d.state) >= 0 ? d.state : 'unknown';
+    const configured = typeof d.configured === 'boolean' ? d.configured : null;
+    if (configured === false) state = 'unconfigured';
+    const log = typeof d.log_file === 'string' && d.log_file ? d.log_file.split(/[\\/]/).pop() : '';
+    const shots = (Array.isArray(d.screenshots) ? d.screenshots : []).map(gameShot)
+      .filter(Boolean)
+      .sort(function (a, b) { return (b.mtime === null ? -1 : b.mtime) - (a.mtime === null ? -1 : a.mtime); })
+      .slice(0, GAME_SHOTS_MAX);
+    return {
+      state: state, since: gameTimeMs(d.since), log_file: log || null,
+      last_event: gameEventText(d.last_event), screenshots: shots, configured: configured
+    };
+  }
+
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+
+  // Local wall clock: HH:MM on the same local day as now, else MM-DD HH:MM.
+  function fmtClock(ms, now) {
+    if (!isNum(ms)) return '-';
+    const d = new Date(ms);
+    const n = new Date(isNum(now) ? now : ms);
+    const hm = pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+    const same = d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
+    return same ? hm : pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + hm;
+  }
+
+  function gameSinceText(sinceMs, now) {
+    if (!isNum(sinceMs)) return '-';
+    return fmtClock(sinceMs, now) + ' (' + fmtAge(Math.max(0, now - sinceMs) / 1000) + ' ago)';
+  }
+
   // Overlay widgets (spec section 3: each opt-in, default on). Main reads
   // config.overlay.widgets and hands the overlay a query string; only a literal
   // false turns a widget off.
@@ -1070,6 +1148,15 @@
 
   const api = {
     SERVER: SERVER,
+    GAME_STATES: GAME_STATES,
+    GAME_SHOTS_MAX: GAME_SHOTS_MAX,
+    GAME_CONFIG_HINT: GAME_CONFIG_HINT,
+    gameStateLabel: gameStateLabel,
+    gameTimeMs: gameTimeMs,
+    gameEventText: gameEventText,
+    normalizeGame: normalizeGame,
+    fmtClock: fmtClock,
+    gameSinceText: gameSinceText,
     lastDailyReset: lastDailyReset,
     lastWeeklyReset: lastWeeklyReset,
     isDone: isDone,

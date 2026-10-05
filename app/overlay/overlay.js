@@ -6,7 +6,10 @@
    soonest buff countdown run locally each second. Each widget is opt-in via
    the query main.js passes (config overlay.widgets, default on).
    Events (plan 006): eventsSoon shows the soonest "ending soon" item from
-   GET /api/events (title + time left), same cadence, countdown local. */
+   GET /api/events (title + time left), same cadence, countdown local.
+   Game (plan 008): header dot from GET /api/game (grey not running, amber
+   running, green logged in, red disconnected), same cadence plus a re-GET on
+   each SSE `game` event. Always shown; offline keeps the last state, muted. */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -24,6 +27,8 @@
   let events = null;
   let eventsAt = 0;
   let eventsStale = false;
+  let game = null;
+  let gameStale = false;
 
   function drawToday(now) {
     const t = document.getElementById('ov-today');
@@ -70,6 +75,14 @@
     v.className = eventsStale ? 'ew-stale' : '';
   }
 
+  function drawGame() {
+    const st = !game && gameStale ? C.gameStateLabel('offline') : C.gameStateLabel(game ? game.state : null);
+    const v = document.getElementById('ov-game');
+    document.getElementById('ov-game-dot').className = 'ew-dot ' + st.cls;
+    v.textContent = game || gameStale ? st.label : '-';
+    v.className = gameStale ? 'ew-stale' : '';
+  }
+
   function tick() {
     const now = Date.now();
     document.getElementById('ov-daily').textContent = C.fmtDuration(C.nextDailyReset(now) - now);
@@ -108,6 +121,17 @@
     }).then(function () { drawEvents(Date.now()); });
   }
 
+  function loadGame() {
+    getJSON('/api/game').then(function (d) {
+      const g = C.normalizeGame(d);
+      if (!g) throw new Error('bad body');
+      game = g;
+      gameStale = false;
+    }).catch(function () {
+      gameStale = true;
+    }).then(drawGame);
+  }
+
   function loadToday(force) {
     const now = Date.now();
     if (!force && !C.pollDue(lastToday, now, TODAY_MIN_MS)) return;
@@ -121,6 +145,7 @@
     }).then(function () { drawToday(Date.now()); });
     if (GRIND_ON) loadGrind();
     if (W.eventsSoon) loadEvents();
+    loadGame();
   }
 
   function connect() {
@@ -130,6 +155,7 @@
       document.getElementById('ov-server').textContent = 'ok';
       loadToday(false);
     };
+    src.addEventListener('game', function () { loadGame(); });
     src.onerror = function () {
       document.getElementById('ov-server').textContent = 'offline';
       todayStale = true;
@@ -138,6 +164,8 @@
       if (GRIND_ON) drawGrind(Date.now());
       eventsStale = true;
       if (W.eventsSoon) drawEvents(Date.now());
+      gameStale = true;
+      drawGame();
       src.close();
       setTimeout(connect, C.backoffMs(attempt++));
     };
