@@ -1,14 +1,15 @@
 EW NEXT SESSION
 ---------------
-SESSION: 4
+SESSION: 5
 
-Next action: nothing open for the loop. DD-20261005 merged; plan 018 merged
-(refute 0/3); no ROADMAP row open; nothing in adjudicate / merge-conflict.
-The LaneLoop stays armed: tomorrow's idle deep-dive adds plans by itself.
-"continue" = read progress/loop.json and loop_items/, adjudicate anything
-stuck, otherwise work the OPERATOR QA list below when the operator reports.
-Plan 018 matters at the 2026-10-08 maintenance (level cap 75): after it,
-check the Leveling card accepts level 71+.
+Next action: watch the loop build plans 019-057 (39 open ROADMAP rows,
+019-024 priority). Plan 019 (loop dependency gate: blocked state,
+merged_at, re-arm) must land first; until then dependent plans exit
+"blocked: needs 0NN" via progress/p<id>-build.json. Adjudicate anything in
+adjudicate / merge-conflict / gave-up; check no dependent item stuck in
+no-change after 019 merges (re-arm should catch it). Plan 018 matters at
+the 2026-10-08 maintenance (level cap 75): check the Leveling card accepts
+71+.
 
 Carried forward (not acted on yet):
 - Scorecard BEFORE/AFTER (MAIN order 0300 section 4): needs the OpenSSF
@@ -61,26 +62,37 @@ Carried forward (not acted on yet):
 - NOTE: SS's 2245 ANSWER to MAIN (v6) was misdelivered into EW's inbox; not
   acted on, reported to MAIN in EW's v6 ANSWER; marked seen in the loop watch.
 
-Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew (read back this
-session via tools/loop_task.py status: enabled, Ready, last_result 0, last
-run 10:30). State: ops/loop/control/loop_items/*.json, progress/loop.json
-(fire 25, idle, "deep-dive already done today"), lanes 0-2 FREE.
-Deep dive 2026-10-05 = docs/research/0002; proposed 019 (patch-notes
-watcher) dropped as a duplicate of 007 (refute 2/3).
+- NOTE: arsha.io v2 history / orderbook / queue / search / category
+  endpoints return 500 "blocked by Imperva" (research 0004, 2026-10-05);
+  plans 028/052 use fallbacks. Re-probe before any new market plan.
+- NOTE: BDO-REST-API host was unreachable 2026-10-05 (research 0004);
+  re-check if plan 004 profile card / 041 / 042 show errors.
+- NOTE: research 0003 dates (Olvia Class 3 enrol 2026-11-05, quests
+  2026-11-11) are BDFoundry-sourced, unverified vs the official notice;
+  NA world boss times after the 2026-11-01 DST change unconfirmed.
+- NOTE: deferred candidates (0003 C15/C18/C19, 0004 F18-F21/F25) listed in
+  ROADMAP under the 019-057 paragraph; revisit after 023/035/037.
 
-Acceptance: no loop item in adjudicate / merge-conflict; any new plan rows
-from the next deep-dive built by the loop with ci green.
+Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew, HALT removed
+after plan commit (read back: Ready, next run 13:15). State:
+ops/loop/control/loop_items/*.json, progress/loop.json, progress/p<id>-build.json.
+Research: docs/research/0003 (progression), 0004 (items/economy/APIs), 0005
+(UI/UX audit, screenshots in ops/runtime/ux/). Plans docs/plans/019-057.
+EW server restarted this session on 7e66457 (was 0044868); restart again
+after the loop merges server changes if /api/version lags HEAD (plan 020
+adds the guard).
 
-Do NOT redo: DD-20261005 + plan 018 (ed68a4b, merged 5c26d67), hand-off
-items He6bbd0 / Ha1f38b (merged by loop), plus everything in the previous
-list: LaneLoop arm, CLAUDE.md loop rules (ec4eba7), kit v8 (4e327cc,
-593a2e0), Nfa7953 (f5d51af, 0b6867a), plans 012-016, loop ci-parity gates.
+Acceptance: plans 019-057 merged by the loop with ci green, nothing in
+adjudicate / merge-conflict / gave-up.
 
-In flight: none (lanes 0-2 FREE).
+Do NOT redo: research 0003-0005 (5b83ba5), plans 019-057 + ROADMAP rows
+(b0b782a; refute 3/3, adjudicated A), DD-20261005 + plan 018 (5c26d67),
+LaneLoop arm, kit v8, plans 012-018.
 
-Status: main 5c26d67 = origin/main, nothing new committed this session
-before this hand-off. ci + codeql success on 5c26d67. Gates this /done:
-pytest exit 0, node 180 pass / 0 fail, leak sweep ARMED (19). Session
-jsonl 0.5 MB.
+In flight: none in session; the loop picks up 019-024 from the next tick.
+
+Status: main b0b782a = origin/main; ci 37354232137 success, codeql success.
+Gates this /done: pytest exit 0, node 180 pass / 0 fail, leak sweep ARMED
+(19). Session jsonl < 2 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
