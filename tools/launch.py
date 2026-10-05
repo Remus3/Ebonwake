@@ -8,6 +8,7 @@ running dashboard. No console windows (CREATE_NO_WINDOW / DETACHED_PROCESS).
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -53,8 +54,10 @@ def main(argv: list[str]) -> int:
             time.sleep(0.25)
     if "--server-only" in argv:
         return 0 if healthy() else 1
+    # The tray's "Restart server" re-runs this file with the same pythonw.
+    env = dict(os.environ, EW_PYTHONW=pythonw())
     subprocess.Popen([str(electron_exe()), "."], cwd=str(ROOT / "app"), creationflags=FLAGS,
-                     close_fds=True)
+                     close_fds=True, env=env)
     return 0
 
 

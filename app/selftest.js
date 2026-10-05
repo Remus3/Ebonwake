@@ -1,6 +1,7 @@
 /* EW desktop self-test (EW_SELFTEST=<out.json>). Drives only EW's own windows:
    clicks each dashboard tab via executeJavaScript, measures page overflow,
-   captures both windows to PNG, checks overlay transparency and hotkey
+   captures both windows to PNG (each dashboard capture only after
+   showInactive() plus one completed paint, plan 010), checks overlay transparency and hotkey
    registration. Never touches any other window or the game. */
 'use strict';
 
@@ -24,32 +25,61 @@ const MEASURE = '(function(){var d=document.documentElement,b=document.body;' +
   'tabs:Array.prototype.map.call(document.querySelectorAll(".ew-tab"),function(t){return t.dataset.tab;}),' +
   'pill:(document.getElementById("server-pill")||{}).textContent};})()';
 
+// A double rAF resolves only after the renderer has produced a frame.
+const PAINT = 'new Promise(function(r){requestAnimationFrame(function(){' +
+  'requestAnimationFrame(function(){r(true);});});})';
+
+// Chromium switches applied before app ready when EW_SELFTEST is set, so an
+// occluded (covered) dashboard still counts as visible and keeps painting.
+function switches() {
+  return [
+    ['disable-backgrounding-occluded-windows'],
+    ['disable-renderer-backgrounding'],
+    ['disable-features', 'CalculateNativeWinOcclusion']
+  ];
+}
+
+// Plan 010 item 4: wait for one completed paint, bounded so a renderer that
+// never paints is reported (painted: false) rather than hanging the run.
+function painted(win, ms) {
+  return Promise.race([
+    win.webContents.executeJavaScript(PAINT).then(function () { return true; },
+      function () { return false; }),
+    new Promise(function (r) { setTimeout(function () { r(false); }, ms); })
+  ]);
+}
+
 async function run(o) {
   const outDir = path.dirname(o.out);
+  const pause = o.wait || wait;
+  const paintMs = o.paintTimeoutMs || 3000;
   const res = { started: new Date().toISOString(), tabs: [], ok: false };
   try {
     await loaded(o.dashboard);
     await loaded(o.overlay);
-    await wait(2500); // let /api/state arrive
+    // Shown without stealing focus; occluded frames still render with
+    // throttling off (plus switches() at startup).
+    o.dashboard.webContents.setBackgroundThrottling(false);
+    o.dashboard.showInactive();
+    await pause(2500); // let /api/state arrive
     const first = await o.dashboard.webContents.executeJavaScript(MEASURE);
     res.dashboardSize = o.dashboard.getContentSize();
     res.pill = first.pill;
     for (const id of first.tabs) {
       await o.dashboard.webContents.executeJavaScript(
         'document.querySelector(\'.ew-tab[data-tab="' + id + '"]\').click()');
-      await wait(250);
-      // An occluded window may not paint (no rAF): force a repaint, never wait
-      // on rAF. `captured` reports whether a frame came back.
+      await pause(250);
       o.dashboard.webContents.invalidate();
-      await wait(150);
+      const didPaint = await painted(o.dashboard, paintMs);
       const m = await o.dashboard.webContents.executeJavaScript(MEASURE);
       m.id = id;
+      m.painted = didPaint;
       m.fits = m.scrollH <= m.clientH && m.scrollW <= m.clientW;
       m.switched = m.active === id && m.activeH > 0;
       res.tabs.push(m);
       let img = await o.dashboard.webContents.capturePage();
       for (let i = 0; i < 5 && img.isEmpty(); i++) {
-        await wait(300);
+        await pause(300);
         img = await o.dashboard.webContents.capturePage();
       }
       m.captured = !img.isEmpty();
@@ -61,7 +91,7 @@ async function run(o) {
     });
     const before = o.overlay.isVisible();
     o.toggleOverlay();
-    await wait(500);
+    await pause(500);
     const after = o.overlay.isVisible();
     const img = await o.overlay.webContents.capturePage();
     fs.writeFileSync(path.join(outDir, 'ew-overlay.png'), img.toPNG());
@@ -76,7 +106,7 @@ async function run(o) {
       hwnd: o.overlay.getNativeWindowHandle().readBigUInt64LE(0).toString(),
       bounds: o.overlay.getBounds()
     };
-    res.ok = res.tabs.every(function (t) { return t.fits && t.switched; }) &&
+    res.ok = res.tabs.every(function (t) { return t.fits && t.switched && t.painted && t.captured; }) &&
       Object.keys(res.hotkeys).every(function (k) { return res.hotkeys[k].registered; }) &&
       res.overlay.toggled && res.overlay.cornerAlpha === 0 && !res.overlay.focusable;
   } catch (e) {
@@ -86,4 +116,4 @@ async function run(o) {
   if (!process.env.EW_SELFTEST_STAY) o.app.quit();
 }
 
-module.exports = { run: run };
+module.exports = { run: run, switches: switches };

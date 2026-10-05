@@ -3,12 +3,14 @@
    hooks, injects into or sends input to the game. Hotkeys use globalShortcut only. */
 'use strict';
 
-const { app, BrowserWindow, globalShortcut, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, screen } = require('electron');
 const selftest = require('./selftest');
+const childProcess = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const core = require('./shared/ewcore');
+const tray = require('./shared/tray');
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -104,8 +106,72 @@ function toggleOverlay() {
 
 function showDashboard() {
   if (!dashboard) createDashboard();
+  if (dashboard.isMinimized()) dashboard.restore();
   dashboard.show();
   dashboard.focus();
+}
+
+// GET a local EW server route: resolves { status, server, doc } or null.
+function getLocal(route) {
+  const base = new URL(core.SERVER);
+  return new Promise(function (resolve) {
+    const req = http.get({ hostname: base.hostname, port: base.port, path: route, timeout: 1500 },
+      function (res) {
+        const chunks = [];
+        let size = 0;
+        res.on('data', function (c) { size += c.length; if (size <= 65536) chunks.push(c); });
+        res.on('end', function () {
+          let doc = null;
+          try { doc = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch (e) { /* non-JSON */ }
+          resolve({ status: res.statusCode, server: res.headers.server, doc: doc });
+        });
+      });
+    req.on('timeout', function () { req.destroy(new Error('timeout')); });
+    req.on('error', function () { resolve(null); });
+  });
+}
+
+// Tray "Restart server" (plan 010): stop only the EW server that answers
+// /api/version with the EW contract, wait for the port to free, then start it
+// the way tools/launch.py does (--server-only). Nothing else is contacted.
+let restarting = false;
+async function restartServer() {
+  if (restarting) return;
+  restarting = true;
+  try {
+    const v = await getLocal('/api/version');
+    const pid = v ? tray.killablePid(v.doc, v.server, process.pid) : null;
+    if (pid) {
+      try { process.kill(pid); } catch (e) { /* already gone */ }
+      for (let i = 0; i < 40 && await getLocal('/api/health'); i++) {
+        await new Promise(function (r) { setTimeout(r, 250); });
+      }
+    }
+    const c = tray.serverStartCommand(process.env, REPO);
+    const child = childProcess.spawn(c.cmd, c.args,
+      { cwd: c.cwd, detached: true, stdio: 'ignore', windowsHide: true });
+    child.on('error', function () { /* pythonw missing: the pill shows offline */ });
+    child.unref();
+  } finally {
+    restarting = false;
+  }
+}
+
+let trayIcon = null;
+function createTray() {
+  const img = nativeImage.createFromBitmap(tray.iconBitmap(16), { width: 16, height: 16, scaleFactor: 1 });
+  img.addRepresentation({ buffer: tray.iconBitmap(32), width: 32, height: 32, scaleFactor: 2 });
+  trayIcon = new Tray(img);
+  trayIcon.setToolTip('Ebonwake');
+  trayIcon.setContextMenu(Menu.buildFromTemplate(tray.menuTemplate({
+    showDashboard: showDashboard, toggleOverlay: toggleOverlay,
+    restartServer: restartServer, quit: function () { app.quit(); }
+  })));
+  trayIcon.on('click', showDashboard);
+}
+
+if (process.env.EW_SELFTEST) {
+  selftest.switches().forEach(function (s) { app.commandLine.appendSwitch.apply(app.commandLine, s); });
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -116,6 +182,7 @@ if (!app.requestSingleInstanceLock()) {
     const keys = core.hotkeys(readConfig());
     createDashboard();
     createOverlay();
+    createTray();
     globalShortcut.register(keys.toggleOverlay, toggleOverlay);
     globalShortcut.register(keys.showDashboard, showDashboard);
     if (process.env.EW_SELFTEST) {
@@ -126,6 +193,9 @@ if (!app.requestSingleInstanceLock()) {
       });
     }
   });
-  app.on('will-quit', function () { globalShortcut.unregisterAll(); });
+  app.on('will-quit', function () {
+    globalShortcut.unregisterAll();
+    if (trayIcon) trayIcon.destroy();
+  });
   app.on('window-all-closed', function () { /* overlay keeps the app alive */ });
 }

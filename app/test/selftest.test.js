@@ -1,0 +1,99 @@
+'use strict';
+// Plan 010 item 4: the self-test captures each dashboard tab only after
+// showInactive() plus one completed paint (a rAF round trip), so unattended
+// captures of an occluded dashboard are real. Driven with fake EW windows.
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const selftest = require('../selftest');
+
+const TABS = ['today', 'market', 'progress', 'grind', 'events', 'deadeye', 'system'];
+
+function fakeImage(empty) {
+  return {
+    isEmpty: () => empty, toPNG: () => Buffer.from('png'),
+    toBitmap: () => Buffer.alloc(4 * 4 * 4), getSize: () => ({ width: 4, height: 4 })
+  };
+}
+
+function fakes(log, opts) {
+  let active = TABS[0];
+  let visible = false;
+  const dash = {
+    getContentSize: () => [1280, 800],
+    isVisible: () => visible,
+    showInactive: () => { visible = true; log.push('showInactive'); },
+    webContents: {
+      isLoading: () => false,
+      invalidate: () => log.push('invalidate'),
+      setBackgroundThrottling: (v) => log.push('throttle:' + v),
+      executeJavaScript: async (src) => {
+        if (src.indexOf('requestAnimationFrame') >= 0) {
+          if (opts.noPaint) return new Promise(() => {}); // never paints
+          log.push('painted');
+          return true;
+        }
+        const m = /data-tab="([a-z]+)"/.exec(src);
+        if (m && src.indexOf('.click()') >= 0) { active = m[1]; log.push('click:' + active); return null; }
+        return { scrollH: 700, clientH: 800, scrollW: 1200, clientW: 1280, active: active,
+          activeH: 500, tabs: TABS, pill: 'server ok' };
+      },
+      capturePage: async () => { log.push('capture:' + active); return fakeImage(false); }
+    }
+  };
+  let ovVisible = false;
+  const ov = {
+    isVisible: () => ovVisible, isFocusable: () => false, isAlwaysOnTop: () => true,
+    getNativeWindowHandle: () => Buffer.alloc(8), getBounds: () => ({}),
+    webContents: { isLoading: () => false, capturePage: async () => fakeImage(false) }
+  };
+  return { dash, ov, toggle: () => { ovVisible = !ovVisible; } };
+}
+
+async function runFake(opts) {
+  const log = [];
+  const f = fakes(log, opts || {});
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ewst-'));
+  const out = path.join(dir, 'out.json');
+  process.env.EW_SELFTEST_STAY = '1';
+  await selftest.run({
+    app: { quit() {} }, dashboard: f.dash, overlay: f.ov, keys: { a: 'F9' },
+    globalShortcut: { isRegistered: () => true }, toggleOverlay: f.toggle, out: out,
+    wait: () => Promise.resolve(), paintTimeoutMs: 20
+  });
+  delete process.env.EW_SELFTEST_STAY;
+  return { log, res: JSON.parse(fs.readFileSync(out, 'utf8')) };
+}
+
+test('every tab capture follows showInactive and a paint after its click', async () => {
+  const { log, res } = await runFake();
+  assert.ok(res.ok, JSON.stringify(res));
+  assert.strictEqual(res.tabs.length, 7);
+  assert.ok(log.indexOf('showInactive') >= 0);
+  assert.ok(log.indexOf('throttle:false') >= 0);
+  for (const id of TABS) {
+    const c = log.indexOf('capture:' + id);
+    const k = log.indexOf('click:' + id);
+    assert.ok(c > k && k >= 0, id);
+    assert.ok(log.indexOf('showInactive') < c, id);
+    assert.ok(log.slice(k, c).indexOf('painted') >= 0, 'paint between click and capture: ' + id);
+  }
+  assert.ok(res.tabs.every((t) => t.painted && t.captured));
+});
+
+test('a paint that never comes is reported, not hung on', async () => {
+  const { res } = await runFake({ noPaint: true });
+  assert.strictEqual(res.tabs.length, 7);
+  assert.ok(res.tabs.every((t) => t.painted === false));
+  assert.strictEqual(res.ok, false);
+});
+
+test('selftest switches keep Chromium from treating an occluded window as hidden', () => {
+  const sw = selftest.switches();
+  assert.ok(sw.some((s) => s[0] === 'disable-backgrounding-occluded-windows'));
+  assert.ok(sw.some((s) => s[0] === 'disable-features' && /CalculateNativeWinOcclusion/.test(s[1])));
+  const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(m, /selftest\.switches\(\)/);
+});
