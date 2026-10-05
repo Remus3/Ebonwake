@@ -59,6 +59,10 @@ def freshness(res):
     return {k: res[k] for k in ("fetched_at", "age_s", "ttl_s", "stale", "error")}
 
 
+def _daemon(fn):
+    threading.Thread(target=fn, name="ew-refresh", daemon=True).start()
+
+
 class CachedClient:
     def __init__(self, fetch=None, clock=time.time, cache_dir=None):
         if cache_dir is None:
@@ -69,6 +73,7 @@ class CachedClient:
         self._lock = threading.Lock()      # guards _keylocks
         self._bo_lock = threading.Lock()   # guards backoff.json read-modify-write
         self._keylocks = {}
+        self._inflight = set()             # keys with a background refresh running
 
     def _keylock(self, key):
         with self._lock:
@@ -129,7 +134,8 @@ class CachedClient:
                 data = download()
             except Pending as e:
                 err = str(e)
-                self._set_backoff(key, {"n": n, "until": now + PENDING_RETRY_S, "error": err})
+                self._set_backoff(key, {"n": n, "until": now + PENDING_RETRY_S, "error": err,
+                                        "pending": True})
                 return self._result(cached, now, ttl, True, err)
             except UpstreamError as e:
                 wait = min(BACKOFF_BASE_S * 2 ** n, BACKOFF_MAX_S)
@@ -141,6 +147,46 @@ class CachedClient:
             if bo:
                 self._set_backoff(key, None)
             return self._result(entry, now, ttl, False, None)
+
+    def refreshing(self, key):
+        with self._lock:
+            return key in self._inflight
+
+    def refresh_async(self, key, ttl, download, spawn=None):
+        """Start `cached_get` off the caller's thread unless one is already in
+        flight for `key` or the cache is fresh. Returns True when one started.
+        `spawn(fn)` is injectable (tests); default is a daemon thread."""
+        cached = self._cached(key)
+        if cached and self.clock() - cached["fetched_at"] < ttl:
+            return False
+        with self._lock:
+            if key in self._inflight:
+                return False
+            self._inflight.add(key)
+
+        def run():
+            try:
+                self.cached_get(key, ttl, download)
+            except Exception:  # noqa: BLE001 - a refresh failure never kills the server
+                pass
+            finally:
+                with self._lock:
+                    self._inflight.discard(key)
+
+        try:
+            (spawn or _daemon)(run)
+        except Exception:
+            with self._lock:
+                self._inflight.discard(key)
+            raise
+        return True
+
+    def pending(self, key):
+        """True while a refresh is running or upstream said "being fetched"."""
+        if self.refreshing(key):
+            return True
+        bo = self.key_backoff(key)
+        return bool(bo.get("pending")) and self.clock() < bo.get("until", 0)
 
     def peek(self, key, ttl):
         """Cache/backoff view without fetching, or None when nothing is known."""

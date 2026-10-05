@@ -378,8 +378,8 @@
   // the client so an optimistic toggle updates the bar before the server answers.
 
   const TRACK_KINDS = ['quest', 'season', 'gear'];
-  const ID = /^[a-z0-9_-]{1,40}$/;
-  const STEPS_MAX = 200;
+  const ID = /^[a-z0-9-]{1,40}$/;   // server ID_RE
+  const STEPS_MAX = 60;              // server MAX_STEPS
   const LEVEL = [1, 70];
   const STAT = [0, 999];
 
@@ -388,7 +388,7 @@
     return (ap + aap) / 2 + dp;
   }
 
-  // Whole percent, rounded but capped at 99 so an unfinished track never reads 100.
+  // Whole percent, floored like the server's pct(), so 100 only when every step is done.
   function trackPct(track) {
     let done = 0;
     let total = 0;
@@ -398,7 +398,7 @@
       total += 1;
       if (s.done_at) done += 1;
     });
-    const pct = total ? (done === total ? 100 : Math.min(99, Math.round(100 * done / total))) : 0;
+    const pct = total ? Math.floor(100 * done / total) : 0;
     return { done: done, total: total, pct: pct };
   }
 
@@ -488,13 +488,18 @@
     return { ok: true, body: { add_track: { title: title, kind: f.kind, steps: steps } } };
   }
 
-  // /api/progress `profile`: null or status "none" = no family configured.
+  // /api/progress `profile`: null or status "none" = no family configured;
+  // "pending" = upstream is fetching and nothing is cached yet (not an error).
   function profilePill(profile) {
     if (!plainObject(profile) || profile.status === 'none') {
-      return { cls: 'unknown', label: 'no profile', stale: true, error: null, none: true };
+      return { cls: 'unknown', label: 'no profile', stale: true, error: null, none: true, pending: false };
+    }
+    if (profile.status === 'pending' && !plainObject(profile.data)) {
+      return { cls: 'unknown', label: 'profile fetching', stale: true, error: null, none: false, pending: true };
     }
     const p = sourcePill(profile.freshness, 'profile', 3600);
     p.none = false;
+    p.pending = false;
     return p;
   }
 
@@ -502,22 +507,22 @@
     return (typeof v === 'string' && v.trim() && v.length <= TITLE_MAX) || isNum(v) ? String(v) : null;
   }
 
-  // BDO-REST-API adventurer profile -> [label, value] rows from known keys only.
+  // Served profile {family, region, guild: str|null, characters: [{name, cls,
+  // level, main}]} -> [label, value] rows from known keys only.
   function profileRows(data) {
     if (!plainObject(data)) return [];
     const rows = [];
     const push = function (label, v) { const t = plainText(v); if (t !== null) rows.push([label, t]); };
-    push('Family', data.familyName);
+    push('Family', data.family);
     push('Region', data.region);
-    if (plainObject(data.guild)) push('Guild', data.guild.name);
+    push('Guild', data.guild);
     const chars = Array.isArray(data.characters) ? data.characters.filter(plainObject) : [];
     const main = chars.filter(function (c) { return c.main; })[0] || chars[0];
     if (main && plainText(main.name)) {
-      const bits = [plainText(main.class), plainText(main.level)].filter(Boolean).join(' ');
+      const bits = [plainText(main.cls), plainText(main.level)].filter(Boolean).join(' ');
       push('Main', main.name + (bits ? ' - ' + bits : ''));
     }
     if (chars.length) push('Characters', chars.length);
-    push('Contribution', data.contributionPoints);
     return rows;
   }
 

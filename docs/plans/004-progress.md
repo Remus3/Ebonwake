@@ -47,7 +47,9 @@ cache/backoff/none, POST guards).
   dp} (each int|null)}, tracks: [{id, title, kind, steps: [{id, title, done,
   done_at|null}], done, total, pct}], profile: {data, freshness, status}}`.
   `profile.data` = `{family, region, guild|null, characters: [{name, cls|null,
-  level|null, main}]}`; `status` = ok|stale|error|none; unconfigured ->
+  level|null, main}]}`; `status` = ok|stale|error|pending|none (`pending` = no
+  cache yet and a refresh is running or upstream answered "being fetched";
+  rendered muted, not as an error); unconfigured ->
   `{data: null, freshness: null, status: "none"}`.
 - POST bodies: `{"character": {name?, cls?, level?, gs?: {ap?, aap?, dp?}}}`
   (partial merge, `name: ""` clears), `{"step": {track, step, done}}`,
@@ -81,6 +83,12 @@ reverses if):
    leak floor. Reverses if: never.
 6. `/api/state` `sources.profile` reads cache + backoff only (`peek`), never
    fetches; `none` = unconfigured or nothing fetched yet.
+7. (verifier fix) No request ever waits on upstream: POST answers read the
+   profile from cache only (`peek`); GET reads `peek` and starts a background
+   refresh (daemon thread, at most one in flight per key) when the cache is
+   stale or empty. Alt: fetch inline with a shorter timeout. Why: the IPC
+   bridge times out at 10 s, the same as the upstream timeout, so an inline
+   fetch made a committed save look failed. Reverses if: never.
 
 ## Slice B - dashboard (lane `data`)
 
@@ -95,11 +103,12 @@ click toggles), Add track. Fits 1280x800.
 Acceptance: node tests green; self-test 7/7 fit.
 
 Slice B notes (contract reading, no adjudication needed):
-- `trackPct` recomputes from `steps[].done_at` (optimistic toggles); pct is
-  rounded but capped at 99 until every step is done. The client shows its own
-  pct, not the server's.
-- Bridge guard ids (`track`, `step`, `remove_track`): `^[a-z0-9_-]{1,40}$`;
-  `add_track.steps` 0-200 titles (UI requires >= 1). Character POST sends
+- `trackPct` recomputes from `steps[].done_at` (optimistic toggles); pct =
+  floor(100 * done / total), 0 when total is 0 - identical to the server's
+  `pct` (verifier fix). The client shows its own pct, not the server's.
+- Bridge guard ids (`track`, `step`, `remove_track`): `^[a-z0-9-]{1,40}$`
+  (server `ID_RE`); `add_track.steps` 0-60 titles (server `MAX_STEPS`; UI
+  requires >= 1). Character POST sends
   `{level, gs: {ap, aap, dp}}`; `name`/`cls` are accepted by the guard but not
   sent by the UI.
 - No profile = `profile: null` OR `profile.status == "none"`; both render the

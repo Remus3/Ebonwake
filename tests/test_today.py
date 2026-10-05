@@ -300,7 +300,8 @@ def test_concurrent_ticks_lose_nothing(tmp_path):
 @pytest.fixture()
 def tsrv(tmp_path):
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
-                          sse_interval=0.05, market_seed=[])
+                          sse_interval=0.05, market_seed=[],
+                          profile_cfg={})
     t = threading.Thread(target=s.serve_forever, daemon=True)
     t.start()
     yield s

@@ -305,7 +305,8 @@ def msrv(tmp_path):
                    "GetBiddingInfoList": orders, "GetWorldMarketHotList": [SUB]})
     client = market.ArshaClient(fetch=f, clock=Clock(), cache_dir=tmp_path / "cache")
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
-                          sse_interval=0.05, market_client=client, market_seed=[4901])
+                          sse_interval=0.05, market_client=client, market_seed=[4901],
+                          profile_cfg={})
     t = threading.Thread(target=s.serve_forever, daemon=True)
     t.start()
     yield s

@@ -4,7 +4,9 @@
 Nothing is read from the game. The family name comes only from gitignored
 config/local.json (`profile.family`); without one the profile is `status:
 "none"` and nothing is fetched. The profile goes through httpcache (TTL 3600 s,
-plan 002 backoff, HTTP 202 / "being fetched" = transient flat retry).
+plan 002 backoff, HTTP 202 / "being fetched" = transient flat retry). Requests
+never wait on upstream: they read the cache (`peek`); GET also starts a
+background refresh, at most one in flight.
 """
 
 import datetime as _dt
@@ -157,12 +159,20 @@ class ProfileClient(CachedClient):
     def peek(self):
         return super().peek(self.key, PROFILE_TTL)
 
+    def refresh(self, spawn=None):
+        """Background refresh, at most one in flight; never blocks the caller."""
+        return self.refresh_async(self.key, PROFILE_TTL, self._download, spawn)
 
-def _profile_status(res):
-    if res is None:
-        return "none"
-    if res["data"] is None:
-        return "error"
+    def is_pending(self):
+        return self.pending(self.key)
+
+
+def _profile_status(res, pending=False):
+    """ok | stale | error | pending (no data, being fetched) | none."""
+    if res is None or res["data"] is None:
+        if pending:
+            return "pending"
+        return "none" if res is None else "error"
     return "stale" if res["stale"] else "ok"
 
 
@@ -259,10 +269,11 @@ class ProgressService:
     """Store domain `progress`: {"character": {name, cls, level, gs: {ap, aap, dp}},
     "tracks": [{id, title, kind, steps: [{id, title, done_at}]}], "updated"}."""
 
-    def __init__(self, store, profile_client=None, clock=time.time):
+    def __init__(self, store, profile_client=None, clock=time.time, spawn=None):
         self.store = store
         self.profile = profile_client
         self.clock = clock
+        self.spawn = spawn  # background refresh runner (None = daemon thread)
         self._lock = threading.Lock()  # read-modify-write; Store guards each file op
         with self._lock:
             if "tracks" not in store.get("progress"):
@@ -299,15 +310,21 @@ class ProgressService:
 
     # -- reads -----------------------------------------------------------------
 
-    def profile_view(self):
+    def profile_view(self, refresh=False):
+        """Cache only - a request never waits on upstream. `refresh` (GET)
+        starts a background refresh when the cache is stale or empty."""
         if self.profile is None:
             return {"data": None, "freshness": None, "status": "none"}
-        res = self.profile.get()
-        return {"data": res["data"], "freshness": freshness(res),
-                "status": _profile_status(res)}
+        if refresh:
+            self.profile.refresh(self.spawn)
+        res = self.profile.peek()
+        status = _profile_status(res, self.profile.is_pending())
+        if res is None:
+            return {"data": None, "freshness": None, "status": status}
+        return {"data": res["data"], "freshness": freshness(res), "status": status}
 
-    def view(self):
-        """GET /api/progress body."""
+    def view(self, refresh=True):
+        """GET /api/progress body; POST answers pass refresh=False (peek only)."""
         character, tracks = self._load()
         out = []
         for t in tracks:
@@ -316,13 +333,15 @@ class ProgressService:
             done = sum(s["done"] for s in steps)
             out.append({"id": t["id"], "title": t["title"], "kind": t["kind"], "steps": steps,
                         "done": done, "total": len(steps), "pct": pct(done, len(steps))})
-        return {"character": character, "tracks": out, "profile": self.profile_view()}
+        return {"character": character, "tracks": out,
+                "profile": self.profile_view(refresh=refresh)}
 
     def source(self):
         """`/api/state` sources.profile: {updated, ttl_s, status}; never fetches."""
         res = self.profile.peek() if self.profile is not None else None
+        pend = self.profile.is_pending() if self.profile is not None else False
         return {"updated": res["fetched_at"] if res else None, "ttl_s": PROFILE_TTL,
-                "status": _profile_status(res)}
+                "status": _profile_status(res, pend)}
 
     # -- writes (each returns the GET body) -----------------------------------
 
@@ -352,7 +371,7 @@ class ProgressService:
             if gs:
                 character["gs"].update(gs)
             self._save(character, tracks)
-        return self.view()
+        return self.view(refresh=False)
 
     def step(self, arg):
         """{track, step, done: bool}; marking done twice keeps the first stamp."""
@@ -372,7 +391,7 @@ class ProgressService:
             elif st["done_at"] is None:
                 st["done_at"] = _iso_now(self.clock)
             self._save(character, tracks)
-        return self.view()
+        return self.view(refresh=False)
 
     def add_track(self, arg):
         """{title, kind, steps: [titles]}."""
@@ -393,11 +412,11 @@ class ProgressService:
             tracks.append({"id": tid, "title": title, "kind": arg["kind"],
                            "steps": _make_steps(steps)})
             self._save(character, tracks)
-        return self.view()
+        return self.view(refresh=False)
 
     def remove_track(self, tid):
         with self._lock:
             character, tracks = self._load()
             del tracks[self._find(tracks, tid)]
             self._save(character, tracks)
-        return self.view()
+        return self.view(refresh=False)

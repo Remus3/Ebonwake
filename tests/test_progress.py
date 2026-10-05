@@ -222,7 +222,7 @@ def test_profile_none_when_unconfigured(tmp_path):
 def test_profile_in_view_and_source(tmp_path):
     clk = Clock()
     c, f = _pc(tmp_path, clock=clk)
-    s = _svc(tmp_path, c)
+    s = progress.ProgressService(Store(tmp_path / "store"), c, spawn=_sync)
     assert s.source()["status"] == "none" and f.calls == []  # state never fetches
     p = s.view()["profile"]
     assert p["status"] == "ok" and p["data"]["family"] == "Testfam"
@@ -236,7 +236,7 @@ def test_profile_in_view_and_source(tmp_path):
 
 def test_profile_error_status_without_cache(tmp_path):
     c, _ = _pc(tmp_path, OSError("down"))
-    s = _svc(tmp_path, c)
+    s = progress.ProgressService(Store(tmp_path / "store"), c, spawn=_sync)
     assert s.view()["profile"]["status"] == "error"
     assert s.source()["status"] == "error"
 
@@ -406,7 +406,10 @@ def _req(s, method, path, body=None, ctype="application/json", host=None):
 def test_route_get_progress(psrv):
     st, doc = _req(psrv, "GET", "/api/progress")
     assert st == 200 and set(doc) == {"character", "tracks", "profile"}
-    assert doc["profile"]["status"] == "ok" and doc["profile"]["data"]["family"] == "Testfam"
+    assert doc["profile"]["status"] in ("pending", "ok")  # refresh runs off the request
+    assert _wait(lambda: _req(psrv, "GET", "/api/progress")[1]["profile"]["status"] == "ok")
+    doc = _req(psrv, "GET", "/api/progress")[1]
+    assert doc["profile"]["data"]["family"] == "Testfam"
     assert all({"done", "total", "pct"} <= set(t) for t in doc["tracks"])
 
 
@@ -414,8 +417,7 @@ def test_route_state_sources_profile(psrv):
     st, doc = _req(psrv, "GET", "/api/state")
     assert st == 200 and doc["sources"]["profile"]["status"] == "none"
     _req(psrv, "GET", "/api/progress")
-    doc = _req(psrv, "GET", "/api/state")[1]
-    assert doc["sources"]["profile"]["status"] == "ok"
+    assert _wait(lambda: _req(psrv, "GET", "/api/state")[1]["sources"]["profile"]["status"] == "ok")
 
 
 def test_route_no_profile_configured(tmp_path):
@@ -455,3 +457,110 @@ def test_route_post_guards(psrv):
     big = json.dumps({"character": {"name": "x" * 5000}}).encode()
     assert _req(psrv, "POST", "/api/progress", big)[0] == 413
     assert ewapp.Handler.POST_ROUTES["/api/progress"] is ewapp.Handler._post_progress
+
+
+# --- verifier fixes (plan 004 refute round) ---------------------------------
+
+def _sync(fn):
+    fn()
+
+
+def _wait(pred, timeout=3.0):
+    import time as _t
+    end = _t.monotonic() + timeout
+    while _t.monotonic() < end:
+        if pred():
+            return True
+        _t.sleep(0.02)
+    return False
+
+
+class SlowFetch(FakeFetch):
+    """Blocks until released, like an upstream near the 10 s timeout."""
+
+    def __init__(self, body):
+        super().__init__(body)
+        self.gate = threading.Event()
+
+    def __call__(self, url, timeout):
+        self.calls.append(url)
+        self.gate.wait(10)
+        return json.dumps(self.body).encode()
+
+
+def test_fixtures_never_read_real_config():
+    import re
+    from pathlib import Path
+    here = Path(__file__).parent
+    for name in ("test_server.py", "test_today.py", "test_market.py"):
+        src = (here / name).read_text(encoding="utf-8")
+        calls = re.findall(r"make_server\((.*?)\)\n", src, re.S)
+        assert calls, name
+        for c in calls:
+            assert "profile_cfg={}" in c or "profile_client=" in c, name
+
+
+def test_post_view_never_fetches(tmp_path):
+    c, f = _pc(tmp_path)
+    s = progress.ProgressService(Store(tmp_path / "store"), c, spawn=_sync)
+    v = s.set_character({"level": 5})
+    assert f.calls == [] and v["profile"]["status"] == "none"
+    s.view()  # GET path: refresh (synchronous spawn here) fills the cache
+    assert len(f.calls) == 1
+    v = s.step({"track": "main-story", "step": "balenos", "done": True})
+    assert len(f.calls) == 1 and v["profile"]["status"] == "ok"
+
+
+def test_get_view_refreshes_off_request_path(tmp_path):
+    f = SlowFetch(HIT)
+    c = progress.ProfileClient(FAMILY, fetch=f, clock=Clock(), cache_dir=tmp_path / "cache")
+    s = _svc(tmp_path, c)
+    import time as _t
+    t0 = _t.monotonic()
+    v1 = s.view()
+    v2 = s.view()
+    assert _t.monotonic() - t0 < 1.0, "GET blocked on upstream"
+    assert v1["profile"]["status"] == "pending" and v1["profile"]["data"] is None
+    assert v2["profile"]["status"] == "pending"
+    assert _wait(lambda: len(f.calls) == 1)
+    f.gate.set()
+    assert _wait(lambda: s.view()["profile"]["status"] == "ok")
+    assert len(f.calls) == 1, "single in-flight refresh per key"
+
+
+def test_pending_status_when_upstream_says_being_fetched(tmp_path):
+    c, f = _pc(tmp_path, httpcache.Pending("being fetched, retry later"))
+    s = progress.ProgressService(Store(tmp_path / "store"), c, spawn=_sync)
+    p = s.view()["profile"]
+    assert p["status"] == "pending" and p["data"] is None
+    assert s.source()["status"] == "pending"
+    f.body = OSError("down")
+    c.clock.t += httpcache.PENDING_RETRY_S + 1
+    assert s.view()["profile"]["status"] == "error"
+
+
+def test_route_post_does_not_wait_on_slow_upstream(tmp_path):
+    f = SlowFetch(HIT)
+    pc = progress.ProfileClient(FAMILY, fetch=f, clock=Clock(), cache_dir=tmp_path / "pcache")
+    s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
+                          sse_interval=0.05, market_seed=[],
+                          market_client=market.ArshaClient(fetch=_no_network,
+                                                           cache_dir=tmp_path / "cache"),
+                          profile_client=pc)
+    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t.start()
+    try:
+        import time as _t
+        t0 = _t.monotonic()
+        st, doc = _req(s, "GET", "/api/progress")
+        assert st == 200 and doc["profile"]["status"] == "pending"
+        st, doc = _req(s, "POST", "/api/progress", {"character": {"level": 9}})
+        assert st == 200 and doc["character"]["level"] == 9
+        assert _t.monotonic() - t0 < 2.0
+        f.gate.set()
+        assert _wait(lambda: _req(s, "GET", "/api/progress")[1]["profile"]["status"] == "ok")
+        assert len(f.calls) == 1
+    finally:
+        f.gate.set()
+        s.shutdown()
+        s.server_close()

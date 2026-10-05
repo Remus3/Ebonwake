@@ -20,15 +20,16 @@ test('gsTotal = (ap + aap) / 2 + dp; non-numbers give null', () => {
   }
 });
 
-test('trackPct counts steps with done_at; pct is a whole 0-100', () => {
+test('trackPct counts steps with done_at; pct = floor(100 * done / total) like the server', () => {
   const t = (marks) => ({ id: 't', steps: marks.map((m, i) => ({ id: 's' + i, title: 'S' + i, done_at: m ? '2026-10-04T00:00:00Z' : null })) });
   assert.deepStrictEqual(C.trackPct(t([1, 0, 0])), { done: 1, total: 3, pct: 33 });
-  assert.deepStrictEqual(C.trackPct(t([1, 1, 0])), { done: 2, total: 3, pct: 67 });
+  assert.deepStrictEqual(C.trackPct(t([1, 1, 0])), { done: 2, total: 3, pct: 66 });
   assert.deepStrictEqual(C.trackPct(t([1, 1, 1])), { done: 3, total: 3, pct: 100 });
   assert.deepStrictEqual(C.trackPct(t([])), { done: 0, total: 0, pct: 0 });
-  // 199/200 never rounds up to a false 100
-  const many = t(Array.from({ length: 200 }, (_, i) => (i < 199 ? 1 : 0)));
-  assert.deepStrictEqual(C.trackPct(many), { done: 199, total: 200, pct: 99 });
+  // floor: 59/60 is 98, never a false 100
+  const many = t(Array.from({ length: 60 }, (_, i) => (i < 59 ? 1 : 0)));
+  assert.deepStrictEqual(C.trackPct(many), { done: 59, total: 60, pct: 98 });
+  assert.deepStrictEqual(C.trackPct(t([1, 0, 0, 0, 0, 0, 0, 0])), { done: 1, total: 8, pct: 12 });
   // missing done_at key = not done; junk steps skipped
   assert.deepStrictEqual(C.trackPct({ steps: [{ id: 'a' }, null, 'x', { id: 'b', done_at: '2026-10-04T00:00:00Z' }] }),
     { done: 1, total: 2, pct: 50 });
@@ -63,10 +64,11 @@ test('validProgressBody accepts exactly the slice A POST shapes', () => {
     { character: { gs: { ap: 0, aap: 999, dp: 0 } } },
     { character: { name: 'Moonbeam', cls: 'Deadeye', level: 61 } },
     { step: { track: 'main-story', step: 'ch-1', done: true } },
-    { step: { track: 'tuvala_pen', step: 'weapon', done: false } },
+    { step: { track: 'tuvala-pen', step: 'weapon', done: false } },
     { add_track: { title: 'Life skill', kind: 'quest', steps: ['Apprentice', 'Skilled'] } },
     { add_track: { title: 'Season', kind: 'season', steps: [] } },
     { add_track: { title: 'Gear', kind: 'gear', steps: ['Weapon'] } },
+    { add_track: { title: 'Max', kind: 'gear', steps: Array(60).fill('s') } },
     { remove_track: 'main-story' }
   ];
   for (const b of ok) assert.strictEqual(C.validProgressBody(b), true, JSON.stringify(b));
@@ -83,7 +85,8 @@ test('validProgressBody accepts exactly the slice A POST shapes', () => {
     { add_track: { title: '', kind: 'quest', steps: [] } }, { add_track: { title: 'x', kind: 'daily', steps: [] } },
     { add_track: { title: 'x', kind: 'quest' } }, { add_track: { title: 'x', kind: 'quest', steps: 'a' } },
     { add_track: { title: 'x', kind: 'quest', steps: [''] } }, { add_track: { title: 'x', kind: 'quest', steps: [5] } },
-    { add_track: { title: 'x', kind: 'quest', steps: Array(201).fill('s') } },
+    { add_track: { title: 'x', kind: 'quest', steps: Array(61).fill('s') } },
+    { step: { track: 'tuvala_pen', step: 'weapon', done: false } }, { remove_track: 'a_b' },
     { add_track: { title: 'x', kind: 'quest', steps: [], y: 1 } },
     { remove_track: '' }, { remove_track: 5 }, { remove_track: 'a b' }, { remove_track: 'a'.repeat(41) },
     { remove_track: 'main', step: { track: 'main', step: 'c1', done: true } }, { bogus: 1 }
@@ -122,7 +125,7 @@ test('parseTrackForm: one step per line, blanks dropped', () => {
   for (const bad of [
     { title: '', kind: 'quest', steps: 'A' }, { title: 'x', kind: 'daily', steps: 'A' },
     { title: 'x', kind: 'gear', steps: '\n \n' }, { title: 'x', kind: 'gear', steps: 'y'.repeat(81) },
-    { title: 'x', kind: 'gear', steps: Array(201).fill('s').join('\n') }
+    { title: 'x', kind: 'gear', steps: Array(61).fill('s').join('\n') }
   ]) {
     const r = C.parseTrackForm(bad);
     assert.strictEqual(r.ok, false, JSON.stringify(bad));
@@ -151,20 +154,34 @@ test('profilePill: none / no data / fresh / stale / error', () => {
   assert.strictEqual(C.marketPill({ fetched_at: 'x', age_s: 59, ttl_s: 300 }).label, 'arsha 59s ago');
 });
 
-test('profileRows: plain label/value pairs from known keys only', () => {
+test('profileRows: server shape {family, region, guild: str|null, characters: [{name, cls, level, main}]}', () => {
   const rows = C.profileRows({
-    familyName: 'Fam', region: 'NA', guild: { name: 'G' }, contributionPoints: 300,
-    characters: [{ name: 'A', class: 'Deadeye', level: 62, main: true }, { name: 'B', class: 'Witch', level: 56 }],
-    secret: '<b>x</b>'
+    family: 'Fam', region: 'NA', guild: 'G',
+    characters: [{ name: 'B', cls: 'Witch', level: 56, main: false }, { name: 'A', cls: 'Deadeye', level: 62, main: true }],
+    secret: '<b>x</b>', contributionPoints: 300
   });
   assert.deepStrictEqual(rows, [
-    ['Family', 'Fam'], ['Region', 'NA'], ['Guild', 'G'], ['Main', 'A - Deadeye 62'],
-    ['Characters', '2'], ['Contribution', '300']
+    ['Family', 'Fam'], ['Region', 'NA'], ['Guild', 'G'], ['Main', 'A - Deadeye 62'], ['Characters', '2']
   ]);
-  assert.deepStrictEqual(C.profileRows({ familyName: 'F', guild: 'x', characters: [{ name: 'C', class: 'Ranger' }] }),
-    [['Family', 'F'], ['Main', 'C - Ranger'], ['Characters', '1']]);
+  assert.deepStrictEqual(C.profileRows({ family: 'F', region: 'NA', guild: null, characters: [{ name: 'C', cls: 'Ranger', level: null, main: false }] }),
+    [['Family', 'F'], ['Region', 'NA'], ['Main', 'C - Ranger'], ['Characters', '1']]);
+  // raw upstream names are not the served contract
+  assert.deepStrictEqual(C.profileRows({ familyName: 'F', guild: { name: 'G' }, characters: [{ name: 'C', class: 'Ranger' }] }),
+    [['Main', 'C'], ['Characters', '1']]);
+  assert.deepStrictEqual(C.profileRows({ family: 'F', characters: [] }), [['Family', 'F']]);
   assert.deepStrictEqual(C.profileRows(null), []);
   assert.deepStrictEqual(C.profileRows('x'), []);
+});
+
+test('profilePill: status "pending" (being fetched, no cache) is muted, not an error', () => {
+  const p = C.profilePill({ data: null, freshness: null, status: 'pending' });
+  assert.deepStrictEqual([p.cls, p.pending, p.none, p.error], ['unknown', true, false, null]);
+  assert.match(p.label, /fetching/);
+  const q = C.profilePill({ data: null, freshness: { fetched_at: null, age_s: null, ttl_s: 3600, stale: true, error: 'being fetched, retry later' }, status: 'pending' });
+  assert.deepStrictEqual([q.pending, q.error], [true, null]);
+  assert.strictEqual(C.profilePill({ data: null, freshness: { fetched_at: null, error: 'HTTP 503' }, status: 'error' }).pending, false);
+  const src = read('dashboard/progress.js');
+  assert.match(src, /p\.pending/);
 });
 
 test('progress.js: safe DOM, POST via the bridge only, optimistic with revert', () => {

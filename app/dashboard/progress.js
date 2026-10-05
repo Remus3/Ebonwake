@@ -183,6 +183,10 @@
       body.appendChild(el('div', 'ew-muted', 'No family configured. Set profile.family in config/local.json.'));
       return;
     }
+    if (p.pending) {
+      body.appendChild(el('div', 'ew-muted', 'Profile is being fetched upstream - check back in a minute.'));
+      return;
+    }
     if (p.error) body.appendChild(el('div', 'ew-err', p.error));
     const rows = C.profileRows(prof && prof.data);
     if (!rows.length) {
