@@ -12,12 +12,15 @@ import json
 import re
 from pathlib import Path
 
+from .levels import LEVEL_RANGE, MONSTER_LEVEL_RANGE, outlevel_dr
+from .today import _parse_iso
+
 DATA_FILE = Path(__file__).resolve().parent / "data" / "grind_spots.json"
 FIELDS = ("id", "name", "region", "ap_min", "dp_min", "level_min", "xp_tier",
           "silver_tier", "notes", "source", "verified")
+OPTIONAL = ("monster_level", "epoch")  # plan 018: level-gap note, re-verify badge
 GOALS = ("xp", "silver")
 STAT_RANGE = (0, 999)  # matches progress GS_RANGE
-LEVEL_RANGE = (1, 70)  # matches progress LEVEL_RANGE
 TIER_RANGE = (1, 5)
 TOP_N = 3
 UNLOCK_N = 2
@@ -40,8 +43,9 @@ def _ok_text(v, allow_empty=False):
 
 def validate_row(row):
     """Raise ValueError unless `row` is exactly one well-formed table row."""
-    if not isinstance(row, dict) or set(row) != set(FIELDS):
-        raise ValueError(f"row must have exactly {', '.join(FIELDS)}")
+    if not isinstance(row, dict) or not set(FIELDS) <= set(row) <= set(FIELDS + OPTIONAL):
+        raise ValueError(f"row must have exactly {', '.join(FIELDS)} "
+                         f"(optional {', '.join(OPTIONAL)})")
     if not isinstance(row["id"], str) or not ID_RE.match(row["id"]):
         raise ValueError("id must match ^[a-z0-9-]{1,40}$")
     for k in ("name", "region", "source"):
@@ -60,7 +64,21 @@ def validate_row(row):
     for k in ("xp_tier", "silver_tier"):
         if not _ok_int(row[k], *TIER_RANGE):
             raise ValueError(f"{row['id']}: {k} must be an int {TIER_RANGE[0]}..{TIER_RANGE[1]}")
+    if "monster_level" in row and not _ok_int(row["monster_level"], *MONSTER_LEVEL_RANGE):
+        raise ValueError(f"{row['id']}: monster_level must be an int "
+                         f"{MONSTER_LEVEL_RANGE[0]}..{MONSTER_LEVEL_RANGE[1]}")
+    if "epoch" in row and (not isinstance(row["epoch"], str) or not ID_RE.match(row["epoch"])):
+        raise ValueError(f"{row['id']}: epoch must be an epoch id (^[a-z0-9-]{{1,40}}$)")
     return row
+
+
+def reverify(row, epoch):
+    """True when `epoch` (the newest started XP epoch) post-dates the row's
+    `verified` date and the row is not tagged with that epoch: its numbers
+    were transcribed before the patch. No row is ever deleted for it."""
+    if epoch is None or row.get("epoch") == epoch["id"]:
+        return False
+    return row["verified"] < _parse_iso(epoch["starts_utc"]).date().isoformat()
 
 
 def validate_table(rows):
@@ -137,20 +155,28 @@ def _char_ap(gs):
 
 class SpotsService:
     """GET /api/spots. `character` returns plan 004's character {level, gs:
-    {ap, aap, dp}}; `grind` returns plan 005's GET body (per-spot silver/h)."""
+    {ap, aap, dp}}; `grind` returns plan 005's GET body (per-spot silver/h);
+    `epoch` returns the newest started XP epoch or None (plan 018)."""
 
-    def __init__(self, table, character, grind, error=None):
+    def __init__(self, table, character, grind, error=None, epoch=None):
         self.table = table
         self.character = character
         self.grind = grind
         self.error = error
+        self.epoch = epoch
 
     @classmethod
-    def from_file(cls, character, grind, path=DATA_FILE):
+    def from_file(cls, character, grind, path=DATA_FILE, epoch=None):
         try:
-            return cls(load_table(path), character, grind)
+            return cls(load_table(path), character, grind, epoch=epoch)
         except ValueError as e:  # a bad table degrades the card, never the server
-            return cls([], character, grind, error=str(e))
+            return cls([], character, grind, error=str(e), epoch=epoch)
+
+    def _epoch(self):
+        try:
+            return self.epoch() if self.epoch is not None else None
+        except Exception:  # noqa: BLE001 - the badge is an extra, never fatal
+            return None
 
     def _logged(self):
         """Lower-cased spot name -> silver/h for spots with at least one session."""
@@ -191,8 +217,13 @@ class SpotsService:
         if not missing and self.table:
             res = rank(self.table, inp["ap"], inp["dp"], inp["level"], goal)
             logged = self._logged()
+            epoch = self._epoch()
             for r in res["top"] + res["unlocks"]:
                 r["logged_silver_per_h"] = logged.get(r["name"].lower())
+                r["reverify"] = reverify(r, epoch)
+                ml = r.get("monster_level")
+                r["level_gap"] = inp["level"] - ml if ml is not None else None
+                r["outlevel_dr"] = outlevel_dr(inp["level"], ml) if ml is not None else None
         return {"goal": goal, "input": inp, "from": src, "missing": missing,
                 "top": res["top"], "unlocks": res["unlocks"], "count": len(self.table),
                 "status": "error" if self.error else "ok", "error": self.error,

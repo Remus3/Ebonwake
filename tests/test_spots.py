@@ -44,7 +44,7 @@ def test_tracked_table_passes_schema():
     assert len(rows) >= 10
     assert len({r["id"] for r in rows}) == len(rows)
     for r in rows:
-        assert set(r) == set(spots.FIELDS)
+        assert set(spots.FIELDS) <= set(r) <= set(spots.FIELDS + spots.OPTIONAL)
         assert r["source"].strip() and spots.DATE_RE.match(r["verified"])
         assert "verify" in r["notes"]
         assert 1 <= r["xp_tier"] <= 5 and 1 <= r["silver_tier"] <= 5
@@ -58,7 +58,7 @@ def test_tracked_table_is_ascii_lf():
 
 @pytest.mark.parametrize("patch", [
     {"source": ""}, {"source": "  "}, {"verified": "2026-13-01"}, {"verified": None},
-    {"ap_min": -1}, {"dp_min": 1000}, {"level_min": 0}, {"level_min": 71},
+    {"ap_min": -1}, {"dp_min": 1000}, {"level_min": 0}, {"level_min": 76},
     {"xp_tier": 0}, {"silver_tier": 6}, {"xp_tier": True}, {"ap_min": 1.5},
     {"id": "Bad Id"}, {"name": ""}, {"region": 3}, {"notes": None}, {"extra": 1},
 ])
@@ -200,7 +200,7 @@ def test_service_default_goal_is_xp():
 
 @pytest.mark.parametrize("q", [
     {"goal": ["fun"]}, {"ap": ["x"]}, {"ap": ["-1"]}, {"ap": ["1000"]}, {"dp": ["1.5"]},
-    {"level": ["0"]}, {"level": ["71"]}, {"ap": ["1", "2"]},
+    {"level": ["0"]}, {"level": ["76"]}, {"ap": ["1", "2"]},
 ])
 def test_service_bad_query_raises(q):
     with pytest.raises(ValueError):

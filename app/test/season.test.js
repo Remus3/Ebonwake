@@ -77,7 +77,7 @@ test('parseObjectiveForm: title/kind/target/reward -> obj_add body or an error',
   assert.deepStrictEqual(C.parseObjectiveForm('season-pass', { title: 'G', kind: 'gear', target: 'PRI', reward: '' }).body.obj_add.target, 16);
   assert.strictEqual(C.parseObjectiveForm('season-pass', { title: '', kind: 'other' }).ok, false);
   assert.strictEqual(C.parseObjectiveForm('season-pass', { title: 'x', kind: 'level', target: '' }).ok, false);
-  assert.strictEqual(C.parseObjectiveForm('season-pass', { title: 'x', kind: 'level', target: '71' }).ok, false);
+  assert.strictEqual(C.parseObjectiveForm('season-pass', { title: 'x', kind: 'level', target: '76' }).ok, false);
   assert.strictEqual(C.parseObjectiveForm('season-pass', { title: 'x', kind: 'gear', target: '21' }).ok, false);
   assert.strictEqual(C.parseObjectiveForm('season-pass', { title: 'x', kind: 'quest', target: '3' }).ok, false);
   assert.strictEqual(C.parseObjectiveForm('season-pass', { title: 'x', kind: 'nope' }).ok, false);

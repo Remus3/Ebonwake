@@ -74,7 +74,7 @@ test('validProgressBody accepts exactly the slice A POST shapes', () => {
   for (const b of ok) assert.strictEqual(C.validProgressBody(b), true, JSON.stringify(b));
   const bad = [
     null, 'x', [], {}, { character: {} }, { character: null },
-    { character: { level: 0 } }, { character: { level: 71 } }, { character: { level: 1.5 } },
+    { character: { level: 0 } }, { character: { level: 76 } }, { character: { level: 1.5 } },
     { character: { level: '60' } }, { character: { gs: { ap: -1, aap: 0, dp: 0 } } },
     { character: { gs: { ap: 1000 } } }, { character: { gs: { ap: 1, x: 1 } } }, { character: { gs: 5 } },
     { character: { gs: {} } }, { character: { level: 60, extra: 1 } }, { character: { name: '' } },
@@ -106,7 +106,7 @@ test('parseCharacterForm builds a character body or an operator error', () => {
   assert.deepStrictEqual(C.parseCharacterForm({ level: ' 62 ', ap: '310', aap: '312', dp: '400' }),
     { ok: true, body: { character: { level: 62, gs: { ap: 310, aap: 312, dp: 400 } } } });
   for (const bad of [
-    { level: '', ap: '1', aap: '1', dp: '1' }, { level: '71', ap: '1', aap: '1', dp: '1' },
+    { level: '', ap: '1', aap: '1', dp: '1' }, { level: '76', ap: '1', aap: '1', dp: '1' },
     { level: '0', ap: '1', aap: '1', dp: '1' }, { level: '60', ap: '1000', aap: '1', dp: '1' },
     { level: '60', ap: '-1', aap: '1', dp: '1' }, { level: '60', ap: '1.5', aap: '1', dp: '1' },
     { level: '60', ap: '1', aap: '', dp: '1' }, {}

@@ -291,7 +291,7 @@ def test_objective_tick_keeps_seed_flag(tmp_path):
 
 @pytest.mark.parametrize("arg", [
     {"track": "season-pass", "title": "x", "kind": "level"},             # level needs target
-    {"track": "season-pass", "title": "x", "kind": "level", "target": 71},
+    {"track": "season-pass", "title": "x", "kind": "level", "target": 76},
     {"track": "season-pass", "title": "x", "kind": "gear", "target": 21},
     {"track": "season-pass", "title": "x", "kind": "quest", "target": 3},
     {"track": "season-pass", "title": "x", "kind": "bogus"},

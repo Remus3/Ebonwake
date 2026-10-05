@@ -120,14 +120,17 @@ class EWServer(ThreadingHTTPServer):
         # Season level objectives auto-tick from the newest XP sample (plan 013).
         self.progress = progress.ProgressService(
             self.store, profile_client, level=lambda: self.leveling.current_level())
-        self.grind = grind.GrindService(self.store, clock=grind_clock or time.time)
+        # Plan 018: buff presets follow the newest started XP epoch.
+        self.grind = grind.GrindService(self.store, clock=grind_clock or time.time,
+                                        epoch=lambda: self.leveling.active_epoch())
         # XP stack counts armed grind buffs that carry an xp_pct (plan 011).
         self.leveling = leveling.LevelingService(self.store, clock=leveling_clock or time.time,
                                                  buffs=lambda: self.grind.view()["buffs"])
-        # Plan 012: plan 004's character + plan 005's per-spot silver/h.
+        # Plan 012: plan 004's character + plan 005's per-spot silver/h; plan
+        # 018: the newest started XP epoch flags rows to re-verify.
         self.spots = spots.SpotsService.from_file(
             character=lambda: self.progress.view(refresh=False)["character"],
-            grind=self.grind.view)
+            grind=self.grind.view, epoch=self.leveling.active_epoch)
         self.events = events.EventsService(self.store, clock=events_clock or time.time)
         # Coupon suggestions (plan 014): off unless a client is passed; only main()
         # passes the live one, so no test ever reaches the network.
@@ -298,10 +301,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post_leveling(self, body):
         ops = {"sample": "sample", "sample_del": "sample_del", "hot_add": "hot_add",
-               "hot_del": "hot_del", "milestones": "set_milestones"}
+               "hot_del": "hot_del", "milestones": "set_milestones",
+               "epoch_add": "epoch_add", "epoch_del": "epoch_del"}
         if len(body) != 1 or not (set(ops) & set(body)):
-            raise ValueError("body must be one of "
-                             "{sample|sample_del|hot_add|hot_del|milestones: ...}")
+            raise ValueError("body must be one of {sample|sample_del|hot_add|hot_del|"
+                             "milestones|epoch_add|epoch_del: ...}")
         (op, arg), = body.items()
         return getattr(self.server.leveling, ops[op])(arg)
 

@@ -14,9 +14,10 @@ import statistics
 import threading
 import time
 
+from . import levels
+from .levels import LEVEL_RANGE
 from .today import _iso, _parse_iso
 
-LEVEL_RANGE = (1, 70)
 PCT_RANGE = (0, 100)
 XP_PCT_RANGE = (0, 1000)  # hot window pct and grind buff xp_pct
 MAX_SAMPLES = 500
@@ -26,7 +27,13 @@ MAX_LABEL = 40
 MAX_MILESTONES = 20
 RATE_DELTAS = 5
 RATE_MIN_SPAN_S = 120
-SEED_MILESTONES = [50, 56, 57, 58, 60, 61]  # seed, verify against the season notice
+# Plan 018 seed (Lv 75 patch quest ladder), verify against the patch notes. A
+# store still holding the plan 011 seed is moved to it; edited lists are kept.
+SEED_MILESTONES = [56, 60, 61, 70, 75]
+OLD_SEED_MILESTONES = [50, 56, 57, 58, 60, 61]
+MILESTONE_LABELS = {56: "main questline end", 60: "Rebirth of Darkness", 61: "Olvia course",
+                    70: "AP/DR bonus starts", 75: "level cap"}
+MAX_EPOCHS = 20  # operator-added epochs
 HOT_ID_RE = re.compile(r"^h[0-9]{1,9}$")
 HHMM_RE = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 _UTC = _dt.timezone.utc
@@ -71,12 +78,13 @@ def _points(samples):
     return pts
 
 
-def rate_pct_h(samples):
+def rate_pct_h(samples, since=None):
     """Level-percent per hour: median of the last RATE_DELTAS deltas, each
     spanning >= RATE_MIN_SPAN_S (a sample closer than that to the newer end is
     skipped, so bursts of entries merge). None with fewer than 2 usable samples
-    or a rate <= 0."""
-    pts = _points(samples)
+    or a rate <= 0. `since` (plan 018 XP epoch start) drops older samples: a
+    rate measured before an XP rescale says nothing about after it."""
+    pts = [p for p in _points(samples) if since is None or p[0] >= since]
     deltas = []
     i = len(pts) - 1
     while i > 0 and len(deltas) < RATE_DELTAS:
@@ -229,22 +237,54 @@ def _clean_window(w):
         return None
 
 
+def _epoch_brief(e, now):
+    """View row of one epoch: no kill caps, plus seconds until (or since, < 0) it starts."""
+    if e is None:
+        return None
+    starts_in = int((_parse_iso(e["starts_utc"]) - now).total_seconds())
+    return {"id": e["id"], "starts_utc": e["starts_utc"], "label": e["label"],
+            "source": e["source"], "verified": e["verified"], "starts_in_s": starts_in}
+
+
+def _clean_epoch(e):
+    try:
+        return levels.validate_epoch(e)
+    except ValueError:
+        return None
+
+
 class LevelingService:
     """Store domain `leveling`: {"samples": [{ts, level, pct}] (oldest first),
     "hot_windows": [{id, days, start, end, label, pct}], "milestones": [int],
-    "next_id": int, "updated": "<iso>"}. `buffs` returns the grind view's buff
-    list (plan 005) for the XP stack; `seq` bumps on every write (SSE)."""
+    "epochs_added": [{id, starts_utc, label, source, verified}],
+    "epochs_deleted": [id], "next_id": int, "updated": "<iso>"}. `buffs`
+    returns the grind view's buff list (plan 005) for the XP stack; `seq` bumps
+    on every write (SSE). XP epochs (plan 018) are the tracked
+    `data/xp_epochs.json` rows (`epochs`, injected for tests) merged with the
+    operator's added / deleted ones; a bad tracked file degrades to none."""
 
-    def __init__(self, store, clock=time.time, buffs=None):
+    def __init__(self, store, clock=time.time, buffs=None, epochs=None):
         self.store = store
         self.clock = clock
         self.buffs = buffs
         self.seq = 0
+        self.epoch_error = None
+        if epochs is None:
+            try:
+                epochs = levels.load_epochs()
+            except ValueError as e:
+                epochs, self.epoch_error = [], str(e)
+        self.tracked_epochs = levels.sort_epochs(epochs)
         self._lock = threading.Lock()  # read-modify-write; Store guards each file op
         with self._lock:
             if "milestones" not in store.get("leveling"):
                 # seed milestones only; keep any samples / windows already
                 # stored (a hand-edited file lacking the key; refute r1 minor 2)
+                doc = self._load()
+                doc["milestones"] = list(SEED_MILESTONES)
+                self._save(doc, bump=False)
+            elif self._load()["milestones"] == OLD_SEED_MILESTONES:
+                # plan 018: the untouched plan 011 seed moves to the Lv 75 seed
                 doc = self._load()
                 doc["milestones"] = list(SEED_MILESTONES)
                 self._save(doc, bump=False)
@@ -272,7 +312,27 @@ class LevelingService:
         nxt = doc.get("next_id")
         top = max((int(w["id"][1:]) for w in windows), default=0) + 1
         nxt = max(nxt, top) if _ok_int(nxt, 1, 10 ** 9 - 1) else top
-        return {"samples": samples, "hot_windows": windows, "milestones": ms, "next_id": nxt}
+        added, seen = [], set()
+        for e in doc.get("epochs_added") if isinstance(doc.get("epochs_added"), list) else []:
+            c = _clean_epoch(e)
+            if c is not None and c["id"] not in seen:
+                seen.add(c["id"])
+                added.append(c)
+        raw = doc.get("epochs_deleted")
+        deleted = sorted({d for d in (raw if isinstance(raw, list) else [])
+                          if isinstance(d, str) and levels.ID_RE.match(d)})
+        return {"samples": samples, "hot_windows": windows, "milestones": ms, "next_id": nxt,
+                "epochs_added": added[:MAX_EPOCHS], "epochs_deleted": deleted}
+
+    def epochs(self, doc=None):
+        """Effective XP epochs, oldest first."""
+        doc = self._load() if doc is None else doc
+        return levels.merge_epochs(self.tracked_epochs, doc["epochs_added"],
+                                   set(doc["epochs_deleted"]))
+
+    def active_epoch(self):
+        """Newest started XP epoch or None (plan 012 spot re-verify badge)."""
+        return levels.active_epoch(self.epochs(), self._now())
 
     def _save(self, doc, bump=True):
         doc["samples"] = doc["samples"][-MAX_SAMPLES:]
@@ -291,20 +351,40 @@ class LevelingService:
         last = samples[-1] if samples else None
         level = last["level"] if last else None
         pct = last["pct"] if last else None
-        rate = rate_pct_h(samples)
+        epochs = self.epochs(doc)
+        epoch = levels.active_epoch(epochs, now)
+        upcoming = levels.next_epoch(epochs, now)
+        since = _parse_iso(epoch["starts_utc"]) if epoch else None
+        rate = rate_pct_h(samples, since)
         hot = hot_status(doc["hot_windows"], now)
         buffs = _live_xp_buffs(self.buffs() if self.buffs is not None else [])
         parts = ([{"name": a["label"], "pct": a["pct"]} for a in hot["active"]]
                  + [{"name": b.get("name"), "pct": b["xp_pct"]} for b in buffs])
+        nxt_ms = next_milestone(level, doc["milestones"])
+        tracked = {e["id"] for e in self.tracked_epochs}
         return {"now": _iso(now), "level": level, "pct": pct,
                 "rate_pct_h": None if rate is None else round(rate, 3),
                 "eta_next_s": eta_next_s(pct, rate),
-                "next_milestone": next_milestone(level, doc["milestones"]),
+                "next_milestone": nxt_ms,
+                "next_milestone_label": MILESTONE_LABELS.get(nxt_ms),
                 "hot": hot, "xp_stack_pct": xp_stack(hot["active"], buffs), "xp_parts": parts,
                 "milestones": doc["milestones"],
+                "milestone_labels": {str(m): MILESTONE_LABELS[m] for m in doc["milestones"]
+                                     if m in MILESTONE_LABELS},
                 "milestones_seed": doc["milestones"] == SEED_MILESTONES,
                 "hot_windows": doc["hot_windows"],
-                "samples": list(reversed(samples[-VIEW_SAMPLES:]))}
+                "epoch": _epoch_brief(epoch, now),
+                "epoch_next": _epoch_brief(upcoming, now),
+                "epochs": [dict(_epoch_brief(e, now), tracked=e["id"] in tracked)
+                           for e in epochs],
+                "epoch_error": self.epoch_error,
+                # the newest STARTED epoch that carries caps: a later operator
+                # epoch (no caps) does not hide them (refute r1 minor 2)
+                "kill_xp_cap": levels.kill_cap_note(levels.active_epoch(
+                    [e for e in epochs if "kill_xp_cap" in e], now), level),
+                "samples": [dict(s, pre_patch=since is not None
+                                 and _parse_iso(s["ts"]) < since)
+                            for s in reversed(samples[-VIEW_SAMPLES:])]}
 
     def current_level(self):
         """Level of the newest sample, or None (plan 013 season auto-tick)."""
@@ -381,6 +461,34 @@ class LevelingService:
             if len(keep) == len(doc["hot_windows"]):
                 raise ValueError(f"unknown hot window: {wid}")
             doc["hot_windows"] = keep
+            self._save(doc)
+        return self.view()
+
+    def epoch_add(self, arg):
+        """{id, starts_utc, label, source, verified}: a new XP epoch, or a
+        correction of an existing one by id (e.g. the confirmed live date of a
+        tracked patch row; its kill_xp_cap rows are kept)."""
+        row = levels.validate_epoch(_fields(arg, "epoch_add", levels.EPOCH_FIELDS))
+        with self._lock:
+            doc = self._load()
+            added = [e for e in doc["epochs_added"] if e["id"] != row["id"]]
+            if len(added) >= MAX_EPOCHS:
+                raise ValueError(f"at most {MAX_EPOCHS} added epochs")
+            doc["epochs_added"] = added + [row]
+            doc["epochs_deleted"] = [d for d in doc["epochs_deleted"] if d != row["id"]]
+            self._save(doc)
+        return self.view()
+
+    def epoch_del(self, eid):
+        if not isinstance(eid, str) or not levels.ID_RE.match(eid):
+            raise ValueError("epoch_del must be an epoch id")
+        with self._lock:
+            doc = self._load()
+            if eid not in {e["id"] for e in self.epochs(doc)}:
+                raise ValueError(f"unknown epoch: {eid}")
+            doc["epochs_added"] = [e for e in doc["epochs_added"] if e["id"] != eid]
+            if eid in {e["id"] for e in self.tracked_epochs}:
+                doc["epochs_deleted"] = sorted(set(doc["epochs_deleted"]) | {eid})
             self._save(doc)
         return self.view()
 

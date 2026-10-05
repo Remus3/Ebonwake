@@ -298,7 +298,7 @@ def test_character_update_partial_merge(tmp_path):
 
 
 @pytest.mark.parametrize("ch", [
-    {"level": 0}, {"level": 71}, {"level": 1.5}, {"level": True}, {"level": "60"},
+    {"level": 0}, {"level": 76}, {"level": 1.5}, {"level": True}, {"level": "60"},
     {"gs": {"ap": -1}}, {"gs": {"aap": 1000}}, {"gs": {"dp": None}}, {"gs": {"xp": 1}},
     {"gs": []}, {"name": 5}, {"name": "x" * 41}, {"name": "a\nb"}, {"cls": ""},
     {"unknown": 1}, {}, [],

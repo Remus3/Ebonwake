@@ -10,6 +10,7 @@ import re
 import threading
 import time
 
+from . import levels
 from .today import _iso, _parse_iso, slug
 
 MAX_MINUTES = 1440
@@ -111,9 +112,20 @@ class GrindService:
     minutes, silver, trash}] (oldest first), "active": {spot, started}|null,
     "buffs": [{id, name, ends, xp_pct?}], "next_sid": int, "updated": "<iso>"}."""
 
-    def __init__(self, store, clock=time.time):
+    def __init__(self, store, clock=time.time, presets=None, epoch=None):
         self.store = store
         self.clock = clock
+        # `epoch` returns the newest started XP epoch or None (plan 018): until
+        # one has started the presets offer the pre-patch value and no hint shows.
+        self.epoch = epoch
+        # Plan 018 XP buff presets (tracked data); a bad file degrades to none.
+        self.presets_error = None
+        if presets is None:
+            try:
+                presets = levels.load_buff_presets()
+            except ValueError as e:
+                presets, self.presets_error = [], str(e)
+        self.presets = presets
         self._lock = threading.Lock()  # read-modify-write; Store guards each file op
         with self._lock:
             if "spots" not in store.get("grind"):
@@ -200,19 +212,35 @@ class GrindService:
             n, minutes, silver = totals.get(sp["id"], (0, 0, 0))
             spots.append({"id": sp["id"], "name": sp["name"], "sessions": n, "minutes": minutes,
                           "silver_per_h": silver_per_hour(silver, minutes)})
+        patched = self._patched()
         buffs = []
         for b in doc["buffs"]:
             ends = _parse_iso(b["ends"])
             left = int((ends - now).total_seconds()) if ends is not None else 0
+            hint = levels.buff_hint(b["name"], b["xp_pct"], self.presets) if patched else None
             if left > 0:
                 buffs.append({"id": b["id"], "name": b["name"], "ends": b["ends"],
-                              "left_s": left, "xp_pct": b["xp_pct"]})
+                              "left_s": left, "xp_pct": b["xp_pct"], "xp_hint": hint})
             else:  # unarmed or expired: listed so it can be re-armed in one tap
                 buffs.append({"id": b["id"], "name": b["name"], "ends": None, "left_s": None,
-                              "xp_pct": b["xp_pct"]})
+                              "xp_pct": b["xp_pct"], "xp_hint": hint})
         sessions = list(reversed(doc["sessions"][-VIEW_SESSIONS:]))
+        presets = [{"name": p["name"],
+                    "xp_pct": p["xp_pct"] if patched else p["pre_patch_xp_pct"],
+                    "patched": patched, "notes": p["notes"], "source": p["source"],
+                    "verified": p["verified"]} for p in self.presets]
         return {"now": _iso(now), "active": active, "sessions": sessions, "spots": spots,
-                "buffs": buffs}
+                "buffs": buffs, "xp_presets": presets, "xp_presets_error": self.presets_error}
+
+    def _patched(self):
+        """True once an XP epoch has started (refute r1 minor 1); without an
+        epoch source (bare service) the tracked post-patch values apply."""
+        if self.epoch is None:
+            return True
+        try:
+            return self.epoch() is not None
+        except Exception:  # noqa: BLE001 - the hint is an extra, never fatal
+            return True
 
     def source(self):
         """`/api/state` sources.grind: {updated, status: "ok"}."""

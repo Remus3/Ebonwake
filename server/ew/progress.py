@@ -19,6 +19,7 @@ import urllib.parse
 from pathlib import Path
 
 from .httpcache import CachedClient, Pending, UpstreamError, freshness
+from .levels import LEVEL_RANGE
 from .today import slug
 
 DEFAULT_BASE = "https://api.cutepap.us/community/v1"
@@ -32,7 +33,6 @@ MAX_TITLE = 80
 MAX_NAME = 40
 MAX_TRACKS = 30
 MAX_STEPS = 60
-LEVEL_RANGE = (1, 70)
 GS_RANGE = (0, 999)
 GS_KEYS = ("ap", "aap", "dp")
 _DEFAULT_CACHE = Path(__file__).resolve().parents[2] / "ops" / "runtime" / "cache" / "profile"

@@ -191,7 +191,7 @@ def test_xp_stack_sums_active_hot_and_xp_buffs():
 
 def test_seed_milestones_and_empty(svc):
     doc = svc.view()
-    assert doc["milestones"] == [50, 56, 57, 58, 60, 61] and doc["milestones_seed"] is True
+    assert doc["milestones"] == [56, 60, 61, 70, 75] and doc["milestones_seed"] is True
     assert doc["hot_windows"] == [] and doc["samples"] == []
     assert doc["level"] is None and doc["pct"] is None and doc["rate_pct_h"] is None
     assert doc["eta_next_s"] is None and doc["hot"] == {"active": [], "next": None}
@@ -246,7 +246,7 @@ def test_sample_delete(svc, clock):
 
 
 @pytest.mark.parametrize("arg", [
-    {"level": 0, "pct": 1}, {"level": 71, "pct": 1}, {"level": 52, "pct": -0.001},
+    {"level": 0, "pct": 1}, {"level": 76, "pct": 1}, {"level": 52, "pct": -0.001},
     {"level": 52, "pct": 100.001}, {"level": 52, "pct": 1.2345}, {"level": 52.0, "pct": 1},
     {"level": True, "pct": 1}, {"level": 52, "pct": True}, {"level": 52, "pct": "1"},
     {"level": 52}, {"level": 52, "pct": 1, "x": 1}, [52, 1], None,
@@ -259,7 +259,7 @@ def test_sample_bad(svc, arg):
 
 def test_sample_limits_inclusive(svc):
     assert svc.sample({"level": 1, "pct": 0})["pct"] == 0
-    assert svc.sample({"level": 70, "pct": 100})["level"] == 70
+    assert svc.sample({"level": 75, "pct": 100})["level"] == 75
     assert svc.sample({"level": 70, "pct": 37.512})["pct"] == 37.512
 
 
@@ -319,7 +319,7 @@ def test_milestones_set_sorted_unique(svc):
     assert svc.set_milestones([])["milestones"] == []
 
 
-@pytest.mark.parametrize("arg", [[0], [71], [50, 50], [50.0], [True], "50", None,
+@pytest.mark.parametrize("arg", [[0], [76], [50, 50], [50.0], [True], "50", None,
                                  list(range(1, 23))])
 def test_milestones_bad(svc, arg):
     with pytest.raises(ValueError):
