@@ -731,6 +731,161 @@ def test_lane_worker_refusal_and_deep_dive_tools(tmp_path):
     assert items.get("DD-1")["state"] == "refused"
 
 
+def _dispatched(root, iid="012", **extra):
+    items = ew_loop.Items(root)
+    items.put(dict({"id": iid, "kind": "plan", "state": "dispatched", "lane": "data",
+                    "prompt": "p", "title": "t", "label": "l", "attempts": 1}, **extra))
+    return items
+
+
+def test_lane_worker_rechecks_halt_backoff_and_cap_and_passes_halt_file(tmp_path):
+    root = make_root(tmp_path)
+    ran = []
+
+    def run_lane(lane, prompt, spawn=None, root=None, **kw):
+        ran.append(lane)
+        spawn(root, "EW", prompt)
+        return {"rc": 0, "error": None, "worktree": "wt"}
+
+    items = _dispatched(root)
+    halt = root / ew_loop.HALT_REL
+    halt.parent.mkdir(parents=True, exist_ok=True)
+    halt.write_text("")
+    assert ew_loop.lane_worker("012", deps=deps(root), run_lane=run_lane) == 0
+    rec = items.get("012")
+    assert ran == [] and rec["state"] == "paused" and rec["attempts"] == 0
+    assert ew_loop.dispatchable(rec)  # a pause costs no attempt
+    halt.unlink()
+    d = deps(root)
+    ew_loop.backoff_hit(root, d.clock(), "429")
+    _dispatched(root)
+    ew_loop.lane_worker("012", deps=d, run_lane=run_lane)
+    assert ran == [] and items.get("012")["error"] == "paused: backoff"
+    ew_loop.backoff_clear(root)
+    p = root / "ops/loop/control/headless_budget.json"
+    p.write_text(json.dumps({"starts": [d.clock() - 10] * (d.budget.cap - 3)}))
+    d.budget.clock = d.clock
+    _dispatched(root)
+    ew_loop.lane_worker("012", deps=d, run_lane=run_lane)
+    assert ran == [] and items.get("012")["error"] == "paused: runs cap"
+    p.unlink()
+    sp = FakeSpawn()
+    _dispatched(root)
+    ew_loop.lane_worker("012", deps=deps(root, spawn=sp), run_lane=run_lane)
+    assert ran == ["data"] and sp.calls[0]["halt_file"] == halt
+
+
+def test_lane_worker_halt_raised_by_kit_mid_run_is_a_pause(tmp_path):
+    root = make_root(tmp_path)
+    items = _dispatched(root)
+    halt = root / ew_loop.HALT_REL
+
+    def run_lane(lane, prompt, **kw):
+        halt.parent.mkdir(parents=True, exist_ok=True)
+        halt.write_text("")
+        raise RuntimeError("Refused: halt file present")
+
+    ew_loop.lane_worker("012", deps=deps(root), run_lane=run_lane)
+    assert items.get("012")["state"] == "paused"
+
+
+def test_dirty_lane_claim_is_flagged_not_dropped(tmp_path):
+    root = make_root(tmp_path, handoff="")
+    items = _dispatched(root)
+
+    def run_lane(lane, prompt, **kw):
+        raise RuntimeError("LaneRefused: lane worktree lane-1 is dirty - resolve it by hand")
+
+    assert ew_loop.lane_worker("012", deps=deps(root), run_lane=run_lane) == 1
+    rec = items.get("012")
+    assert rec["state"] == "lane-dirty" and "dirty" in rec["error"]
+    assert not ew_loop.dispatchable(rec)
+    doc = ew_loop.tick(deps=deps(root), no_push=True)
+    row = next(r for r in doc["checklist"] if r["id"] == "012")
+    assert row["state"] == "lane-dirty" and row["eta_s"] == 0
+
+
+def test_exhausted_attempts_become_gave_up_with_the_error(tmp_path):
+    root = make_root(tmp_path, roadmap=ROADMAP.replace("| 013 | Season pass tracker | [ ] open |\n", ""),
+                     handoff="")
+    ew_loop.Items(root).put({"id": "012", "kind": "plan", "state": "refused", "lane": "data",
+                             "attempts": ew_loop.MAX_ATTEMPTS, "error": "lanes_full",
+                             "title": "Grind spot recommender", "label": "l"})
+    d = deps(root)
+    doc = ew_loop.tick(deps=d, no_push=True)
+    assert ew_loop.Items(root).get("012")["state"] == "gave-up"
+    assert any("gave up after 2 attempts: lanes_full" in s for s in doc["log"])
+    assert next(r for r in doc["checklist"] if r["id"] == "012")["state"] == "gave-up"
+    assert "012" not in d.seen["launch"]
+
+
+def test_launch_exception_marks_lost_and_frees_the_lane(tmp_path):
+    root = make_root(tmp_path, handoff="")
+    calls = []
+
+    def launch(iid):
+        calls.append(iid)
+        if iid == "012":
+            raise OSError("no pythonw")
+        return 99
+
+    d = deps(root, launch=launch)
+    ew_loop.tick(deps=d, no_push=True)
+    items = ew_loop.Items(root)
+    r12 = items.get("012")
+    assert r12["state"] == "lost" and "OSError" in r12["error"] and not r12.get("pid")
+    assert items.get("013")["lane"] == "build"  # the failed launch's lane is reused
+    ew_loop.tick(deps=d, no_push=True)
+    assert calls.count("012") == ew_loop.MAX_ATTEMPTS
+
+
+def test_dispatched_without_pid_is_reaped(tmp_path):
+    root = make_root(tmp_path, roadmap="", handoff="")
+    _dispatched(root, title="t")  # no pid: a tick died between its two writes
+    d = deps(root)
+    doc = ew_loop.tick(deps=d, no_push=True)
+    assert any("012: lane process gone" in s for s in doc["log"])
+    assert ew_loop.Items(root).get("012")["state"] == "lost"
+
+
+def test_handoff_password_oauth_per_host_items_are_operator_only():
+    text = ("Carried forward:\n- Enter the account password in the launcher.\n"
+            "- Grant the OAuth scope for the API.\n- Set the per-host OCR path.\n"
+            "- Fix the OCR cache key.\n")
+    assert [i["skip"] for i in ew_loop.handoff_items(text)] == ["operator"] * 3 + [None]
+
+
+def test_checklist_eta_is_lane_median_less_elapsed(tmp_path):
+    root = make_root(tmp_path, roadmap="", handoff="")
+    kinds = []
+    d = deps(root, estimate=lambda kind: kinds.append(kind) or 2700.0)
+    ew_loop.Items(root).put({"id": "012", "kind": "plan", "state": "dispatched",
+                             "lane": "data", "pid": 1, "title": "t", "label": "l",
+                             "dispatched": ew_loop.iso(d.clock() - 600)})
+    doc = ew_loop.tick(deps=d, no_push=True)
+    assert next(r for r in doc["checklist"] if r["id"] == "012")["eta_s"] == 2100
+    assert "lane-data-code" in kinds and "loop-review" not in kinds
+
+
+def test_verifier_crash_is_counted_then_adjudicated(tmp_path):
+    root, wt = git_world(tmp_path)
+    crash = {"rc": 1, "error": "exit 1", "result": "boom"}
+    sp = FakeSpawn([crash, crash, crash])
+    d = deps(root, spawn=sp, git=real_git,
+             lane_state=lambda: [{"index": i, "state": "RUNNING", "lane": n}
+                                 for i, n in enumerate(("build", "data", "review"))])
+    ew_loop.tick(deps=d, no_push=True)
+    rec = ew_loop.Items(root).get("012")
+    assert rec["state"] == "ran" and rec["verify_errors"] == 1
+    ew_loop.tick(deps=d, no_push=True)
+    ew_loop.tick(deps=d, no_push=True)
+    rec = ew_loop.Items(root).get("012")
+    assert rec["verify_errors"] == 3 and rec["state"] == "adjudicate"
+    assert len(sp.calls) == 3 and not (root / "feature.txt").exists()
+    ew_loop.tick(deps=d, no_push=True)
+    assert len(sp.calls) == 3  # never retried past the cap
+
+
 def test_launch_is_detached_hidden_with_breakaway_fallback(tmp_path):
     calls = []
 

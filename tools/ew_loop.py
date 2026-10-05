@@ -83,11 +83,16 @@ GATE_TIMEOUT_S = 1800
 NOTE_HEAD = 600
 NOTE_MAX = 20000
 DONE_STATES = ("merged", "no-change", "failed")
-ATTENTION_STATES = ("merge-conflict", "failed-dirty")
+# lane-dirty: the kit refused the claim on a dirty lane worktree (a person
+# resolves it); gave-up: MAX_ATTEMPTS refused / lost dispatches, error kept.
+ATTENTION_STATES = ("merge-conflict", "failed-dirty", "lane-dirty", "gave-up")
 LIMIT_RX = re.compile(r"usage limit|rate[ -]?limit|\b429\b|limit reached|overloaded", re.I)
 VERDICT_RX = re.compile(r"^\s*VERDICT:\s*(PASS|FAIL)\b", re.I | re.M)
 ROW_RX = re.compile(r"^\|\s*(\d{3})\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*$")
-SKIP_TAGS = (("operator", re.compile(r"^(OPERATOR\b|.*\(physical\))|\bphysical\b", re.I)),
+# FLEET item 1: physical acts, passwords and OAuth grants wait for the operator;
+# per-host values (gitignored config/local.json) are set on the host, not by a lane.
+SKIP_TAGS = (("operator", re.compile(r"^(OPERATOR\b|.*\(physical\))|\bphysical\b|"
+                                     r"\bpasswords?\b|\boauth\b|\bper-host\b", re.I)),
              ("other-tree", re.compile(r"^MAIN\b")),
              ("info", re.compile(r"^(NOTE|INFO)\s*:", re.I)))
 STOP = {"the", "and", "for", "from", "with", "per", "via", "tab", "new", "plan", "into",
@@ -377,8 +382,10 @@ class Items:
 
 
 def dispatchable(rec):
-    return rec is None or (rec.get("state") in ("refused", "lost")
-                           and rec.get("attempts", 0) < MAX_ATTEMPTS)
+    """paused (the lane worker found HALT / backoff / runs cap before it ran)
+    costs no attempt; refused / lost get MAX_ATTEMPTS dispatches."""
+    return rec is None or rec.get("state") == "paused" or (
+        rec.get("state") in ("refused", "lost") and rec.get("attempts", 0) < MAX_ATTEMPTS)
 
 
 # ---------------------------------------------------------------- dependencies
@@ -492,6 +499,20 @@ def backoff_clear(root):
         atomic_write(p, json.dumps({"delay_s": 0, "until": 0}))
 
 
+def spawn_block(root, budget, now):
+    """Why spawning must stop now (item f), or None. Shared by the tick and the
+    detached lane worker, which re-checks after dispatch."""
+    if (Path(root) / HALT_REL).exists():
+        return "halted"
+    if backoff_until(root) > now:
+        return "backoff"
+    if not budget.readable():
+        return "budget unreadable"
+    if budget.used() >= budget.cap - HEADROOM:
+        return "runs cap"
+    return None
+
+
 # ---------------------------------------------------------------- the tick
 
 class Tick:
@@ -509,16 +530,7 @@ class Tick:
 
     # -- gates on spawning (item f)
     def blocked(self):
-        now = self.d.clock()
-        if (self.root / HALT_REL).exists():
-            return "halted"
-        if backoff_until(self.root) > now:
-            return "backoff"
-        if not self.d.budget.readable():
-            return "budget unreadable"
-        if self.d.budget.used() >= self.d.budget.cap - HEADROOM:
-            return "runs cap"
-        return None
+        return spawn_block(self.root, self.d.budget, self.d.clock())
 
     def spawn(self, prompt, kind="build", **kw):
         """kit spawn + backoff bookkeeping. Returns the usage line or None.
@@ -714,12 +726,24 @@ class Tick:
 
     # -- lanes in flight
     def reap_lost(self):
+        """Under the tick lock no dispatch is mid-flight, so a "dispatched"
+        record without a pid is a launch that never happened (a crashed tick).
+        A refused / lost record out of attempts becomes gave-up, never silent."""
+        if self.dry:
+            return
         for rec in self.items.all().values():
-            if rec.get("state") == "dispatched" and rec.get("pid") and \
-                    not self.d.pid_alive(rec["pid"]) and not self.dry:
+            state = rec.get("state")
+            if state == "dispatched" and (not rec.get("pid") or
+                                          not self.d.pid_alive(rec["pid"])):
                 rec.update(state="lost", attempts=rec.get("attempts", 0))
                 self.items.put(rec)
                 self.step(f"{rec['id']}: lane process gone")
+                state = "lost"
+            if state in ("refused", "lost") and rec.get("attempts", 0) >= MAX_ATTEMPTS:
+                rec["state"] = "gave-up"
+                self.items.put(rec)
+                self.step(f"{rec['id']}: gave up after {rec.get('attempts', 0)} attempts: "
+                          f"{rec.get('error') or state}")
 
     # -- d. finished worktrees
     def finished(self):
@@ -755,8 +779,21 @@ class Tick:
                                   writes_code=False, cwd=wt, extra=VERIFY_EXTRA, kind="build",
                                   governor="queued", governor_timeout=GATE_TIMEOUT_S,
                                   timeout=GATE_TIMEOUT_S)
-                if not line or line.get("rc") != 0:
-                    return
+                if not line:
+                    return  # refused or usage limit: backoff / next tick retries
+                if line.get("rc") != 0:
+                    # a crashed verifier is no verdict, but it is counted: after
+                    # MAX_ROUNDS of them the item waits for the adjudicator
+                    rec["verify_errors"] = rec.get("verify_errors", 0) + 1
+                    rec["error"] = ascii_text(f"verifier rc={line.get('rc')} "
+                                              f"{line.get('error') or ''}", 300)
+                    self.items.put(rec)
+                    self.step(f"{rec['id']}: verifier failed "
+                              f"{rec['verify_errors']}/{MAX_ROUNDS}")
+                    if rec["verify_errors"] < MAX_ROUNDS:
+                        return
+                    rec["verdict"] = "adjudicate"
+                    break
                 m = VERDICT_RX.findall(line.get("result") or "")
                 if m and m[-1].upper() == "PASS":
                     rec["verdict"] = "PASS"
@@ -907,7 +944,15 @@ class Tick:
                        attempts=(rec or {}).get("attempts", 0) + 1, rounds=0,
                        dispatched=iso(self.d.clock()))
             self.items.put(new)
-            new["pid"] = self.d.launch(item["id"])
+            try:
+                new["pid"] = self.d.launch(item["id"])
+            except Exception as exc:  # noqa: BLE001 - OSError, ValueError: retryable
+                new.update(state="lost", error=ascii_text(f"launch: {type(exc).__name__}: "
+                                                          f"{exc}", 300))
+                self.items.put(new)
+                free.insert(0, lane)
+                self.step(f"{item['id']}: launch failed ({type(exc).__name__})")
+                continue
             self.items.put(new)
             self.step(f"{item['id']}: dispatched to lane {lane}")
 
@@ -952,8 +997,17 @@ class Tick:
     # -- g. checklist (FLEET item 13 d: remaining tasks only, kit rows)
     def checklist(self, rows, work, skipped):
         recs = self.items.all()
-        est = self.d.estimate
+        now = self.d.clock()
         out, listed = [], set()
+
+        def est(rec):
+            """Lane-run median (tools/ew_lane records lane-<lane>-code) less the
+            time already spent since dispatch; open items assume lane build."""
+            e = self.d.estimate(f"lane-{rec.get('lane') or 'build'}-code")
+            if rec.get("state") in ("dispatched", "ran", "committed"):
+                with contextlib.suppress(TypeError, ValueError):
+                    e -= now - _dt.datetime.fromisoformat(rec.get("dispatched")).timestamp()
+            return max(int(e), 0)
 
         def add(iid, title, state, eta_s):
             if len(out) < self.d.checklist.ROWS_MAX:
@@ -966,12 +1020,12 @@ class Tick:
             listed.add(item["id"])
             if state in DONE_STATES:
                 continue
-            e = est("loop-review") if state in ("ran", "committed") else \
-                0 if state in ATTENTION_STATES else est("lane-build-code")
+            e = 0 if state in ATTENTION_STATES else est(rec)
             add(item["id"], item["title"], None if state == "open" else state, e)
         for iid, rec in sorted(recs.items()):
             if iid not in listed and rec.get("state") not in DONE_STATES:
-                add(iid, rec.get("title", ""), rec.get("state"), est("lane-build-code"))
+                add(iid, rec.get("title", ""), rec.get("state"),
+                    0 if rec.get("state") in ATTENTION_STATES else est(rec))
         for h in skipped:
             add(h["id"], h["text"], f"{h['skip']}-only, skipped", None)
         return out
@@ -1056,13 +1110,26 @@ def lane_worker(iid, deps=None, run_lane=None):
     rec = items.get(iid)
     if not rec or rec.get("state") != "dispatched":
         return 0
+    halt = d.root / HALT_REL
+
+    def pause(why):
+        # the dispatch never ran: give its attempt back, the tick re-dispatches
+        rec.update(state="paused", error=f"paused: {why}",
+                   attempts=max(rec.get("attempts", 1) - 1, 0))
+        items.put(rec)
+        return 0
+
+    why = spawn_block(d.root, d.budget, d.clock())  # may have changed since dispatch
+    if why:
+        return pause(why)
     run_lane = run_lane or ew_lane.run_lane
     timeout = load_config(d.root)["lane_timeout_s"]
-    spawn = d.spawn
-    if rec.get("kind") == "deep-dive":
-        def spawn(root, code, prompt, **kw):
-            kw["extra"] = DEEP_EXTRA
-            return d.spawn(root, code, prompt, **kw)
+    extra = {"extra": DEEP_EXTRA} if rec.get("kind") == "deep-dive" else {}
+
+    def spawn(root, code, prompt, **kw):
+        kw.update(extra, halt_file=halt)  # the kit refuses if HALT appears meanwhile
+        return d.spawn(root, code, prompt, **kw)
+
     try:
         line = run_lane(rec["lane"], rec["prompt"], writes_code=True, timeout=timeout,
                         root=d.root, spawn=spawn)
@@ -1070,7 +1137,12 @@ def lane_worker(iid, deps=None, run_lane=None):
         text = f"{type(exc).__name__}: {exc}"
         if is_limit(text):
             backoff_hit(d.root, d.clock(), text)
-        rec.update(state="refused", error=ascii_text(text, 300))
+        if halt.exists():
+            return pause("halted")
+        # a dirty lane worktree is a crashed run's work: retrying cannot clear
+        # it, so it waits for a person instead of burning the attempts
+        state = "lane-dirty" if "dirty" in text.lower() else "refused"
+        rec.update(state=state, error=ascii_text(text, 300))
         items.put(rec)
         return 1
     text = f"{line.get('error') or ''} {line.get('result') or ''}"
