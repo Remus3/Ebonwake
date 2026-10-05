@@ -7,9 +7,11 @@ that was down over a reset is still correct.
 """
 
 import datetime as _dt
+import json
 import re
 import threading
 import time
+from pathlib import Path
 
 KINDS = ("daily", "weekly", "event")
 ID_RE = re.compile(r"^[a-z0-9-]{1,40}$")
@@ -32,6 +34,18 @@ SEED = [
 ]
 
 
+EVERY = ("day", "week")
+AT_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+# Plan 021: an item may carry its own rule; one without keeps its kind's default.
+DEFAULT_RULES = {"daily": {"every": "day", "at": "00:00"},
+                 "weekly": {"every": "week", "weekday": THURSDAY, "at": "00:00"},
+                 "event": {"every": "day", "at": "00:00"}}
+RULE_KIND = {"day": "daily", "week": "weekly"}
+PRESETS_FILE = Path(__file__).resolve().parent / "data" / "reset_rules.json"
+PRESET_FIELDS = ("name", "reset", "source", "verified")
+MAX_SOURCE = 200
+
+
 # -- reset clocks (same rule as app/shared/ewcore.js) --------------------------
 
 def _utc(now):
@@ -40,24 +54,43 @@ def _utc(now):
     return now.astimezone(_dt.timezone.utc)
 
 
-def last_daily_reset(now):
-    """NA daily reset: the most recent 00:00 UTC at or before `now`."""
+def _midnight(now):
     n = _utc(now)
     return _dt.datetime(n.year, n.month, n.day, tzinfo=_dt.timezone.utc)
 
 
+def last_reset(rule, now):
+    """Most recent reset of a validated `rule` at or before `now` (UTC)."""
+    hh, mm = rule["at"].split(":")
+    at = _dt.timedelta(hours=int(hh), minutes=int(mm))
+    day = _midnight(now)
+    if rule["every"] == "day":
+        when, period = day + at, _DAY
+    else:
+        when, period = day - _DAY * ((day.weekday() - rule["weekday"]) % 7) + at, 7 * _DAY
+    return when - period if when > _utc(now) else when
+
+
+def next_reset(rule, now):
+    return last_reset(rule, now) + (_DAY if rule["every"] == "day" else 7 * _DAY)
+
+
+def last_daily_reset(now):
+    """NA daily reset: the most recent 00:00 UTC at or before `now`."""
+    return last_reset(DEFAULT_RULES["daily"], now)
+
+
 def last_weekly_reset(now):
     """NA weekly reset: the most recent Thursday 00:00 UTC at or before `now`."""
-    day = last_daily_reset(now)
-    return day - _DAY * ((day.weekday() - THURSDAY) % 7)
+    return last_reset(DEFAULT_RULES["weekly"], now)
 
 
 def next_daily_reset(now):
-    return last_daily_reset(now) + _DAY
+    return next_reset(DEFAULT_RULES["daily"], now)
 
 
 def next_weekly_reset(now):
-    return last_weekly_reset(now) + 7 * _DAY
+    return next_reset(DEFAULT_RULES["weekly"], now)
 
 
 def _iso(when):
@@ -100,11 +133,82 @@ def _check_until(until):
     return until
 
 
+def validate_rule(rule):
+    """`{every, weekday? (week only, Mon=0), at? (HH:MM UTC, default 00:00)}` ->
+    normalised rule; raises ValueError."""
+    if not isinstance(rule, dict):
+        raise ValueError("reset must be an object {every, weekday?, at?}")
+    extra = set(rule) - {"every", "weekday", "at"}
+    if extra:
+        raise ValueError(f"unknown reset field(s): {', '.join(sorted(extra))}")
+    every = rule.get("every")
+    if every not in EVERY:
+        raise ValueError(f"every must be one of {', '.join(EVERY)}")
+    at = rule.get("at", "00:00")
+    if not isinstance(at, str) or not AT_RE.match(at):
+        raise ValueError("at must be HH:MM 00:00-23:59 (UTC)")
+    if every == "day":
+        if "weekday" in rule:
+            raise ValueError("weekday only with every week")
+        return {"every": "day", "at": at}
+    wd = rule.get("weekday")
+    if not isinstance(wd, int) or isinstance(wd, bool) or not 0 <= wd <= 6:
+        raise ValueError("weekday must be an int 0-6 (Mon=0)")
+    return {"every": "week", "weekday": wd, "at": at}
+
+
+def _check_reset(kind, reset):
+    """Normalised rule for an item of `kind`, or None for the kind default."""
+    if reset is None:
+        return None
+    if kind == "event":
+        raise ValueError("event items take no reset (they last until their end date)")
+    rule = validate_rule(reset)
+    if RULE_KIND[rule["every"]] != kind:
+        raise ValueError("reset every must match kind (daily = day, weekly = week)")
+    return rule
+
+
+def _rule(it):
+    return it.get("reset") or DEFAULT_RULES[it["kind"]]
+
+
+def load_presets(path=None):
+    """Tracked seed `data/reset_rules.json` -> [{name, kind, reset, source, verified}].
+    Raises ValueError on any malformed row (a test pins the tracked file)."""
+    try:
+        doc = json.loads(Path(path or PRESETS_FILE).read_text(encoding="ascii"))
+    except (OSError, ValueError) as e:
+        raise ValueError(f"reset presets unreadable: {type(e).__name__}") from e
+    if not isinstance(doc, list):
+        raise ValueError("reset presets must be a list")
+    out = []
+    for row in doc:
+        if not isinstance(row, dict) or set(row) != set(PRESET_FIELDS):
+            raise ValueError(f"preset rows must have exactly {', '.join(PRESET_FIELDS)}")
+        name, source = row["name"], row["source"]
+        if not (isinstance(name, str) and 0 < len(name.strip()) <= MAX_TITLE
+                and isinstance(source, str) and 0 < len(source.strip()) <= MAX_SOURCE
+                and isinstance(row["verified"], bool)):
+            raise ValueError("preset name/source must be text and verified a bool")
+        rule = validate_rule(row["reset"])
+        out.append({"name": name, "kind": RULE_KIND[rule["every"]], "reset": rule,
+                    "source": source, "verified": row["verified"]})
+    return out
+
+
+def _presets():
+    try:
+        return load_presets()
+    except ValueError:
+        return []
+
+
 def validate_new(entry):
-    """`{title, kind, until?}` -> normalised dict; raises ValueError."""
+    """`{title, kind, until?, reset?}` -> normalised dict; raises ValueError."""
     if not isinstance(entry, dict):
-        raise ValueError("add must be an object {title, kind, until?}")
-    extra = set(entry) - {"title", "kind", "until"}
+        raise ValueError("add must be an object {title, kind, until?, reset?}")
+    extra = set(entry) - {"title", "kind", "until", "reset"}
     if extra:
         raise ValueError(f"unknown field(s): {', '.join(sorted(extra))}")
     title = entry.get("title")
@@ -118,7 +222,11 @@ def validate_new(entry):
     kind = entry.get("kind")
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}")
-    return {"title": title, "kind": kind, "until": _check_until(entry.get("until"))}
+    out = {"title": title, "kind": kind, "until": _check_until(entry.get("until"))}
+    rule = _check_reset(kind, entry.get("reset"))
+    if rule is not None:
+        out["reset"] = rule
+    return out
 
 
 def _clean_item(it):
@@ -136,7 +244,14 @@ def _clean_item(it):
     order = it.get("order")
     if not isinstance(order, int) or isinstance(order, bool):
         order = 0
-    return {"id": iid, "title": title, "kind": kind, "until": until, "order": order}
+    out = {"id": iid, "title": title, "kind": kind, "until": until, "order": order}
+    try:
+        rule = _check_reset(kind, it.get("reset"))
+    except ValueError:
+        rule = None  # a corrupt rule degrades to the kind default
+    if rule is not None:
+        out["reset"] = rule
+    return out
 
 
 class TodayService:
@@ -205,21 +320,24 @@ class TodayService:
     def view(self):
         """GET /api/today body. Expired events (today's UTC date > until) excluded."""
         now = self._now()
-        resets = {"daily": last_daily_reset(now), "weekly": last_weekly_reset(now)}
-        resets["event"] = resets["daily"]
         today_iso = now.date().isoformat()
         items, ticks = self._load()
         out = []
         for it in items:
             if it["until"] is not None and today_iso > it["until"]:
                 continue
+            rule = _rule(it)
             when = _parse_iso(ticks.get(it["id"]))
-            done = when is not None and when >= resets[it["kind"]]
-            out.append({"id": it["id"], "title": it["title"], "kind": it["kind"],
-                        "until": it["until"], "done": done,
-                        "ticked_at": _iso(when) if when is not None else None})
+            done = when is not None and when >= last_reset(rule, now)
+            row = {"id": it["id"], "title": it["title"], "kind": it["kind"],
+                   "until": it["until"], "done": done,
+                   "ticked_at": _iso(when) if when is not None else None}
+            if "reset" in it:  # plan 021: own rule + own countdown
+                row.update(reset=it["reset"], next_reset=_iso(next_reset(rule, now)))
+            out.append(row)
         return {"now": _iso(now), "daily_reset": _iso(next_daily_reset(now)),
-                "weekly_reset": _iso(next_weekly_reset(now)), "items": out}
+                "weekly_reset": _iso(next_weekly_reset(now)), "items": out,
+                "reset_presets": _presets()}
 
     def source(self):
         """`/api/state` sources.today: {updated, status: "ok"}."""

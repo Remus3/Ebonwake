@@ -1,5 +1,7 @@
 /* EW Today tab (plan 003 slice B): daily + weekly checklists with reset
-   countdowns, events with days left, add item. Reads GET /api/today; writes go
+   countdowns, events with days left, add item. Plan 021: an item with its own
+   reset rule shows its own countdown; the add form offers reset presets and an
+   optional custom reset row. Reads GET /api/today; writes go
    through the dashboard preload (window.ewApi) because the server refuses
    renderer POSTs. Ticks are optimistic and reverted on error. Done-state is
    re-derived locally from ticked_at, so a reset flips the lists without a
@@ -8,7 +10,8 @@
   'use strict';
   const C = window.EWCore;
   const POLL_MS = 60000;
-  const S = { data: null, err: null, last: null, timer: null, ui: null, pending: {}, resetKey: null };
+  const S = { data: null, err: null, last: null, timer: null, ui: null, pending: {}, resetKey: null,
+    resetEls: [], presets: [] };
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -117,7 +120,8 @@
 
   function add() {
     const f = S.ui.form;
-    const r = C.parseTodayForm({ title: f.title.value, kind: f.kind.value, until: f.until.value });
+    const r = C.parseTodayForm({ title: f.title.value, kind: f.kind.value, until: f.until.value,
+      reset_weekday: f.reset_weekday.value, reset_at: f.reset_at.value });
     if (!r.ok) { msg(r.error); return; }
     send(r.body, 'added').then(function (ok) { if (ok) f.title.value = ''; });
   }
@@ -157,7 +161,13 @@
     }
     const list = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
     group.items.forEach(function (it) {
-      const extra = kind === 'event' ? el('span', 'ew-muted ew-tdays', C.fmtDaysLeft(it.days_left)) : null;
+      let extra = null;
+      if (kind === 'event') {
+        extra = el('span', 'ew-muted ew-tdays', C.fmtDaysLeft(it.days_left));
+      } else if (it.reset) {
+        extra = el('span', 'ew-muted ew-tdays', C.fmtResetCountdown(it.reset, Date.now()));
+        S.resetEls.push({ el: extra, rule: it.reset });
+      }
       list.appendChild(row(it, extra));
     });
     body.appendChild(list);
@@ -167,8 +177,11 @@
     const ui = S.ui;
     if (!ui || !ui.daily.body.isConnected) return;
     const now = Date.now();
-    S.resetKey = C.lastDailyReset(now) + ':' + C.lastWeeklyReset(now);
-    const g = C.groupItems(S.data ? S.data.items : [], now);
+    const items = S.data ? S.data.items : [];
+    S.resetKey = C.resetKey(items, now);
+    S.resetEls = [];
+    drawPresets();
+    const g = C.groupItems(items, now);
     drawList(ui.daily, g.daily, 'daily');
     drawList(ui.weekly, g.weekly, 'weekly');
     drawList(ui.event, g.event, 'event');
@@ -180,12 +193,38 @@
     if (!ui) return;
     ui.daily.clock.textContent = 'reset ' + C.fmtDuration(C.nextDailyReset(now) - now);
     ui.weekly.clock.textContent = 'reset ' + C.fmtDuration(C.nextWeeklyReset(now) - now);
+    S.resetEls.forEach(function (r) { r.el.textContent = C.fmtResetCountdown(r.rule, now); });
+  }
+
+  // Preset select from GET /api/today reset_presets; rebuilt only on change.
+  function drawPresets() {
+    const sel = S.ui.form.preset;
+    const p = C.resetPresets(S.data);
+    if (sel.options.length && JSON.stringify(p) === JSON.stringify(S.presets)) return;
+    S.presets = p;
+    sel.textContent = '';
+    const none = el('option', null, p.length ? '(none)' : '(no presets)');
+    none.value = '';
+    sel.appendChild(none);
+    p.forEach(function (x, n) {
+      const o = el('option', null, x.label);
+      o.value = String(n);
+      sel.appendChild(o);
+    });
+  }
+
+  function usePreset() {
+    const f = S.ui.form;
+    const p = f.preset.value ? S.presets[Number(f.preset.value)] : null;
+    if (!p) return;
+    const v = C.presetForm(p);
+    ['title', 'kind', 'until', 'reset_weekday', 'reset_at'].forEach(function (k) { f[k].value = v[k]; });
   }
 
   // Every second: countdowns; when a reset passes, re-derive done-state.
   function tick() {
     const now = Date.now();
-    const key = C.lastDailyReset(now) + ':' + C.lastWeeklyReset(now);
+    const key = C.resetKey(S.data ? S.data.items : [], now);
     if (S.ui && key !== S.resetKey) draw();
     else clock(now);
   }
@@ -221,6 +260,9 @@
       form.appendChild(lab);
       f[name] = input;
     };
+    const preset = el('select');
+    field('preset', 'preset', preset);
+    preset.addEventListener('change', usePreset);
     const title = el('input');
     title.type = 'text';
     title.maxLength = 80;
@@ -236,6 +278,19 @@
     const until = el('input');
     until.type = 'date';
     field('until', 'until (event)', until);
+    const wd = el('select');
+    ['default', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach(function (d, n) {
+      const o = el('option', null, d);
+      o.value = n ? String(n - 1) : ''; // Mon=0, blank = kind default
+      wd.appendChild(o);
+    });
+    field('reset_weekday', 'custom reset day (weekly)', wd);
+    const at = el('input');
+    at.type = 'text';
+    at.maxLength = 5;
+    at.placeholder = 'HH:MM UTC';
+    at.autocomplete = 'off';
+    field('reset_at', 'custom reset time', at);
     const btns = el('div', 'ew-btns');
     const save = el('button', 'ew-btn', 'Add');
     save.type = 'submit';

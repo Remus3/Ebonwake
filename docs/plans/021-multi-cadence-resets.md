@@ -40,3 +40,42 @@ tests for the formatter; gates green; verifier PASS within 3 rounds.
 ToS check: operator-typed checklist data and a tracked seed file only.
 
 Depends on: none.
+
+## As-built deviations
+
+Built by the `build` lane 2026-10-05. Tests: `tests/test_today_resets.py`,
+`app/test/today_resets.test.js`; `tests/test_today.py` untouched.
+
+1. Legacy items get no new view keys.
+   Decision: `reset` and `next_reset` appear only on items that carry their own
+   rule; legacy items keep the exact plan 003 key set and use the top-level
+   `daily_reset` / `weekly_reset`. "Groups by its own next reset" is realised as
+   per-item done-state and countdown; list grouping stays by `kind`.
+   Alternatives: `next_reset` on every item; regroup the view by reset instant.
+   Why: `tests/test_today.py::test_view_shape` pins the item key set and the
+   plan requires that file untouched and green; regrouping would break the
+   daily / weekly / events cards and the overlay n/m.
+   Reverses if: plan 003's shape test is retired.
+2. No edit op. Rules are set on `add` only; `POST /api/today` has no edit op
+   (plan 003 has tick / untick / add / remove / move).
+   Alternatives: a new `set_reset` op. Why: smallest change; remove + re-add
+   with a preset covers it. Reverses if: plan 033 / 056 need in-place edits.
+3. Rule must match kind. `daily` takes `every: day`, `weekly` takes
+   `every: week`, `event` takes no rule (400). A stored rule that is malformed
+   or mismatched degrades to the kind default instead of failing the read.
+   `at` defaults to `00:00`; `weekday` is required for `week` and refused for
+   `day`. Alternatives: let a weekly item carry a daily rule. Why: `kind` still
+   decides the card, so a mismatch would show a daily item in the Weekly card.
+   Reverses if: a card-by-rule layout replaces cards-by-kind.
+4. Presets reach the dashboard as `reset_presets` on `GET /api/today`
+   (`[{name, kind, reset, source, verified}]`, `kind` derived from `every`);
+   an unreadable seed file yields `[]` there while `today.load_presets()`
+   raises (a test pins the tracked file). The form fills title / kind / custom
+   reset row from a preset; unverified rows are labelled "(verify)".
+   Alternatives: a separate route. Why: one fetch, no new route or IPC guard.
+   Reverses if: presets grow past a few dozen rows.
+5. The seed checklist's existing "Black Spirit's Adventure dice" item stays a
+   plain midnight daily (no store migration, per item 1); the 05:00 preset is
+   offered for operators who want it. Reverses if: the 05:00 reset is verified.
+
+refute-rounds: recorded by the merge.
