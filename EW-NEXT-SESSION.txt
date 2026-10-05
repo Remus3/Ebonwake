@@ -1,54 +1,71 @@
 EW NEXT SESSION
 ---------------
-Next action: plan 006 (Events tab: coupon + event + Twitch-drop tracker with
-expiries) - write docs/plans/006-events.md (slices A server / B dashboard,
-same shape as 005), then run both lanes with tools/ew_lane.py, verify (refute
-cap 3), merge, push. Then 007 (Deadeye notes), 008, 009, 010 in order.
+Next action: plan 010 (packaging: single instance, tray, start-on-login task,
+real capture of an occluded dashboard) - spec already in
+docs/plans/010-packaging.md. One lane: write a prompt like the plan 006-009
+ones, run `python tools/ew_lane.py run build --writes-code --prompt-file F`
+in the background, commit in the printed lane worktree (detached), merge
+--no-ff into main, verifier (refute cap 3), install + read back the logon
+task, self-test, push. Roadmap is then complete; next pick new work from
+docs/design/0001-ebonwake-spec.md gaps.
 
 Carried forward (not acted on yet):
 - OPERATOR (physical): press Ctrl+Alt+E with the EW dashboard focused and
   confirm the overlay toggles and the mouse passes through it. Registration,
   handler toggle and native ex-style (LAYERED|TRANSPARENT|NOACTIVATE|TOPMOST)
-  are verified by app/selftest.js; two synthetic key presses this session were
-  interrupted, so no synthetic input is sent while BDO runs.
+  are verified by app/selftest.js; no synthetic input is sent while BDO runs.
 - OPERATOR: overlay safety check - run BDO borderless/windowed, overlay shown,
   on an alt account first, watch for XIGNCODE3 complaints (ADR 0001 reversal
   condition).
 - OPERATOR: set profile.family in gitignored config/local.json to enable the
-  Progress tab profile card (BDO-REST-API, hourly).
-- MAIN to record EW's port block 8940-8959 in the machine-wide registry (not
-  this tree's file to edit) and add EW to the fleet roster / lane widget.
-- Write gitignored config/leak_needles.json on any new host before pushing
-  (present on this host; lane worktrees need a copy - cp config/leak_needles.json
-  and config/local.json into ../ew-worktrees/<lane>/config/ or the sweep there
-  is DEGRADED).
-- Optional: a scheduled task that starts the server on logon (plan 010).
+  Progress tab profile card (BDO-REST-API, hourly). (config/local.json was
+  MISSING on this host this session; recreated from the example with only
+  bdo.install_dir / bdo.documents_dir filled.)
+- OPERATOR (plan 008 check): launch BDO, log in, log out; the System card must
+  walk not running -> running -> logged in -> running. Live read this session
+  already showed logged_in from a selectServerGroup line. A missed step = one
+  classifier row in server/ew/gamewatch.py CLASSIFIERS (data change).
+- OPERATOR (plan 009 check): take ~10 real screenshots with silver and buffs
+  visible, press Read on each in System > screenshots. Verifier measured
+  Windows.Media.Ocr reading rendered "Silver 1,234,567" as "Silver 1"; if real
+  silver digits misread in >1 of 10, re-adjudicate Tesseract (009 reversal).
+- MAIN to record EW's port block 8940-8959 in the machine-wide registry and
+  add EW to the roster / lane widget (MAIN 2237 4c/4d says RC/MAIN do this
+  under the v6 round; re-check the inbox).
+- Write gitignored config/leak_needles.json on any new host before pushing.
+  Lane worktrees get config/leak_needles.json and config/local.json copied
+  automatically by tools/ew_lane.py (seed_config) when present in the main tree.
 - Self-test captures of an occluded dashboard return the last painted frame
-  (Chromium does not paint hidden windows); DOM fit/switch checks are valid
-  regardless. Fix only if screenshots are needed unattended (plan 010).
+  (plan 010 item 4).
+- Non-blocking notes from verifiers: OCR cache key mtime is whole seconds (same
+  name+size rewrite within 1 s serves the old result); bridge timeout 10 s vs
+  server OCR timeout 60 s; normalizeOcr hides buffs found without a time;
+  main.js postLocal keeps only the first 64 KiB of a reply (deadeye replies can
+  exceed it; the client re-GETs, nothing lost).
+- SS's 2245 ANSWER to MAIN (v6) was misdelivered into EW's inbox; not acted on,
+  reported to MAIN in EW's ANSWER note.
 
-Context: CLAUDE.md, docs/plans/ROADMAP.md, docs/plans/00[2-5]-*.md (as-built
-decision sections), tools/ew_lane.py (code lanes: acceptEdits + gate commands
-allowed; lanes do not commit - main session commits on lane branches, merges
-with --no-ff, resets lanes to main), app/selftest.js (EW_SELFTEST=<out.json>
-EW_SELFTEST_STAY=1; drives only EW windows), tools/launch.py + Desktop
-shortcuts "Ebonwake" and "EW-NEXT-SESSION", server
-http://127.0.0.1:8940/api/health. Renderer POSTs go through window.ewApi.post
-(preload + ipcMain, route allowlist in ewcore.POST_ROUTES/validPost); the
-server answers no CORS preflight by design.
+Context: CLAUDE.md, docs/plans/ROADMAP.md, docs/plans/006-009 (as-built
+deviation sections), docs/adr/0007-fleet-kit-v6-lanes.md, tools/ew_lane.py
+(v6: fleet_lanes.run_lane cap 3, worktrees ../ew-worktrees/lane-<i> detached,
+spawn(governor="queued"); lanes never commit - main session commits in the
+worktree, merges --no-ff; a dirty lane worktree is refused on next claim).
+Endpoints: /api/health, /api/events, /api/deadeye, /api/game, POST /api/ocr.
+app/selftest.js (EW_SELFTEST=<out.json>; drives only EW windows).
 
-Acceptance: plan 006 acceptance list true; CI green on main.
+Acceptance: plan 010 acceptance list true; CI green on main.
 
-Do NOT redo: plans 001-005 (done, verified, pushed), desktop shortcuts, lane
-acceptEdits/allowedTools fix, store corrupt-doc + Windows replace hardening,
-profile API base (verified vs upstream openapi: api.cutepap.us/community/v1).
+Do NOT redo: kit v6 adoption (vendored b7043fc, conformance green, ANSWER
+note delivered to MAIN 1/1 sha256 f32410da...), plans 006-009 (done, verified,
+pushed), plan 007-010 specs, OCR engine adjudication, config/local.json bdo
+paths, old lane/build + lane/data worktrees (removed, merged).
 
-In flight: none.
+In flight: none. Lanes 0-2 FREE.
 
-Status: plans 001-005 done and pushed (range f21c45c..9f0c567, last CI
-run 37264336536 green). Gates: pytest 352 pass, node 76 pass, leak sweep
-ARMED clean. Desktop self-test 7/7 tabs fit, overlay alpha 0 + click-through
-ex-style. EW server healthy on 8940; dashboard running. Lanes build/data reset
-to main. Session file small.
+Status: 26 commits de0c302..143c804 pushed; CI 37266473369 and 37269466465
+green. Gates: pytest 680 pass, node 127 pass, leak sweep ARMED clean. Desktop
+self-test 7/7 tabs fit, overlay alpha 0, hotkeys registered. EW server healthy
+on 8940 (restarted on 1881683 code with config); dashboard relaunched. Session
+file small (<1 MB).
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
