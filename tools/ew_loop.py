@@ -18,7 +18,10 @@ One tick, under ops/loop/control/loop.lock (fleet_watch.watch_lock):
      claim): gates, review-lane verifier (refute rounds capped at 3, then
      accept and record), commit, merge --no-ff into main, flip the ROADMAP row
      in main inside the merge commit (never in the lane commit); a conflict in
-     ROADMAP.md alone is resolved row by row (resolve_roadmap).
+     ROADMAP.md alone is resolved row by row (resolve_roadmap). Any other
+     conflict keeps the lane commit under refs/ew/keep/<id> and the item
+     goes back out as a `resolve` run (plan 058, before new rows, at most
+     MAX_ATTEMPTS per item) through the same gates / verifier / merge.
   c. Work list = open ROADMAP rows + hand-off items not tagged OPERATOR /
      physical / MAIN / NOTE. Each item is dispatched to a free lane as a
      DETACHED `ew_loop.py lane <ID>` process that runs tools/ew_lane.run_lane
@@ -93,6 +96,14 @@ DONE_STATES = ("merged", "no-change", "failed")
 ATTENTION_STATES = ("merge-conflict", "failed-dirty", "lane-dirty", "gave-up")
 # an item in these states holds its unmerged work in rec["worktree"]
 HOLD_STATES = ("ran", "committed")
+IN_FLIGHT = ("dispatched",) + HOLD_STATES
+# plan 058: a conflicting lane commit is kept under this ref in the main
+# checkout (a re-claimed lane worktree can never orphan it) until it merges
+KEEP_REF = "refs/ew/keep/"
+# a kept record in these states still waits on its commit reaching main
+RESOLVABLE = ("merge-conflict", "refused", "lost", "paused", "no-change")
+# one conflict line `<<<<<<< x` / `>>>>>>> x` left in a resolved file
+MARKER_RX = re.compile(r"^(<{7}|>{7})(\s|$)", re.M)
 DIRTY_WT_RX = re.compile(r"lane worktree (.+?) is dirty")
 LIMIT_RX = re.compile(r"usage limit|rate[ -]?limit|\b429\b|limit reached|overloaded", re.I)
 VERDICT_RX = re.compile(r"^\s*VERDICT:\s*(PASS|FAIL)\b", re.I | re.M)
@@ -251,6 +262,23 @@ def plan_doc(root, plan_id):
         with contextlib.suppress(OSError):
             return p.read_text(encoding="utf-8", errors="replace")
     return None
+
+
+def base_kind(rec):
+    """The item's own kind; a plan 058 resolve run keeps it in base_kind."""
+    return rec.get("base_kind") or rec.get("kind")
+
+
+# a resolve item copies its record minus these per-run fields
+RUN_FIELDS = ("state", "pid", "rc", "error", "verdict", "verify_errors", "finished",
+              "updated", "prompt", "worktree", "dispatched")
+
+
+def resolve_item(rec):
+    item = {k: v for k, v in rec.items() if k not in RUN_FIELDS}
+    item.update(kind="resolve", base_kind=base_kind(rec))
+    item["prompt"] = resolve_prompt(item)
+    return item
 
 
 def dependency_cycles(graph):
@@ -445,6 +473,25 @@ def fix_prompt(item, rnd, findings):
             + "\n\nFindings:\n" + "\n".join(findings)[:8000])
 
 
+def resolve_prompt(item):
+    """Plan 058: the lane worker has already started the merge of the kept
+    lane commit onto current main in the lane's worktree."""
+    ref, doc = item["keep_ref"], ""
+    if item.get("base_kind") == "plan":
+        doc = f" (docs/plans/{item['id']}-*.md)"
+    return ("You are an Ebonwake (EW) resolve lane in a detached git worktree. Read "
+            f"CLAUDE.md first. The loop could not merge {item['label']} into main: a merge "
+            "conflict. Before you started, the loop ran `git merge --no-ff --no-commit "
+            f"{ref}` (the kept lane commit) onto current main in THIS worktree; `git "
+            "status` lists the unmerged paths. Resolve every conflict keeping BOTH sides' "
+            "features (main's newer work and the lane's), leave no conflict marker, and "
+            "record decision / alternatives / why for each non-trivial resolution in the "
+            f"'As-built deviations' section of the plan doc{doc}, or in your final reply "
+            "when the item has no plan doc. Leave the merge uncommitted: the loop "
+            "verifies, commits and merges it. " + NO_ROADMAP
+            + GATES.format(task=f"p{item['id']}-resolve"))
+
+
 def inbox_prompt(name, text, context=None):
     return ("You are the Ebonwake (EW) session answering ONE channel note. Reply with the "
             "note body only: markdown, ASCII, first line '# From EW - ANSWER re " + name
@@ -499,7 +546,10 @@ def dispatchable(rec, open_ids=()):
     """paused (the lane worker found HALT / backoff / runs cap before it ran)
     costs no attempt; refused / lost get MAX_ATTEMPTS dispatches; blocked
     (plan 019) waits until no id it needs is an open ROADMAP row, for at most
-    MAX_ATTEMPTS blocked runs."""
+    MAX_ATTEMPTS blocked runs; merge-conflict (plan 058) with a kept commit
+    gets MAX_ATTEMPTS resolve runs."""
+    if rec is not None and rec.get("state") == "merge-conflict":
+        return bool(rec.get("keep_ref")) and rec.get("resolve_runs", 0) < MAX_ATTEMPTS
     if rec is not None and rec.get("state") == "blocked":
         return (rec.get("blocked_runs", 0) < MAX_ATTEMPTS
                 and not set(rec.get("needs") or ()) & set(open_ids))
@@ -1017,7 +1067,7 @@ class Tick:
         "blocked"` progress marker (worktree first, then the main checkout)
         and the record is now blocked. Lane worktrees are reused, never
         cleaned, so a marker older than this run's dispatch is stale."""
-        if rec.get("kind") != "plan":
+        if rec.get("kind") != "plan":  # a resolve run is never a blocked plan
             return False
         rel = self.d.kit.PROGRESS_REL / f"p{rec['id']}-build.json"
         since = epoch_of(rec.get("dispatched"))
@@ -1095,6 +1145,8 @@ class Tick:
         return out
 
     def extra_checks(self, rec, wt):
+        if rec.get("kind") == "resolve":
+            return self.marker_checks(wt)
         if rec.get("kind") != "deep-dive":
             return []
         main_titles = plan_titles(self.d.main_tree)
@@ -1110,6 +1162,23 @@ class Tick:
         if not list((wt / "docs" / "research").glob(f"*-deep-dive-{rec['date']}.md")):
             out.append(f"missing docs/research/NNNN-deep-dive-{rec['date']}.md")
         return out
+
+    def marker_checks(self, wt):
+        """Plan 058: a resolve run must leave no conflict marker in any file it
+        changed (the commit's `git add -A` would stage a marker as resolved)."""
+        names = set()
+        for args in (["diff", "HEAD", "--name-only", "-z"],
+                     ["ls-files", "--others", "--exclude-standard", "-z"]):
+            r = self.d.git(args, wt)
+            if r.returncode == 0:
+                names.update(n for n in r.stdout.split("\0") if n)
+        bad = []
+        for name in sorted(names):
+            with contextlib.suppress(OSError):
+                if MARKER_RX.search((Path(wt) / name).read_text(encoding="utf-8",
+                                                                errors="replace")):
+                    bad.append(name)
+        return [f"conflict marker left in {', '.join(bad)}: resolve it"] if bad else []
 
     def commit(self, rec, wt, gates_ok):
         rounds = rec.get("rounds", 0)
@@ -1151,6 +1220,7 @@ class Tick:
         if g(["merge-base", "--is-ancestor", rec["commit"], "HEAD"], main).returncode == 0:
             # already in main (a crash after the merge commit): re-run is a no-op
             rec["state"] = "merged"
+            self.drop_keep(rec)
             self.step(f"{rec['id']}: already merged")
             self.items.put(rec)
             return
@@ -1158,7 +1228,7 @@ class Tick:
         why, flipped_row = None, False
         if r.returncode != 0 and not self.resolve_roadmap_conflict(main):
             why = "merge conflict"
-        if why is None and rec.get("kind") == "plan":
+        if why is None and base_kind(rec) == "plan":
             rounds = rec.get("rounds", 0)
             date = _dt.datetime.fromtimestamp(self.d.clock()).strftime("%Y-%m-%d")
             rm = main / ROADMAP_REL
@@ -1182,13 +1252,60 @@ class Tick:
         if why:
             g(["merge", "--abort"], main)
             rec["state"] = "merge-conflict"
+            self.keep(rec)
             self.step(f"{rec['id']}: {why}, aborted")
         else:
             rec["state"] = "merged"
             if flipped_row:  # plan 019 4c: when this row became [x]
                 rec["merged_at"] = iso(self.d.clock())
+            self.drop_keep(rec)
             self.step(f"{rec['id']}: merged")
         self.items.put(rec)
+
+    def keep(self, rec):
+        """Plan 058 step 1: point refs/ew/keep/<id> at the unmerged commit in
+        the main checkout; only a ref that was written is recorded."""
+        ref = KEEP_REF + rec["id"]
+        if rec.get("commit") and self.d.git(["update-ref", ref, rec["commit"]],
+                                            self.d.main_tree).returncode == 0:
+            rec["keep_ref"] = ref
+
+    def drop_keep(self, rec):
+        ref = rec.pop("keep_ref", None)
+        if ref:
+            self.d.git(["update-ref", "-d", ref], self.d.main_tree)
+
+    def settle_conflicts(self):
+        """Plan 058, idempotent, before dispatch: a merge-conflict whose commit
+        is already in main (merged by hand) is merged and its ref dropped; one
+        without a ref (recorded before plan 058) gets one if its commit still
+        exists. Any other record drops its ref once that commit is in main
+        (failed / adjudicate / gave-up keep theirs for a session)."""
+        if self.dry:
+            return
+        g, main = self.d.git, self.d.main_tree
+        for rec in self.items.all().values():
+            state = rec.get("state")
+            if state in IN_FLIGHT or not rec.get("commit"):
+                continue
+            if state != "merge-conflict" and not rec.get("keep_ref"):
+                continue
+            in_main = g(["merge-base", "--is-ancestor", rec["commit"], "HEAD"],
+                        main).returncode == 0
+            if in_main and state in RESOLVABLE:
+                rec["state"] = "merged"
+                self.drop_keep(rec)
+                self.step(f"{rec['id']}: conflict merged by hand, ref dropped")
+            elif state == "merge-conflict" and not rec.get("keep_ref"):
+                self.keep(rec)
+                if not rec.get("keep_ref"):
+                    continue
+                self.step(f"{rec['id']}: kept under {rec['keep_ref']}")
+            elif state != "merge-conflict" and in_main:
+                self.drop_keep(rec)
+            else:
+                continue
+            self.items.put(rec)
 
     def resolve_roadmap_conflict(self, main):
         """True when the only unmerged path is ROADMAP.md and the row-level
@@ -1225,14 +1342,23 @@ class Tick:
         # orders first, then ROADMAP rows whose status says "priority", then the rest
         open_rows = sorted((r for r in rows if r["open"]),
                            key=lambda r: "priority" not in r["status"].lower())
-        work = [{"id": o["id"], "kind": "order", "title": o["title"], "note": o["note"],
-                 "label": f"order {o['id']}: {o['title']}", "prompt": order_prompt(o)}
-                for o in self.orders()]
+        # plan 058: resolve runs first, so a conflicting change is folded into
+        # main before more lanes build on stale main; each replaces its own row
+        work = [resolve_item(rec) for rec in self.items.all().values()
+                if rec.get("keep_ref") and (rec.get("state") == "merge-conflict" or (
+                    rec.get("kind") == "resolve"
+                    and rec.get("state") in ("refused", "lost", "paused")))]
+        resolving = {w["id"] for w in work}
+        work += [{"id": o["id"], "kind": "order", "title": o["title"], "note": o["note"],
+                  "label": f"order {o['id']}: {o['title']}", "prompt": order_prompt(o)}
+                 for o in self.orders() if o["id"] not in resolving]
         # plan 019: a row whose plan doc depends on an open row waits (skipped)
         row_open = {r["id"]: r["open"] for r in rows}
         self.open_ids = {iid for iid, is_open in row_open.items() if is_open}
         skipped, waiting = [], {}
         for r in open_rows:
+            if r["id"] in resolving:
+                continue
             wait = [dep for dep in self.plan_deps(r["id"], row_open, log=True)
                     if row_open[dep]]
             if wait:
@@ -1247,7 +1373,7 @@ class Tick:
         for h in hand:
             if h["skip"]:
                 skipped.append(h)
-            else:
+            elif h["id"] not in resolving:
                 work.append({"id": h["id"], "kind": "handoff", "text": h["text"],
                              "title": h["text"], "label": f"hand-off {h['id']}"})
         return rows, work, skipped
@@ -1339,9 +1465,13 @@ class Tick:
             prompt = item.get("prompt") or prompt(item)
             # plan 019: the blocked-run count and the one-time re-arm survive a dispatch
             keep = {k: rec[k] for k in ("blocked_runs", "rearmed") if rec and k in rec}
+            # plan 058: a resolve run starts its own attempt count at a conflict
+            attempts = 0 if rec and rec.get("state") == "merge-conflict" else \
+                (rec or {}).get("attempts", 0)
             new = dict(item, **keep, state="dispatched", lane=lane, prompt=prompt,
-                       attempts=(rec or {}).get("attempts", 0) + 1, rounds=0,
-                       dispatched=iso(self.d.clock()))
+                       attempts=attempts + 1, rounds=0, dispatched=iso(self.d.clock()))
+            if item["kind"] == "resolve":
+                new["resolve_runs"] = item.get("resolve_runs", 0) + 1
             self.items.put(new)
             try:
                 new["pid"] = self.d.launch(item["id"])
@@ -1418,6 +1548,12 @@ class Tick:
         def blocked_on(rec):
             return "blocked on " + ", ".join(rec.get("needs") or [])
 
+        def shown(rec, state):
+            """Plan 058 step 5: a resolve lane in flight reads `resolving, run n/2`."""
+            if rec.get("kind") == "resolve" and state in IN_FLIGHT:
+                return f"resolving, run {rec.get('resolve_runs', 1)}/{MAX_ATTEMPTS}"
+            return state
+
         for item in work:
             rec = recs.get(item["id"]) or {}
             state = rec.get("state", "open")
@@ -1428,7 +1564,7 @@ class Tick:
                 add(item["id"], item["title"], blocked_on(rec), None)
                 continue
             e = 0 if state in ATTENTION_STATES else est(rec)
-            add(item["id"], item["title"], None if state == "open" else state, e)
+            add(item["id"], item["title"], None if state == "open" else shown(rec, state), e)
         for h in skipped:  # plan 019: rows waiting on an open dependency
             if h.get("reason"):
                 listed.add(h["id"])
@@ -1440,7 +1576,7 @@ class Tick:
                 if rec.get("state") == "blocked":
                     add(iid, rec.get("title", ""), blocked_on(rec), None)
                     continue
-                add(iid, rec.get("title", ""), rec.get("state"),
+                add(iid, rec.get("title", ""), shown(rec, rec.get("state")),
                     0 if rec.get("state") in ATTENTION_STATES else est(rec))
         for h in skipped:
             if not h.get("reason"):
@@ -1471,6 +1607,7 @@ class Tick:
         else:
             self.step(f"spawning paused: {self.blocked()}")
         self.finished()
+        self.settle_conflicts()
         self.recover_lane_dirty()
         rows, work, skipped = self.work_list()
         self.rearm(rows)
@@ -1532,9 +1669,12 @@ def lane_worker(iid, deps=None, run_lane=None):
     halt = d.root / HALT_REL
 
     def pause(why):
-        # the dispatch never ran: give its attempt back, the tick re-dispatches
+        # the dispatch never ran: give its attempt (and resolve run) back, the
+        # tick re-dispatches
         rec.update(state="paused", error=f"paused: {why}",
                    attempts=max(rec.get("attempts", 1) - 1, 0))
+        if rec.get("kind") == "resolve":
+            rec["resolve_runs"] = max(rec.get("resolve_runs", 1) - 1, 0)
         items.put(rec)
         return 0
 
@@ -1547,6 +1687,15 @@ def lane_worker(iid, deps=None, run_lane=None):
 
     def spawn(root, code, prompt, **kw):
         kw.update(extra, halt_file=halt)  # the kit refuses if HALT appears meanwhile
+        if rec.get("kind") == "resolve":
+            # plan 058: lanes have no git merge in their allow list, so the
+            # worker starts the merge in the claimed (clean, main) worktree
+            # and the lane only resolves; conflicts are the expected rc 1
+            r = d.git(["merge", "--no-ff", "--no-commit", "-q", rec["keep_ref"]], kw["cwd"])
+            if r.returncode != 0 and d.git(["rev-parse", "-q", "--verify", "MERGE_HEAD"],
+                                           kw["cwd"]).returncode != 0:
+                return {"rc": 1, "error": ascii_text(f"resolve merge refused: {r.stderr}",
+                                                     300), "result": None}
         return d.spawn(root, code, prompt, **kw)
 
     try:
