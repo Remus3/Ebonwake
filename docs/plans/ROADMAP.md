@@ -19,6 +19,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 012 | Grind spot recommender by AP/DP/level from a sourced community table | [ ] open |
 | 013 | Season pass tracker by objective, auto-tick level objectives | [ ] open |
 | 014 | Coupon auto-check vs the official news page (robots.txt-gated, suggest only) | [ ] open |
+| 015 | EW loop tick: inbox answers, lane dispatch, review + merge + push, idle deep-dive, 15-min scheduled task | [>] built in lane 2026-10-05 (install + read-back pending) |
 
 Ranking 011-014 (adjudicated 2026-10-05, value to a new Season Deadeye who is
 leveling now): 011 helps every leveling hour with zero external risk; 012
