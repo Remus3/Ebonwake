@@ -485,6 +485,21 @@ def _run_gate(argv, cwd):
     return r.returncode, (r.stdout or "")[-1500:] + (r.stderr or "")[-500:]
 
 
+SHELL_OPERATOR_CHARS = set("();<>|&")
+
+
+def _shell_operator(cmd):
+    """The first unquoted shell operator in a ci run command, or None. The
+    loop runs gates as argv without a shell (one local Python, not ci's
+    3.11 + 3.14 matrix), so `a && b` would pass "&&" to a and never run b."""
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    for tok in lex:
+        if tok and set(tok) <= SHELL_OPERATOR_CHARS:
+            return tok
+    return None
+
+
 def _gate_argv(cmd):
     argv = shlex.split(cmd)
     if argv[0] == "python":
@@ -503,6 +518,10 @@ def _gates(cwd, run=_run_gate):
         return False, f"no {CI_WORKFLOW_REL.as_posix()}: gates fail closed"
     if not cmds:
         return False, f"no gate command in {CI_WORKFLOW_REL.as_posix()}: gates fail closed"
+    for cmd in cmds:
+        op = _shell_operator(cmd)
+        if op is not None:
+            return False, f"{cmd}: shell operator {op!r} unsupported by loop gates: fail closed"
     for cmd in cmds:
         try:
             rc, tail = run(_gate_argv(cmd), cwd)
