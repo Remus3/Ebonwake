@@ -13,7 +13,6 @@ import pytest
 
 from server.ew import app as ewapp
 from server.ew import spots
-from server.ew.store import Store
 
 
 def _row(sid, ap, dp, lvl, xp, silver, name=None):

@@ -22,6 +22,13 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 015 | EW loop tick: inbox answers, lane dispatch, review + merge + push, idle deep-dive, 15-min scheduled task | [>] built in lane 2026-10-05 (install + read-back pending) |
 | 016 | OCR comma-drop regression: a vanished comma must not cut a digit group (old bench 141 -> 142/144) | [x] done 2026-10-05 (loop; refute 1/3 PASS) |
 | 017 | Supply-chain hardening (MAIN order Nfa7953): dependabot, SHA pins, hashed CI pip, CodeQL, read-only token, ruff gate, fuzzing ruled out | [x] done 2026-10-05 (loop; refute 1/3 PASS; Scorecard before/after blocked) |
+| 018 | Level cap 75 readiness: one level range, patch epoch for XP rates, re-seeded milestones, XP buff presets | [ ] open |
+
+Deep dive 2026-10-05 (research 0002): one plan, 018 - the Global Lab level
+cap 75 / XP rescale can go live at the 2026-10-08 maintenance and would make
+EW reject level 71+ and mislead the level ETA. A proposed 019 (patch-notes
+watcher) was dropped in refute round 2/3 as a duplicate of the Deadeye tab
+(007); see research 0002 section 7.
 
 Ranking 011-014 (adjudicated 2026-10-05, value to a new Season Deadeye who is
 leveling now): 011 helps every leveling hour with zero external risk; 012
