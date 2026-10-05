@@ -4,7 +4,9 @@
    because the server refuses renderer POSTs. Countdowns tick locally each
    second; the lists are only rebuilt when an item changes status (inputs keep
    focus). Sources are plain text with a copy button - the dashboard never
-   navigates. Every node is built with DOM APIs - no HTML from data. */
+   navigates. Every node is built with DOM APIs - no HTML from data.
+   Plan 014: a Suggested coupons card lists codes the server found on the
+   official news page (robots.txt-gated); each needs one click to add. */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -198,6 +200,45 @@
     body.appendChild(box);
   }
 
+  // Plan 014: suggested codes from the official news list (server side,
+  // robots.txt-gated). One click posts a plain coupon add; nothing automatic.
+  function drawSuggested() {
+    const ui = S.ui;
+    const body = ui.suggestBody;
+    body.textContent = '';
+    const sug = S.data ? S.data.suggested : null;
+    const st = C.suggestStatus(sug);
+    const list = C.suggestedRows(sug, S.data ? S.data.items : []);
+    ui.suggestPill.textContent = S.data ? (list.length ? list.length + ' new' : st.status) : '-';
+    ui.suggestPill.className = 'ew-pill ' + (list.length ? 'warn' : 'unknown');
+    if (!list.length) { empty(body, st.status === 'ok' ? 'No new codes on the news page.' : st.text); return; }
+    const box = el('div', 'ew-list' + (S.err || st.status === 'stale' ? ' ew-stale' : ''));
+    list.forEach(function (c) {
+      const row = el('div', 'ew-erow suggested');
+      const head = el('div', 'ew-ehead');
+      head.appendChild(el('span', 'ew-ecode', c.code));
+      if (st.status === 'stale') head.appendChild(el('span', 'ew-badge', 'stale'));
+      const addB = el('button', 'ew-btn ew-bbtn', 'add');
+      addB.type = 'button';
+      addB.title = 'add as a coupon entry';
+      addB.addEventListener('click', function () {
+        const b = C.suggestAddBody(c);
+        if (b) send(b, 'added ' + c.code);
+      });
+      head.appendChild(addB);
+      const cp = el('button', 'ew-btn ew-bbtn', 'copy');
+      cp.type = 'button';
+      cp.addEventListener('click', function () { copy(c.code, 'code'); });
+      head.appendChild(cp);
+      row.appendChild(head);
+      const t = el('div', 'ew-mname ew-muted ew-gnum', (c.date ? c.date + ' - ' : '') + c.title);
+      t.title = c.url;
+      row.appendChild(t);
+      box.appendChild(row);
+    });
+    body.appendChild(box);
+  }
+
   function drawEvents(list) {
     const ui = S.ui;
     const body = ui.eventBody;
@@ -229,6 +270,8 @@
     body.textContent = '';
     const list = S.data && Array.isArray(S.data.sources) ? S.data.sources : [];
     if (!list.length) { empty(body, 'No sources listed.'); return; }
+    const st = C.suggestStatus(S.data.suggested);
+    body.appendChild(el('div', st.status === 'off' || st.status === 'error' ? 'ew-err' : 'ew-muted', st.text));
     const box = el('div', 'ew-list');
     list.forEach(function (s) {
       if (!s || typeof s.name !== 'string' || typeof s.url !== 'string') return;
@@ -260,6 +303,7 @@
     S.sig = signature(list);
     ui.err.textContent = S.err ? (S.data ? 'last data - ' : '') + S.err : '';
     drawCoupons(list.filter(function (r) { return r.kind === 'coupon'; }));
+    drawSuggested();
     drawEvents(list.filter(function (r) { return r.kind !== 'coupon'; }));
     drawSources();
   }
@@ -354,13 +398,15 @@
     panel.classList.add('ew-events');
     const a = addCard();
     const cp = card('Coupons');
+    const sg = card('Suggested coupons');
     const ev = card('Events and drops');
     const src = card('Sources');
     src.pill.textContent = 'official';
-    [a, cp, ev, src].forEach(function (x) { panel.appendChild(x.card); });
+    [a, cp, sg, ev, src].forEach(function (x) { panel.appendChild(x.card); });
     S.ui = {
       form: a.form, msg: a.msg, err: a.err,
-      couponBody: cp.body, couponPill: cp.pill, eventBody: ev.body, eventPill: ev.pill,
+      couponBody: cp.body, couponPill: cp.pill, suggestBody: sg.body, suggestPill: sg.pill,
+      eventBody: ev.body, eventPill: ev.pill,
       sourceBody: src.body, clocks: []
     };
     kindChanged();
