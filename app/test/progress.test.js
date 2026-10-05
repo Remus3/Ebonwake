@@ -211,5 +211,8 @@ test('dashboard loads and mounts progress.js; CSP unchanged', () => {
 
 test('overlay never posts to /api/progress', () => {
   const src = read('overlay/overlay.js');
-  assert.doesNotMatch(src, /\/api\/progress|POST|ewApi/);
+  // plan 013: the opt-in season line GETs /api/progress; still never a POST.
+  assert.doesNotMatch(src, /POST|ewApi|method:/);
+  const uses = src.match(/['"]\/api\/progress['"]/g) || [];
+  assert.strictEqual(uses.length, (src.match(/getJSON\('\/api\/progress'\)/g) || []).length);
 });

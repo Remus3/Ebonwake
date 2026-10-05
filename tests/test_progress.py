@@ -405,7 +405,7 @@ def _req(s, method, path, body=None, ctype="application/json", host=None):
 
 def test_route_get_progress(psrv):
     st, doc = _req(psrv, "GET", "/api/progress")
-    assert st == 200 and set(doc) == {"character", "tracks", "profile"}
+    assert st == 200 and set(doc) == {"character", "tracks", "season", "profile"}  # 013 season
     assert doc["profile"]["status"] in ("pending", "ok")  # refresh runs off the request
     assert _wait(lambda: _req(psrv, "GET", "/api/progress")[1]["profile"]["status"] == "ok")
     doc = _req(psrv, "GET", "/api/progress")[1]

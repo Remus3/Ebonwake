@@ -223,7 +223,7 @@ test('buffRows: server buffs merged with defaults by name, armed first by time l
 test('overlayWidgets: grind widgets default on, opt-out via config.overlay.widgets', () => {
   // eventsSoon (plan 006) rides the same mechanism; see events.test.js.
   // leveling (plan 011) is the one opt-in-only widget: default off.
-  const on = { grindSession: true, grindBuff: true, eventsSoon: true, leveling: false };
+  const on = { grindSession: true, grindBuff: true, eventsSoon: true, leveling: false, season: false };
   assert.deepStrictEqual(C.overlayWidgets({}), on);
   assert.deepStrictEqual(C.overlayWidgets(null), on);
   assert.deepStrictEqual(C.overlayWidgets({ overlay: { widgets: { grindBuff: false } } }), Object.assign({}, on, { grindBuff: false }));

@@ -111,6 +111,14 @@ html, body {
   border: 1px solid transparent; border-radius: var(--ew-radius); padding: 0 5px;
 }
 .ew-tx:hover { color: var(--fk-status-bad); border-color: var(--fk-border); }
+/* Season pass (plan 013): done but unclaimed = highlighted, not struck through. */
+.ew-season .ew-trow { grid-template-columns: minmax(0, 1fr) auto; }
+.ew-trow.ew-unclaimed { background: var(--fk-surface); border-left: 2px solid var(--fk-status-warn); }
+.ew-trow.ew-unclaimed .ew-mname { color: var(--fk-status-warn); text-decoration: none; }
+.ew-season .ew-tmeta .ew-mname { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ew-objadd summary { cursor: pointer; font-size: 12px; margin-top: 4px; }
+.ew-objadd .ew-form { display: flex; flex-wrap: wrap; gap: 4px; }
+.ew-objadd .ew-form input, .ew-objadd .ew-form select { width: 90px; }
 .ew-form select {
   width: 134px; font: inherit; color: var(--fk-text); background: var(--fk-surface);
   border: 1px solid var(--fk-border); border-radius: var(--ew-radius); padding: 3px 6px;

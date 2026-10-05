@@ -115,7 +115,9 @@ class EWServer(ThreadingHTTPServer):
             family = progress.family_from_config(cfg)
             if family is not None:
                 profile_client = progress.ProfileClient(family, base_url=cfg.get("base_url"))
-        self.progress = progress.ProgressService(self.store, profile_client)
+        # Season level objectives auto-tick from the newest XP sample (plan 013).
+        self.progress = progress.ProgressService(
+            self.store, profile_client, level=lambda: self.leveling.current_level())
         self.grind = grind.GrindService(self.store, clock=grind_clock or time.time)
         # XP stack counts armed grind buffs that carry an xp_pct (plan 011).
         self.leveling = leveling.LevelingService(self.store, clock=leveling_clock or time.time,
@@ -251,9 +253,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post_progress(self, body):
         ops = {"character": "set_character", "step": "step", "add_track": "add_track",
-               "remove_track": "remove_track"}
+               "remove_track": "remove_track", "claim": "claim", "obj_add": "obj_add",
+               "obj_edit": "obj_edit", "obj_del": "obj_del"}
         if len(body) != 1 or not (set(ops) & set(body)):
-            raise ValueError("body must be one of {character|step|add_track|remove_track: ...}")
+            raise ValueError("body must be one of {character|step|add_track|remove_track|"
+                             "claim|obj_add|obj_edit|obj_del: ...}")
         (op, arg), = body.items()
         return getattr(self.server.progress, ops[op])(arg)
 

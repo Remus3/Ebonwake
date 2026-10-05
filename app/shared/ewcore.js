@@ -414,9 +414,113 @@
         if (!s || s.id !== stepId) return s;
         return Object.assign({}, s, { done_at: iso });
       });
+      // Season objectives (plan 013) mirror the step; an untick drops the claim too.
+      if (Array.isArray(t.objectives)) {
+        nt.objectives = t.objectives.map(function (o) {
+          if (!o || o.id !== stepId) return o;
+          const patch = { done_at: iso, done: iso !== null };
+          if (iso === null) { patch.claimed_at = null; patch.claimed = false; }
+          return Object.assign({}, o, patch);
+        });
+      }
       return Object.assign(nt, trackPct(nt));
     });
     return copy;
+  }
+
+  // ---- Season pass by objective (plan 013) ----
+  const OBJ_KINDS = ['level', 'gear', 'quest', 'other'];
+  const GEAR_TARGET = [1, 20];               // server GEAR_RANGE
+  const REWARD_MAX = 80;                     // server MAX_REWARD
+  const GEAR_GRADES = ['PRI', 'DUO', 'TRI', 'TET', 'PEN'];
+  const NEXT_OPEN = 3;
+
+  function fmtTarget(kind, target) {
+    if (kind === 'level' && inRange(target, LEVEL)) return 'Lv ' + target;
+    if (kind === 'gear' && inRange(target, GEAR_TARGET)) return target > 15 ? GEAR_GRADES[target - 16] : '+' + target;
+    return '';
+  }
+
+  // Next open (up to 3, list order), done-but-unclaimed, and counts.
+  function seasonGroups(track) {
+    const objs = track && Array.isArray(track.objectives) ? track.objectives.filter(plainObject) : [];
+    const done = objs.filter(function (o) { return !!o.done_at; });
+    return {
+      next: objs.filter(function (o) { return !o.done_at; }).slice(0, NEXT_OPEN),
+      unclaimed: done.filter(function (o) { return !o.claimed_at; }),
+      done: done.length,
+      total: objs.length,
+      claimed: done.length - done.filter(function (o) { return !o.claimed_at; }).length
+    };
+  }
+
+  // Overlay one-liner from GET /api/progress `season`: "Pass 23/40 - next: Lv 50 (2 lv)".
+  function seasonLine(s) {
+    if (!plainObject(s) || typeof s.track !== 'string' || !isNum(s.done) || !isNum(s.total)) {
+      return 'no season pass track';
+    }
+    let line = 'Pass ' + s.done + '/' + s.total;
+    const n = Array.isArray(s.next) && plainObject(s.next[0]) ? s.next[0] : null;
+    if (!n) line += ' - all done';
+    else if (n.kind === 'level' && inRange(n.target, LEVEL)) {
+      line += ' - next: Lv ' + n.target + (isNum(n.gap) && n.gap > 0 ? ' (' + n.gap + ' lv)' : '');
+    } else line += ' - next: ' + String(n.title || n.id || '?');
+    const un = Array.isArray(s.unclaimed) ? s.unclaimed.length : 0;
+    if (un > 0) line += ' | claim ' + un;
+    return line;
+  }
+
+  function validReward(r) {
+    return typeof r === 'string' && r.length <= REWARD_MAX && !/[\u0000-\u001f\u007f]/.test(r);
+  }
+
+  function validObjFields(v) {
+    if (v.title !== undefined && !validTitle(v.title)) return false;
+    if (v.kind !== undefined && OBJ_KINDS.indexOf(v.kind) < 0) return false;
+    if (v.target !== undefined && v.target !== null && !isInt(v.target, 1)) return false;
+    return v.reward === undefined || validReward(v.reward);
+  }
+
+  function validObjRef(v, keys) {
+    return plainObject(v) && onlyKeys(v, keys) && typeof v.track === 'string' && ID.test(v.track) &&
+      typeof v.objective === 'string' && ID.test(v.objective);
+  }
+
+  // Objective add form -> {obj_add: {...}} body, or an operator error. Gear
+  // target takes a number or a grade (PRI..PEN). With `objective` (an id) the
+  // same form edits in place: {obj_edit: {track, objective, title, kind,
+  // target, reward}} - done/claim marks and list position are kept.
+  function parseObjectiveForm(track, form, objective) {
+    const r = parseObjectiveAdd(track, form);
+    if (!r.ok || objective === undefined) return r;
+    return { ok: true, body: { obj_edit: Object.assign({ objective: objective }, r.body.obj_add) } };
+  }
+
+  // Inverse of fmtTarget for the form's target box.
+  function targetInput(kind, target) {
+    if (kind === 'gear') return fmtTarget(kind, target).replace(/^\+/, '');
+    return kind === 'level' && inRange(target, LEVEL) ? String(target) : '';
+  }
+
+  function parseObjectiveAdd(track, form) {
+    const f = form || {};
+    const title = typeof f.title === 'string' ? f.title.trim() : '';
+    if (!title) return { ok: false, error: 'title required' };
+    if (!validTitle(title)) return { ok: false, error: 'title: up to ' + TITLE_MAX + ' plain characters' };
+    if (OBJ_KINDS.indexOf(f.kind) < 0) return { ok: false, error: 'kind must be level, gear, quest or other' };
+    const raw = f.target === undefined || f.target === null ? '' : String(f.target).trim().toUpperCase();
+    let target = null;
+    if (f.kind === 'level') {
+      target = wholeIn(raw, LEVEL);
+      if (target === null) return { ok: false, error: 'level target must be ' + LEVEL[0] + '-' + LEVEL[1] };
+    } else if (f.kind === 'gear' && raw) {
+      const g = GEAR_GRADES.indexOf(raw);
+      target = g >= 0 ? 16 + g : wholeIn(raw.replace(/^\+/, ''), GEAR_TARGET);
+      if (target === null) return { ok: false, error: 'gear target: +1..+20 or PRI..PEN' };
+    } else if (raw) return { ok: false, error: f.kind + ' takes no target' };
+    const reward = typeof f.reward === 'string' ? f.reward.trim() : '';
+    if (!validReward(reward)) return { ok: false, error: 'reward: up to ' + REWARD_MAX + ' plain characters' };
+    return { ok: true, body: { obj_add: { track: track, title: title, kind: f.kind, target: target, reward: reward } } };
   }
 
   function inRange(v, r) { return isInt(v, r[0]) && v <= r[1]; }
@@ -449,6 +553,20 @@
         TRACK_KINDS.indexOf(v.kind) >= 0 && Array.isArray(v.steps) && v.steps.length <= STEPS_MAX &&
         v.steps.every(validTitle);
     }
+    if (k === 'claim') {
+      return validObjRef(v, ['track', 'objective', 'claimed']) && typeof v.claimed === 'boolean';
+    }
+    if (k === 'obj_add') {
+      return plainObject(v) && onlyKeys(v, ['track', 'title', 'kind', 'target', 'reward']) &&
+        typeof v.track === 'string' && ID.test(v.track) && v.title !== undefined && v.kind !== undefined &&
+        validObjFields(v);
+    }
+    if (k === 'obj_edit') {
+      const edits = ['title', 'kind', 'target', 'reward'];
+      return validObjRef(v, ['track', 'objective'].concat(edits)) &&
+        edits.some(function (e) { return v[e] !== undefined; }) && validObjFields(v);
+    }
+    if (k === 'obj_del') return validObjRef(v, ['track', 'objective']);
     return false;
   }
 
@@ -1430,9 +1548,9 @@
   // Overlay widgets (spec section 3). Main reads config.overlay.widgets and
   // hands the overlay a query string. Default on (only a literal false turns
   // one off), except the WIDGETS_OPT_IN ones: default off, only a literal true
-  // turns them on (plan 011 leveling).
-  const WIDGETS = ['grindSession', 'grindBuff', 'eventsSoon', 'leveling'];
-  const WIDGETS_OPT_IN = ['leveling'];
+  // turns them on (plan 011 leveling, plan 013 season).
+  const WIDGETS = ['grindSession', 'grindBuff', 'eventsSoon', 'leveling', 'season'];
+  const WIDGETS_OPT_IN = ['leveling', 'season'];
 
   function optIn(k) { return WIDGETS_OPT_IN.indexOf(k) >= 0; }
 
@@ -1502,6 +1620,12 @@
     gsTotal: gsTotal,
     trackPct: trackPct,
     withStep: withStep,
+    OBJ_KINDS: OBJ_KINDS,
+    fmtTarget: fmtTarget,
+    seasonGroups: seasonGroups,
+    seasonLine: seasonLine,
+    parseObjectiveForm: parseObjectiveForm,
+    targetInput: targetInput,
     validProgressBody: validProgressBody,
     parseCharacterForm: parseCharacterForm,
     parseTrackForm: parseTrackForm,
