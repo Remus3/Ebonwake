@@ -94,6 +94,29 @@ html, body {
 .ew-btn:hover { border-color: var(--fk-accent); }
 .ew-msg { min-height: 1.4em; }
 
+/* Today tab (plan 003): checklists scroll inside their card (ew-mcard/ew-cbody). */
+.ew-tmeta { display: flex; gap: 6px; align-items: center; }
+.ew-tclock { font: 12px var(--ew-mono); text-transform: none; letter-spacing: 0; color: var(--fk-text); }
+.ew-trow {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center;
+  gap: 6px; padding: 2px 4px; border-radius: var(--ew-radius);
+}
+.ew-trow:hover { background: var(--fk-surface); }
+.ew-trow.done .ew-mname { color: var(--fk-text-muted); text-decoration: line-through; }
+.ew-tlabel { display: flex; align-items: center; gap: 6px; min-width: 0; cursor: pointer; }
+.ew-tlabel input { margin: 0; accent-color: var(--fk-accent); }
+.ew-tdays { font-size: 12px; white-space: nowrap; }
+.ew-tx {
+  font: 11px var(--ew-font); color: var(--fk-text-muted); background: none; cursor: pointer;
+  border: 1px solid transparent; border-radius: var(--ew-radius); padding: 0 5px;
+}
+.ew-tx:hover { color: var(--fk-status-bad); border-color: var(--fk-border); }
+.ew-form select {
+  width: 134px; font: inherit; color: var(--fk-text); background: var(--fk-surface);
+  border: 1px solid var(--fk-border); border-radius: var(--ew-radius); padding: 3px 6px;
+}
+.ew-form input[type="text"], .ew-form input[type="date"] { width: 120px; }
+
 /* Overlay: glanceable, corner-anchored, translucent. */
 html.ew-overlay, html.ew-overlay body { background: transparent; }
 .ew-ov {
@@ -102,4 +125,5 @@ html.ew-overlay, html.ew-overlay body { background: transparent; }
   border: 1px solid var(--fk-border); font-size: 12px;
 }
 .ew-ov-row { display: flex; justify-content: space-between; gap: 12px; }
+.ew-ov-row .ew-stale { color: var(--fk-text-muted); }
 .ew-card h2 .ew-pill { text-transform: none; letter-spacing: 0; font-weight: 400; }
