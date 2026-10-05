@@ -1,0 +1,14 @@
+Ebonwake
+Copyright 2026 the operator
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+ops/fleet_kit/ is the MAIN fleet kit, vendored unmodified under its own
+LICENSE and NOTICE in that directory.
+
+ops/loop/slots.py is a shared, byte-identical concurrency governor from the
+same operator's fleet, Apache-2.0.
+
+Black Desert is a trademark of Pearl Abyss Corp. Ebonwake is not affiliated
+with or endorsed by Pearl Abyss. Market data is fetched at run time from
+public APIs (arsha.io); no game data is vendored.

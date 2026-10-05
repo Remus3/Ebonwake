@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.png binary
+*.ico binary
+# Byte-pinned shared files: never normalised.
+ops/fleet_kit/** -text
+ops/loop/slots.py -text

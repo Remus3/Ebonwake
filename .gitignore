@@ -1,0 +1,36 @@
+# Secrets and per-host config - NEVER commit (secrets live in user env vars,
+# referenced through fleet_secrets from config/local.json).
+config/local.json
+config/leak_needles.json
+.env
+.env.*
+*.key
+*.pem
+API-Key*
+*.secret
+*_token.txt
+
+# Runtime state, caches, store, logs
+ops/runtime/
+ops/loop/control/*
+!ops/loop/control/.gitkeep
+logs/
+*.log
+
+# Channel (per-host, never published)
+moon_sync_inbox/
+moon_sync_outbox/
+
+# Python / Node
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+node_modules/
+app/out/
+app/dist/
+
+# Claude per-host
+.claude/settings.local.json
+.claude/worktrees/
+_scratch/

@@ -1,0 +1,47 @@
+{
+ "env": {
+  "PYTHONIOENCODING": "utf-8",
+  "PYTHONUTF8": "1",
+  "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1"
+ },
+ "permissions": {
+  "allow": [
+   "Bash(git status:*)",
+   "Bash(git log:*)",
+   "Bash(git diff:*)",
+   "Bash(python -m pytest:*)",
+   "Bash(npm test:*)",
+   "Bash(python tools/eta.py:*)",
+   "Bash(python tools/leak_sweep.py:*)",
+   "Bash(python tools/ew_lane.py:*)",
+   "Bash(gh run:*)"
+  ],
+  "deny": []
+ },
+ "hooks": {
+  "SessionStart": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python tools/ew_facts.py",
+      "timeout": 8
+     }
+    ]
+   }
+  ],
+  "PostToolUse": [
+   {
+    "matcher": "Edit|Write",
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python tools/ew_facts.py --edit-guard",
+      "timeout": 10
+     }
+    ]
+   }
+  ]
+ },
+ "spinnerTipsEnabled": false
+}
