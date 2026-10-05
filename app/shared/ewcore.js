@@ -1673,8 +1673,9 @@
   const EPOCH_ID_RE = /^[a-z0-9-]{1,40}$/;
   const EPOCH_SOURCE_MAX = 200;
 
-  function validAscii(t, max) {
-    return typeof t === 'string' && t.trim().length > 0 && t.length <= max && /^[\x20-\x7e]*$/.test(t);
+  function validAscii(t, max, allowEmpty) {
+    return typeof t === 'string' && (allowEmpty === true || t.trim().length > 0) && t.length <= max &&
+      /^[\x20-\x7e]*$/.test(t);
   }
 
   function validMilestones(v) {
@@ -1694,6 +1695,17 @@
     if (k === 'hot_del') return validRef(v, HOT_ID_RE);
     if (k === 'milestones') return validMilestones(v);
     if (k === 'epoch_del') return validRef(v, EPOCH_ID_RE);
+    if (k === 'deadline_del') return validRef(v, EPOCH_ID_RE);
+    if (k === 'deadline_set') {
+      const keys = ['id', 'label', 'needs_level', 'enrol_by_utc', 'quests_by_utc', 'source', 'verified'];
+      const extra = plainObject(v) ? Object.keys(v).filter(function (x) { return keys.indexOf(x) < 0; }) : [];
+      return plainObject(v) && keys.every(function (x) { return x in v; }) &&
+        (extra.length === 0 || (extra.length === 1 && extra[0] === 'note' && validAscii(v.note, EPOCH_SOURCE_MAX, true))) &&
+        validRef(v.id, EPOCH_ID_RE) && validAscii(v.label, HOT_LABEL_MAX) && inRange(v.needs_level, LEVEL) &&
+        typeof v.enrol_by_utc === 'string' && ISO_TS.test(v.enrol_by_utc) &&
+        (v.quests_by_utc === null || (typeof v.quests_by_utc === 'string' && ISO_TS.test(v.quests_by_utc))) &&
+        validAscii(v.source, EPOCH_SOURCE_MAX) && typeof v.verified === 'boolean';
+    }
     if (k === 'epoch_add') {
       return exact(v, ['id', 'starts_utc', 'label', 'source', 'verified']) && validRef(v.id, EPOCH_ID_RE) &&
         typeof v.starts_utc === 'string' && ISO_TS.test(v.starts_utc) && validAscii(v.label, HOT_LABEL_MAX) &&
@@ -1844,8 +1856,68 @@
       epochs: (Array.isArray(d.epochs) ? d.epochs : []).map(epochBrief).filter(function (e) { return e !== null; }),
       epoch_error: typeof d.epoch_error === 'string' ? d.epoch_error : null,
       kill_xp_cap: typeof d.kill_xp_cap === 'string' ? d.kill_xp_cap : null,
+      // Plan 024 level-gated deadlines, already decorated with state by the server.
+      deadlines: (Array.isArray(d.deadlines) ? d.deadlines : []).map(deadlineBrief).filter(function (x) { return x !== null; }),
       samples: (Array.isArray(d.samples) ? d.samples : []).filter(plainObject)
     };
+  }
+
+  // ---- plan 024: level-gated deadlines (Olvia Academy) ----
+  const DEADLINE_STATES = ['done', 'on_track', 'tight', 'late', 'unknown'];
+  const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  function deadlineBrief(d) {
+    if (!plainObject(d) || typeof d.id !== 'string' || typeof d.label !== 'string' ||
+      !inRange(d.needs_level, LEVEL) || typeof d.enrol_by_utc !== 'string' ||
+      DEADLINE_STATES.indexOf(d.state) < 0) return null;
+    return { id: d.id, label: d.label, needs_level: d.needs_level, enrol_by_utc: d.enrol_by_utc,
+      state: d.state, reach_utc: typeof d.reach_utc === 'string' ? d.reach_utc : null,
+      margin_h: isNum(d.margin_h) ? d.margin_h : null, verified: d.verified === true };
+  }
+
+  // ISO time -> "Nov 5" (UTC date: deadlines are published as UTC days), '?' for junk.
+  function fmtMonthDay(iso) {
+    const t = typeof iso === 'string' ? Date.parse(iso) : NaN;
+    if (!isFinite(t)) return '?';
+    const d = new Date(t);
+    return MONTH_NAMES[d.getUTCMonth()] + ' ' + d.getUTCDate();
+  }
+
+  // Pill for one deadline row: {text, cls} (cls is an ew-pill state class).
+  function deadlinePill(d) {
+    const b = deadlineBrief(d);
+    if (!b) return { text: '-', cls: 'unknown' };
+    return {
+      done: { text: 'done', cls: 'ok' }, on_track: { text: 'on track', cls: 'ok' },
+      tight: { text: 'tight', cls: 'warn' }, late: { text: 'late', cls: 'bad' },
+      unknown: { text: 'no rate', cls: 'unknown' }
+    }[b.state];
+  }
+
+  // "Olvia Academy: Lv 60 by Nov 5 - you reach 60 ~Oct 29 (on track)".
+  function deadlineLine(d) {
+    const b = deadlineBrief(d);
+    if (!b) return '';
+    const head = b.label + ': Lv ' + b.needs_level + ' by ' + fmtMonthDay(b.enrol_by_utc) +
+      (b.verified ? '' : ' (verify date)') + ' - ';
+    let tail;
+    if (b.state === 'done') tail = 'Lv ' + b.needs_level + ' reached';
+    else if (b.reach_utc) tail = 'you reach ' + b.needs_level + ' ~' + fmtMonthDay(b.reach_utc);
+    else if (b.state === 'late') tail = 'enrolment closed';
+    else tail = 'log XP for an ETA';
+    return head + tail + ' (' + deadlinePill(b).text + ')';
+  }
+
+  // Overlay: the worst tight / late deadline as {text, cls}, or null (shown
+  // only when one is at risk).
+  function deadlineAlert(list) {
+    const rows = (Array.isArray(list) ? list : []).map(deadlineBrief).filter(function (b) {
+      return b !== null && (b.state === 'late' || b.state === 'tight');
+    });
+    if (!rows.length) return null;
+    const late = rows.filter(function (b) { return b.state === 'late'; });
+    const b = (late.length ? late : rows)[0];
+    return { text: b.label + ' Lv ' + b.needs_level + ' ' + deadlinePill(b).text, cls: deadlinePill(b).cls };
   }
 
   // Live hot status `since` the fetch: {active, next, stack, due}. due = a
@@ -2156,6 +2228,12 @@
     normalizeLeveling: normalizeLeveling,
     hotLive: hotLive,
     levelingLine: levelingLine,
+    DEADLINE_STATES: DEADLINE_STATES,
+    deadlineBrief: deadlineBrief,
+    fmtMonthDay: fmtMonthDay,
+    deadlinePill: deadlinePill,
+    deadlineLine: deadlineLine,
+    deadlineAlert: deadlineAlert,
     overlayWidgets: overlayWidgets,
     widgetsQuery: widgetsQuery,
     widgetsFromQuery: widgetsFromQuery,

@@ -239,15 +239,36 @@
     body.appendChild(box);
   }
 
+  function deadlines() {
+    const raw = S.data && Array.isArray(S.data.deadlines) ? S.data.deadlines : [];
+    return raw.filter(function (d) { return C.deadlineBrief(d) !== null && typeof d.left_s === 'number'; });
+  }
+
   function drawEvents(list) {
     const ui = S.ui;
     const body = ui.eventBody;
     body.textContent = '';
-    const soon = list.filter(function (r) { return r.soon; }).length;
+    const dls = deadlines();
+    const soon = list.filter(function (r) { return r.soon; }).length + dls.length;
     ui.eventPill.textContent = S.data ? (soon ? soon + ' ending soon' : list.length + ' items') : '-';
     ui.eventPill.className = 'ew-pill ' + (soon ? 'warn' : 'unknown');
-    if (!list.length) { empty(body, 'No events or drops yet.'); return; }
+    if (!list.length && !dls.length) { empty(body, 'No events or drops yet.'); return; }
     const box = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
+    // Plan 024: level-gated deadlines (Olvia Academy) closing within 14 days,
+    // read-only: edited on the Leveling card's data, never stored as events.
+    dls.forEach(function (d) {
+      const row = el('div', 'ew-erow active soon');
+      const head = el('div', 'ew-ehead');
+      const t = el('span', 'ew-mname', C.deadlineLine(d));
+      t.title = 'closes ' + d.enrol_by_utc;
+      head.appendChild(t);
+      head.appendChild(el('span', 'ew-badge', 'deadline'));
+      head.appendChild(el('span', 'ew-mprice ew-gnum', C.fmtLeft(d.left_s - Math.max(0, (Date.now() - S.at) / 1000))));
+      const p = C.deadlinePill(d);
+      head.appendChild(el('span', 'ew-pill ' + p.cls, p.text));
+      row.appendChild(head);
+      box.appendChild(row);
+    });
     list.forEach(function (r) {
       const row = el('div', rowCls(r));
       const head = el('div', 'ew-ehead');

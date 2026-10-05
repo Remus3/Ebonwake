@@ -135,7 +135,9 @@ class EWServer(ThreadingHTTPServer):
         self.spots = spots.SpotsService.from_file(
             character=lambda: self.progress.view(refresh=False)["character"],
             grind=self.grind.view, epoch=self.leveling.active_epoch)
-        self.events = events.EventsService(self.store, clock=events_clock or time.time)
+        # Plan 024: level-gated deadlines show read-only in "Ending soon".
+        self.events = events.EventsService(self.store, clock=events_clock or time.time,
+                                           deadlines=self.leveling.deadline_rows)
         # Coupon suggestions (plan 014): off unless a client is passed; only main()
         # passes the live one, so no test ever reaches the network.
         self.coupons = coupons.CouponService(coupon_client, self.events, spawn=coupon_spawn)
@@ -313,10 +315,11 @@ class Handler(BaseHTTPRequestHandler):
     def _post_leveling(self, body):
         ops = {"sample": "sample", "sample_del": "sample_del", "hot_add": "hot_add",
                "hot_del": "hot_del", "milestones": "set_milestones",
-               "epoch_add": "epoch_add", "epoch_del": "epoch_del"}
+               "epoch_add": "epoch_add", "epoch_del": "epoch_del",
+               "deadline_set": "deadline_set", "deadline_del": "deadline_del"}
         if len(body) != 1 or not (set(ops) & set(body)):
             raise ValueError("body must be one of {sample|sample_del|hot_add|hot_del|"
-                             "milestones|epoch_add|epoch_del: ...}")
+                             "milestones|epoch_add|epoch_del|deadline_set|deadline_del: ...}")
         (op, arg), = body.items()
         return getattr(self.server.leveling, ops[op])(arg)
 

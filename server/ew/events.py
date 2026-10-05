@@ -19,6 +19,7 @@ MAX_REWARDS = 200
 MAX_URL = 300
 MAX_ITEMS = 300
 SOON_S = 172800  # 48 h
+DEADLINE_SOON_S = 14 * 86400  # plan 024: level-gated deadlines show 14 days out
 WINDOW = _dt.timedelta(days=730)  # starts/ends within 2 years of now, either side
 ID_RE = re.compile(r"^e[0-9]{1,9}$")
 CODE_RE = re.compile(r"^[A-Za-z0-9-]{4,40}$")
@@ -148,11 +149,14 @@ def _num(iid):
 class EventsService:
     """Store domain `events`: {"items": [{id, kind, title, code, rewards, starts,
     ends, url, done}], "next_id": int, "updated": "<iso>"}. Ids are e<N> from a
-    never-reused counter."""
+    never-reused counter. `deadlines` (plan 024) returns the leveling view's
+    decorated deadline rows; those within DEADLINE_SOON_S of enrolment closing
+    (level not yet reached) are listed read-only, never stored here."""
 
-    def __init__(self, store, clock=time.time):
+    def __init__(self, store, clock=time.time, deadlines=None):
         self.store = store
         self.clock = clock
+        self.deadlines = deadlines
         self._lock = threading.Lock()  # read-modify-write; Store guards each file op
         with self._lock:
             if "items" not in self.store.get("events"):
@@ -237,7 +241,25 @@ class EventsService:
             if r["status"] in ("active", "upcoming"):
                 counts[r["kind"]] += 1
         return {"now": _iso(now), "sources": [dict(s) for s in SOURCES], "counts": counts,
-                "items": items}
+                "items": items, "deadlines": self._deadlines_soon(now)}
+
+    def _deadlines_soon(self, now):
+        """Read-only "Ending soon" rows: {id, label, needs_level, enrol_by_utc,
+        state, reach_utc, verified, left_s} closing within DEADLINE_SOON_S, not done."""
+        if self.deadlines is None:
+            return []
+        out = []
+        for d in self.deadlines():
+            ends = _parse_iso(d.get("enrol_by_utc"))
+            if ends is None or d.get("state") == "done":
+                continue
+            left = int((ends - now).total_seconds())
+            if 0 < left <= DEADLINE_SOON_S:
+                out.append({"id": d["id"], "label": d["label"], "needs_level": d["needs_level"],
+                            "enrol_by_utc": d["enrol_by_utc"], "state": d["state"],
+                            "reach_utc": d["reach_utc"], "verified": d.get("verified") is True,
+                            "left_s": left})
+        return out
 
     def source(self):
         """`/api/state` sources.events: {updated, status: "ok", open, soonest}."""

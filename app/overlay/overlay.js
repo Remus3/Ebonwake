@@ -12,7 +12,7 @@
    each SSE `game` event. Always shown; offline keeps the last state, muted.
    Leveling (plan 011): opt-in (default off) one line from GET /api/leveling,
    same cadence plus each SSE `leveling` event; ETA and Hot Time count down
-   locally.
+   locally. Plan 024: a pill when a level-gated deadline is tight or late.
    Season (plan 013): opt-in (default off) one line from GET /api/progress
    `season` ("Pass 23/40 - next: Lv 50 (2 lv)"), same cadence plus each SSE
    `leveling` event (a new XP sample can auto-tick a level objective).
@@ -130,6 +130,12 @@
     v.textContent = lev ? C.levelingLine(lev, levAt, now) : (levStale ? 'offline' : '-');
     v.title = v.textContent;
     v.className = 'ew-ov-val ew-mname' + (levStale ? ' ew-stale' : '');
+    // Plan 024: deadline pill only when a level-gated deadline is tight or late.
+    const p = document.getElementById('ov-deadline');
+    const a = lev ? C.deadlineAlert(lev.deadlines) : null;
+    p.hidden = !a;
+    p.textContent = a ? a.text : '';
+    p.className = 'ew-pill ' + (a ? a.cls : 'unknown') + (levStale ? ' ew-stale' : '');
     showRow('ov-leveling-row', true, v.textContent);
   }
 
