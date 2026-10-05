@@ -31,8 +31,10 @@ MAX_SLOTS = 3
 CODE = "EW"
 # Headless -p has no prompt to approve edits; code lanes run in acceptEdits so
 # file edits land in the lane worktree. Bash stays on the project allow list
-# (tests, eta, leak sweep); commits and merges are done by the main session.
-CODE_EXTRA = ("--permission-mode", "acceptEdits")
+# plus the gate commands below; commits and merges are done by the main session.
+CODE_EXTRA = ("--permission-mode", "acceptEdits", "--allowedTools",
+              "Bash(python -m pytest:*),Bash(npm test:*),Bash(node --test:*),"
+              "Bash(python tools/leak_sweep.py:*)")
 sys.path.insert(0, str(ROOT / "tools"))
 import eta  # noqa: E402
 

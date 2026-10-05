@@ -78,5 +78,7 @@ def test_code_lane_runs_accept_edits_read_lane_does_not(tmp_path):
     seen, f = _fakes()
     ew_lane.run_lane("build", "do x", writes_code=True, root=tmp_path, **f)
     ew_lane.run_lane("review", "look", root=tmp_path, **f)
-    assert seen["spawn"][0][1]["extra"] == ("--permission-mode", "acceptEdits")
+    extra = seen["spawn"][0][1]["extra"]
+    assert extra[:2] == ("--permission-mode", "acceptEdits")
+    assert "Bash(python -m pytest:*)" in extra[3] and "git" not in extra[3]
     assert seen["spawn"][1][1]["extra"] == ()
