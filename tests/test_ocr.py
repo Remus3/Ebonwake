@@ -648,8 +648,10 @@ def test_parse_tsv_keeps_comma_read_as_space_together():
 
 # -- word-gap fix: digit|digit boundaries + ink probe -------------------------------
 
-def _gap_tsv(gap, h2=30, y2=0, h1=30):
-    """"Silver 1,234,567 100" at x3-like sizes; `gap` px between amount and 100."""
+def _gap_tsv(gap, h2=30, y2=0, h1=34):
+    """"Silver 1,234,567 100" at x3-like sizes; `gap` px between amount and 100.
+    The comma word's box runs 4 px below the digit baseline (its comma tails, as
+    Tesseract boxes them - plan 016 measured 0.13-0.19 h on the bench)."""
     return TSV_HEAD + _tsv_row(1, 1, 0, 0, 120, 30, "Silver") \
         + _tsv_row(1, 2, 132, 0, 200, h1, "1,234,567") \
         + _tsv_row(1, 3, 332 + gap, y2, 54, h2, "100")
@@ -672,7 +674,8 @@ def test_parse_tsv_non_digit_boundary_keeps_wide_split():
     assert ocr.parse_tsv(out)["lines"][0]["text"] == "Silver 1,234,567"
 
 
-@pytest.mark.parametrize("kw", [{"h2": 22}, {"y2": 9}], ids=["height", "bottom"])
+@pytest.mark.parametrize("kw", [{"h2": 22, "h1": 30}, {"y2": 9, "h1": 30}],
+                         ids=["height", "bottom"])
 def test_parse_tsv_height_or_bottom_mismatch_splits(kw):
     doc = ocr.parse_tsv(_gap_tsv(gap=8, **kw))
     assert [ln["text"] for ln in doc["lines"]] == ["Silver 1,234,567", "100"]
@@ -684,8 +687,8 @@ def test_parse_tsv_bounds_rect_for_probe():
     b = bounds[0]
     assert doc["lines"][0]["text"][b["at"]] == " " and b["line"] == 0
     assert b["at"] == len("Silver 1,234,567")
-    # x: prev right + 1 .. next left - 1; y: baseline 30 - 0.15 h .. + 0.40 h
-    assert b["rect"] == (333, 26, 11, 16)
+    # x: prev right + 1 .. next left - 1; y: baseline 30 - 0.15 h .. + 0.40 h (h 34)
+    assert b["rect"] == (333, 25, 11, 19)
     assert b["cut"] == (166, 172)  # original px (scale 2)
     _, none = ocr._parse_tsv(_gap_tsv(gap=5))  # under PROBE_GAP: never probed
     assert none == []
@@ -795,8 +798,8 @@ def test_chain_probes_prepped_image_and_cuts(tmp_path):
     assert seen == [(tmp_path / "w", True, 1)]  # the prepped image, one call
 
 
-def test_cache_version_bumped_for_gap_fix():
-    assert ocr.CACHE_VERSION == "3"
+def test_cache_version_bumped_for_comma_drop_fix():
+    assert ocr.CACHE_VERSION == "4"  # 3: word-gap fix; 4: plan 016 swallowed comma
 
 
 def test_ink_ps1_ascii_lf():
@@ -837,8 +840,68 @@ def test_probe_cuts_only_the_last_gap(words, ink, want):
     rows, x = _tsv_row(1, 1, 0, 0, 120, 30, "Silver"), 132
     for i, w in enumerate(words):
         width = 18 * len(w)
-        rows += _tsv_row(1, 2 + i, x, 0, width, 30, w)
+        rows += _tsv_row(1, 2 + i, x, 0, width, 34 if "," in w else 30, w)  # comma tail
         x += width + 13  # 0.43 h: one space / a dropped comma
     doc, bounds = ocr._parse_tsv(TSV_HEAD + rows)
     out = ocr.split_spaced_amount(doc, bounds, "p.png", FakeProbe(ink[-1:]))
     assert ocr.extract_silver(out["lines"]) == want
+
+
+# -- plan 016: a dropped comma swallowed by the right word's box ---------------------
+# Recorded Tesseract tsv rows (x3 prep, psm 6) from tools/ocr_bench.py --live renders.
+
+def _rec(*words):
+    return TSV_HEAD + "".join(_tsv_row(1, i + 1, *w) for i, w in enumerate(words))
+
+
+C0017 = _rec((67, 43, 98, 32, "Silver:"), (182, 43, 88, 37, "4,521"),
+             (283, 43, 68, 37, "372"))          # "Silver: 4,521,372", 13 px dark on light
+G0010 = _rec((67, 43, 92, 32, "Silver"), (172, 43, 91, 37, "1,584"),
+             (280, 43, 59, 32, "100"))          # "Silver 1,584 100": one real space
+G0016 = _rec((70, 43, 115, 38, "Silver"), (203, 43, 109, 43, "9,384"),
+             (336, 43, 70, 43, "802"), (427, 43, 74, 38, "100"))  # "9,384,802 100"
+G0008 = _rec((4207, 2587, 92, 32, "Silver"), (4314, 2587, 15, 32, "7"),
+             (4336, 2587, 68, 38, "490"), (4420, 2587, 59, 32, "100"))  # "7,490 100"
+
+
+def test_dropped_comma_in_right_box_is_never_probed():
+    # c0017: the comma Tesseract dropped sits INSIDE the "372" box (its bottom
+    # reaches the comma tail of "4,521"), so the gap left of the box is clean
+    # paper and the ink probe read it as a space (old bench 142 -> 141).
+    doc, bounds = ocr._parse_tsv(C0017, scale=3)
+    assert doc["lines"][0]["text"] == "Silver: 4,521 372" and bounds == []
+    probe = FakeProbe([0.0])
+    out = ocr.split_spaced_amount(doc, bounds, "p.png", probe)
+    assert probe.calls == [] and ocr.extract_silver(out["lines"]) == 4521372
+
+
+def test_real_space_after_comma_word_still_probed_and_cut():
+    # g0010: "100" sits on the digit baseline, 0.14 h above the comma tail.
+    doc, bounds = ocr._parse_tsv(G0010, scale=3)
+    assert len(bounds) == 1
+    out = ocr.split_spaced_amount(doc, bounds, "p.png", FakeProbe([0.0]))
+    assert ocr.extract_silver(out["lines"]) == 1584
+
+
+@pytest.mark.parametrize("tsv,want", [(G0016, 9384802), (G0008, 7490)], ids=["g0016", "g0008"])
+def test_swallowed_comma_gap_dropped_real_space_kept(tsv, want):
+    # "802" / "490" carry the dropped comma (bottom at comma-tail depth; "7" has
+    # no comma of its own, so "490" sits below it); only the "100" gap is probed.
+    doc, bounds = ocr._parse_tsv(tsv, scale=3)
+    assert [doc["lines"][0]["text"][b["at"] + 1:].split()[0] for b in bounds] == ["100"]
+    out = ocr.split_spaced_amount(doc, bounds, "p.png", FakeProbe([0.0]))
+    assert ocr.extract_silver(out["lines"]) == want
+
+
+def test_swallowed_comma_word_passes_its_tail_to_the_next_gap():
+    # "9,384 802 100" with "100" also at comma-tail depth: "802" (plain text)
+    # descends like a comma word, so "100" level with it swallowed one too.
+    tsv = G0016.replace("427\t43\t74\t38", "427\t43\t74\t43")
+    doc, bounds = ocr._parse_tsv(tsv, scale=3)
+    assert bounds == [] and ocr.extract_silver(doc["lines"]) == 9384802100
+
+
+def test_plain_digit_words_on_one_baseline_stay_probe_able():
+    # "100 200": no comma on either side, same bottom - a real space candidate.
+    doc, bounds = ocr._parse_tsv(_rec((0, 0, 54, 30, "100"), (67, 0, 54, 30, "200")))
+    assert len(bounds) == 1

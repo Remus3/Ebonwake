@@ -20,7 +20,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 013 | Season pass tracker by objective, auto-tick level objectives | [ ] open |
 | 014 | Coupon auto-check vs the official news page (robots.txt-gated, suggest only) | [ ] open |
 | 015 | EW loop tick: inbox answers, lane dispatch, review + merge + push, idle deep-dive, 15-min scheduled task | [>] built in lane 2026-10-05 (install + read-back pending) |
-| 016 | OCR comma-drop regression: a vanished comma must not cut a digit group (old bench 141 -> 142/144) | [ ] open (priority) |
+| 016 | OCR comma-drop regression: a vanished comma must not cut a digit group (old bench 141 -> 142/144) | [x] done 2026-10-05 (loop; refute 1/3 PASS) |
 
 Ranking 011-014 (adjudicated 2026-10-05, value to a new Season Deadeye who is
 leveling now): 011 helps every leveling hour with zero external risk; 012
