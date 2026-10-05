@@ -15,6 +15,11 @@
   "overlay": {
     "widgets": {"grindSession": true, "grindBuff": true, "eventsSoon": true}
   },
+  "ocr": {
+    "_doc": "engine: auto (Tesseract if found, else Windows OCR) | tesseract | windows. tesseract: optional path to tesseract.exe when not on PATH or in the default install dir.",
+    "engine": "auto",
+    "tesseract": ""
+  },
   "market_watch": [4901],
   "profile": {
     "family": "",

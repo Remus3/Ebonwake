@@ -1,7 +1,10 @@
 """OCR of operator-taken screenshots (plan 009 slice A).
 
-Windows built-in Windows.Media.Ocr via the vendored PowerShell 5.1 script
-`tools/ocr.ps1`, one image per call, run with CREATE_NO_WINDOW and a timeout.
+Engine (plan 009 follow-up, measured by tools/ocr_bench.py): Tesseract when
+installed - image preprocessed by `tools/ocr_prep.ps1` (grayscale, invert when
+dark, upscale), passes TESS_PASSES until a silver amount is read - else the
+built-in Windows.Media.Ocr via `tools/ocr.ps1`. Every step is one subprocess
+with CREATE_NO_WINDOW and a timeout.
 Only a file the plan 008 watcher LISTED is read (read-only, by name, never a
 caller-supplied path); nothing reaches the game. Results are suggestions: the
 extractors only report, and the dashboard posts any accepted value to
@@ -28,6 +31,20 @@ from .store import atomic_write_json
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PS1 = REPO_ROOT / "tools" / "ocr.ps1"
+PREP_PS1 = REPO_ROOT / "tools" / "ocr_prep.ps1"
+# Engine choice measured by tools/ocr_bench.py (288 synthetic BDO-style silver /
+# amount renders, 11-28 px, 4 fonts, crops + 1920x1080 frames), 2026-10-05:
+# Windows.Media.Ocr x1 105/288, x2 159/288; Tesseract 5.4 preprocessed x3 psm6
+# 284/288, x3 psm11 282/288, x1 psm6 254/288; the chain below, replayed, 284/288
+# (the 4 misses are one wrong glyph: 3 at 14 px Arial, 1 at 28 px Malgun; fallbacks
+# only fire when a pass reads no amount at all).
+# Passes run in order until one yields a silver amount; the first pass's read
+# is kept when none does. Windows OCR is the fallback when Tesseract is absent
+# or fails (config `ocr.engine`: auto | tesseract | windows).
+TESS_PASSES = ((3.0, 6), (3.0, 11), (1.0, 6))
+PREP_MAX_DIM = 8000
+CACHE_VERSION = "2"  # bump when the engine chain changes; old reads re-OCR once
+ENGINES = ("auto", "tesseract", "windows")
 OCR_TIMEOUT_S = 60
 MAX_TEXT = 20000
 MAX_LINE_TEXT = 500
@@ -37,8 +54,9 @@ MAX_CACHE = 200
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 
 SILVER_WORD = re.compile(r"\bsilver\b", re.IGNORECASE)
-# 1,234,567 / 1.234.567 / "1, 234, 567" (OCR spacing) / plain digits.
-AMOUNT = re.compile(r"(?<![\w.,])(\d{1,3}(?:[,.] ?\d{3})+|\d+)(?![\w])")
+# 1,234,567 / 1.234.567 / OCR spacing "1, 234 ,567" / a comma read as a space
+# "1 234 567" (Tesseract, measured by tools/ocr_bench.py) / plain digits.
+AMOUNT = re.compile(r"(?<![\w.,])(\d{1,3}(?: ?[,.] ?\d{3}| \d{3})+|\d+)(?![\w])")
 DURATION = re.compile(r"(?<![\w.,])(\d+)\s*(days?|d|hours?|hrs?|h|minutes?|mins?|m|"
                       r"seconds?|secs?|s)\b", re.IGNORECASE)
 _UNIT_S = {"d": 86400, "h": 3600, "m": 60, "s": 1}
@@ -132,6 +150,159 @@ def run_ocr(path, run=subprocess.run, timeout=OCR_TIMEOUT_S):
     return parse_output(out.stdout)
 
 
+def tesseract_exe(cfg_path=None):
+    """Tesseract by config (`ocr.tesseract` in config/local.json), PATH, then the
+    default per-machine install dir. None when absent (Windows OCR only)."""
+    cfg = cfg_path or (REPO_ROOT / "config" / "local.json")
+    try:
+        c = json.loads(Path(cfg).read_text(encoding="utf-8")).get("ocr") or {}
+        p = c.get("tesseract") if isinstance(c, dict) else None
+        if isinstance(p, str) and p and Path(p).is_file():
+            return p
+    except (OSError, ValueError, AttributeError):
+        pass
+    found = shutil.which("tesseract")
+    if found:
+        return found
+    for var in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        root = os.environ.get(var)
+        if root:
+            for sub in ("Tesseract-OCR", os.path.join("Programs", "Tesseract-OCR")):
+                cand = Path(root) / sub / "tesseract.exe"
+                if cand.is_file():
+                    return str(cand)
+    return None
+
+
+def parse_tsv(stdout, scale=1.0):
+    """Tesseract `tsv` output -> {text, lines}; words grouped by (block, par, line),
+    boxes mapped back to original pixels by dividing by `scale`."""
+    groups = {}
+    order = []
+    for row in (stdout or "").splitlines()[1:]:
+        f = row.split("\t")
+        if len(f) < 12 or f[0] != "5":
+            continue
+        word = f[11].strip()
+        try:
+            x, y, w, h = (int(v) for v in f[6:10])
+            conf = float(f[10])
+        except ValueError:
+            continue
+        if not word or conf < 0:
+            continue
+        key = (f[1], f[2], f[3], f[4])
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append((word, x, y, w, h))
+    lines = []
+    for key in order:
+        ws = groups[key]
+        x0 = min(w[1] for w in ws)
+        y0 = min(w[2] for w in ws)
+        x1 = max(w[1] + w[3] for w in ws)
+        y1 = max(w[2] + w[4] for w in ws)
+        lines.append({"text": " ".join(w[0] for w in ws), "x": round(x0 / scale),
+                      "y": round(y0 / scale), "w": round((x1 - x0) / scale),
+                      "h": round((y1 - y0) / scale)})
+    return _sanitise({"text": "\n".join(ln["text"] for ln in lines), "lines": lines})
+
+
+def run_tesseract(path, exe=None, psm=11, scale=1.0, run=subprocess.run,
+                  timeout=OCR_TIMEOUT_S):
+    """Tesseract over one (already preprocessed) image -> {text, lines}."""
+    exe = exe or tesseract_exe()
+    if not exe:
+        raise OcrError("tesseract not found")
+    args = [exe, str(path), "stdout", "--psm", str(psm), "-l", "eng", "tsv"]
+    try:
+        out = run(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                  timeout=timeout, creationflags=_NO_WINDOW)
+    except subprocess.TimeoutExpired:
+        raise OcrError(f"tesseract timed out after {timeout} s") from None
+    except (OSError, subprocess.SubprocessError) as e:
+        raise OcrError(_clean_text(f"tesseract did not start: {e}", MAX_ERROR)) from None
+    if out.returncode != 0:
+        raise OcrError(f"tesseract exited {out.returncode}")
+    return parse_tsv(out.stdout, scale)
+
+
+def ocr_engine(cfg_path=None):
+    """`ocr.engine` from config/local.json; "auto" when unset or unknown."""
+    cfg = cfg_path or (REPO_ROOT / "config" / "local.json")
+    try:
+        c = json.loads(Path(cfg).read_text(encoding="utf-8")).get("ocr") or {}
+        e = c.get("engine") if isinstance(c, dict) else None
+    except (OSError, ValueError, AttributeError):
+        e = None
+    return e if e in ENGINES else "auto"
+
+
+def prep_image(src, dst, scale, run=subprocess.run, timeout=OCR_TIMEOUT_S):
+    """tools/ocr_prep.ps1: grayscale / invert-if-dark / upscale -> applied scale."""
+    args = [powershell_exe(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", str(PREP_PS1), "-In", str(src), "-Out", str(dst), "-Scale", str(scale),
+            "-MaxDim", str(PREP_MAX_DIM)]
+    try:
+        out = run(args, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                  timeout=timeout, creationflags=_NO_WINDOW)
+    except subprocess.TimeoutExpired:
+        raise OcrError(f"ocr prep timed out after {timeout} s") from None
+    except (OSError, subprocess.SubprocessError) as e:
+        raise OcrError(_clean_text(f"ocr prep did not start: {e}", MAX_ERROR)) from None
+    doc = _load_json(out.stdout)
+    if out.returncode != 0 or not isinstance(doc, dict) or "error" in doc:
+        err = doc.get("error") if isinstance(doc, dict) else None
+        raise OcrError(_clean_text(str(err or f"ocr prep exited {out.returncode}"), MAX_ERROR))
+    applied = doc.get("scale")
+    if isinstance(applied, bool) or not isinstance(applied, (int, float)) \
+            or not 0 < applied <= scale:
+        raise OcrError("ocr prep returned no scale")
+    return float(applied)
+
+
+def run_tesseract_chain(path, work_dir, exe, run=subprocess.run, passes=TESS_PASSES):
+    """Preprocess + Tesseract per pass until a silver amount is read."""
+    work = Path(work_dir)
+    work.mkdir(parents=True, exist_ok=True)
+    first, preps = None, {}
+    try:
+        for scale, psm in passes:
+            if scale not in preps:
+                dst = work / f"prep-{os.getpid()}-{threading.get_ident()}-{len(preps)}.png"
+                preps[scale] = (dst, prep_image(path, dst, scale, run=run))
+            dst, applied = preps[scale]
+            doc = run_tesseract(dst, exe=exe, psm=psm, scale=applied, run=run)
+            if first is None:
+                first = doc
+            if extract_silver(doc["lines"]) is not None:
+                return doc
+        return first
+    finally:
+        for dst, _ in preps.values():
+            try:
+                dst.unlink()  # derived temp image, re-created by the next read
+            except OSError:
+                pass
+
+
+def run_auto(path, work_dir, run=subprocess.run, engine=None, exe=None):
+    """Default OCR runner: the Tesseract chain, Windows OCR as the fallback."""
+    engine = engine or ocr_engine()
+    if engine != "windows":
+        exe = exe or tesseract_exe()
+        if exe:
+            try:
+                return run_tesseract_chain(path, work_dir, exe, run=run)
+            except OcrError:
+                if engine == "tesseract":
+                    raise
+        elif engine == "tesseract":
+            raise OcrError("tesseract not found")
+    return run_ocr(path, run=run)
+
+
 # -- geometry helpers ------------------------------------------------------------
 
 def _cy(ln):
@@ -221,7 +392,7 @@ def _find_names(text, names):
         while start >= 0:
             hits.append((start, start + len(n), name))
             start = t.find(n, start + 1)
-    hits.sort()
+    hits.sort(key=lambda h: (h[0], -h[1]))  # same start: the LONGER name first
     kept, end = [], -1
     for s, e, name in hits:  # drop a name nested inside an earlier, longer hit
         if s >= end - 1:
@@ -230,7 +401,10 @@ def _find_names(text, names):
     out = []
     for i, (s, e, name) in enumerate(kept):
         stop = kept[i + 1][0] if i + 1 < len(kept) else len(t)
-        out.append((name, t[e:stop]))
+        rest = t[e:stop]
+        if i + 1 < len(kept) and kept[i + 1][2] == name and not rest.strip():
+            continue  # "XP scroll XP scroll 20 min": the repeat carries the time
+        out.append((name, rest))
     return out
 
 
@@ -277,7 +451,8 @@ class OcrService:
     def __init__(self, game, cache_dir, runner=None):
         self.game = game
         self.cache_dir = Path(cache_dir)
-        self.runner = runner if runner is not None else run_ocr
+        self.runner = runner if runner is not None else (
+            lambda p: run_auto(p, self.cache_dir / "prep"))
         self._lock = threading.Lock()  # one powershell at a time
 
     def _listed(self, body):
@@ -294,7 +469,7 @@ class OcrService:
         return shot
 
     def _key(self, shot):
-        raw = f"{shot['name']}\0{shot['size']}\0{shot['mtime']}".encode("utf-8")
+        raw = f"{CACHE_VERSION}\0{shot['name']}\0{shot['size']}\0{shot['mtime']}".encode("utf-8")
         return hashlib.sha256(raw).hexdigest()[:32]
 
     def _cached(self, path):

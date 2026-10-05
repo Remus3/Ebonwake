@@ -34,6 +34,10 @@ MAX_POST_BYTES = 4096
 # A 20000-char deadeye note JSON-escaped at 6 bytes/char (\uXXXX) is 120000 bytes;
 # 128 KiB covers it plus the envelope. Raised for this route only (plan 007).
 MAX_DEADEYE_POST_BYTES = 131072
+# An over-cap body up to this size is read and dropped before the 413 so the
+# close is not a TCP reset (a 64 KiB bound reset deadeye's 128 KiB+ bodies and
+# made test_route_cap_is_per_route flaky with ConnectionAborted on Windows).
+DRAIN_MAX_BYTES = 1 << 20
 POST_CAPS = {"/api/deadeye": MAX_DEADEYE_POST_BYTES}
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 
@@ -279,8 +283,11 @@ class Handler(BaseHTTPRequestHandler):
                     n = int(self.headers.get("Content-Length") or 0)
                 except ValueError:
                     n = 0
-                if 0 < n <= 1 << 16:
-                    self.rfile.read(n)
+                while 0 < n <= DRAIN_MAX_BYTES:  # chunked; loopback only, bounded
+                    chunk = self.rfile.read(min(n, 1 << 16))
+                    if not chunk:
+                        break
+                    n -= len(chunk)
             self.close_connection = True
             return self._send(code, body, cors=False)
 

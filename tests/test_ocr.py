@@ -222,7 +222,9 @@ def test_ps1_ascii_lf_and_pattern():
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="powershell.exe 5.1 is Windows only")
-def test_ps1_parses_in_windows_powershell():
+@pytest.mark.parametrize("PS1", [PS1, ROOT / "tools" / "ocr_prep.ps1",
+                                 ROOT / "tools" / "ocr_bench.ps1"], ids=lambda p: p.name)
+def test_ps1_parses_in_windows_powershell(PS1):
     exe = ocr.powershell_exe()
     if not Path(exe).is_file() and not shutil.which(exe):
         pytest.skip("powershell.exe not found")
@@ -451,3 +453,176 @@ def test_unwritable_cache_still_returns_result(watch, tmp_path):
     blocker.write_text("not a dir")
     svc = ocr.OcrService(watch, blocker, runner=lambda p: OCR_DOC)
     assert svc.read({"file": name})["silver"] == 1500000
+
+
+# -- hand-off 08caa5c edge cases ---------------------------------------------------
+
+def test_repeated_buff_name_takes_the_time_after_the_repeat():
+    got = ocr.extract_buffs([L("XP scroll XP scroll 20 min")])
+    assert got == [{"name": "XP scroll", "minutes": 20}]
+
+
+def test_same_start_keeps_the_longer_name():
+    names = ("Value Pack", "Value Pack Plus")
+    got = ocr.extract_buffs([L("Value Pack Plus 3 h")], names=names)
+    assert got == [{"name": "Value Pack Plus", "minutes": 180}]
+    got = ocr.extract_buffs([L("Value Pack Plus 3 h")], names=names[::-1])
+    assert got == [{"name": "Value Pack Plus", "minutes": 180}]
+
+
+# -- Tesseract runner (follow-up: engine benchmark) --------------------------------
+
+TSV_HEAD = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+
+
+def _tsv_row(line, word, x, y, w, h, text, conf="91.5"):
+    return f"5\t1\t1\t1\t{line}\t{word}\t{x}\t{y}\t{w}\t{h}\t{conf}\t{text}\n"
+
+
+def test_parse_tsv_groups_words_and_unscales():
+    out = TSV_HEAD + "1\t1\t0\t0\t0\t0\t0\t0\t600\t300\t-1\t\n" \
+        + _tsv_row(1, 1, 30, 60, 90, 30, "Silver") \
+        + _tsv_row(1, 2, 150, 60, 210, 36, "1,234,567") \
+        + _tsv_row(2, 1, 30, 150, 60, 30, "XP") \
+        + _tsv_row(2, 2, 99, 150, 9, 30, " ", conf="-1")
+    doc = ocr.parse_tsv(out, scale=3)
+    assert doc["text"] == "Silver 1,234,567\nXP"
+    assert doc["lines"][0] == {"text": "Silver 1,234,567", "x": 10, "y": 20, "w": 110, "h": 12}
+    assert ocr.extract_silver(doc["lines"]) == 1234567
+
+
+def test_parse_tsv_garbage_is_empty():
+    assert ocr.parse_tsv("") == {"text": "", "lines": []}
+    assert ocr.parse_tsv(TSV_HEAD + "5\tx\n5\t1\t1\t1\t1\t1\ta\tb\tc\td\te\tf\n")["lines"] == []
+
+
+def test_run_tesseract_command_shape(tmp_path):
+    seen = {}
+
+    def fake(args, **kw):
+        seen["args"], seen["kw"] = args, kw
+        return subprocess.CompletedProcess(args, 0, TSV_HEAD + _tsv_row(1, 1, 3, 3, 3, 3, "Hi"), "")
+
+    doc = ocr.run_tesseract(tmp_path / "a.png", exe="tess.exe", psm=11, scale=1, run=fake)
+    assert doc["text"] == "Hi"
+    assert seen["args"] == ["tess.exe", str(tmp_path / "a.png"), "stdout", "--psm", "11",
+                            "-l", "eng", "tsv"]
+    assert seen["kw"]["timeout"] == ocr.OCR_TIMEOUT_S
+
+
+def test_run_tesseract_failures_raise(tmp_path):
+    def bad(args, **kw):
+        return subprocess.CompletedProcess(args, 1, "", "boom")
+
+    def boom(args, **kw):
+        raise OSError("nope")
+    for run in (bad, boom):
+        with pytest.raises(ocr.OcrError):
+            ocr.run_tesseract(tmp_path / "a.png", exe="t.exe", run=run)
+
+
+def test_tesseract_exe_from_config_then_absent(tmp_path, monkeypatch):
+    exe = tmp_path / "tesseract.exe"
+    exe.write_bytes(b"")
+    cfg = tmp_path / "local.json"
+    cfg.write_text(json.dumps({"ocr": {"tesseract": str(exe)}}), encoding="utf-8")
+    assert ocr.tesseract_exe(cfg) == str(exe)
+    monkeypatch.setattr(ocr.shutil, "which", lambda n: None)
+    for var in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        monkeypatch.setenv(var, str(tmp_path / "none"))
+    cfg.write_text("{}", encoding="utf-8")
+    assert ocr.tesseract_exe(cfg) is None
+
+
+# -- engine chain (Tesseract preprocessed passes, Windows OCR fallback) ------------
+
+def _fake_chain(reads, prep_scale=3.0, prep_rc=0, tess_rc=0):
+    """A subprocess.run fake: ocr_prep.ps1 -> {out, scale}; tesseract -> TSV of the
+    next read in `reads`; ocr.ps1 -> a Windows OCR doc. Records every call."""
+    calls = []
+    it = iter(reads)
+
+    def run(args, **kw):
+        calls.append(args)
+        if "-File" in args and args[args.index("-File") + 1].endswith("ocr_prep.ps1"):
+            sc = min(prep_scale, float(args[args.index("-Scale") + 1]))
+            out = json.dumps({"out": args[args.index("-Out") + 1], "scale": sc})
+            return subprocess.CompletedProcess(args, prep_rc, out if not prep_rc else
+                                               '{"error": "bad image"}', "")
+        if "-File" in args:
+            return subprocess.CompletedProcess(args, 0, json.dumps(
+                {"text": "Silver 7", "lines": [L("Silver 7")]}), "")
+        text = next(it)
+        return subprocess.CompletedProcess(args, tess_rc, TSV_HEAD + _tsv_row(
+            1, 1, 0, 0, 30, 30, text), "")
+    return run, calls
+
+
+def test_chain_stops_at_first_pass_with_silver(tmp_path):
+    run, calls = _fake_chain(["Silver", "Silver 1,234,567", "never"])
+    doc = ocr.run_tesseract_chain(tmp_path / "a.png", tmp_path / "w", "t.exe", run=run)
+    assert doc["text"] == "Silver 1,234,567"
+    kinds = [("prep" if "-File" in c else c[4]) for c in calls]
+    assert kinds == ["prep", "6", "11"]  # one prep for both x3 passes
+    assert list((tmp_path / "w").iterdir()) == []  # temp preps removed
+
+
+def test_chain_without_silver_keeps_first_read(tmp_path):
+    run, calls = _fake_chain(["XP scroll 20 min", "junk", "junk"])
+    doc = ocr.run_tesseract_chain(tmp_path / "a.png", tmp_path / "w", "t.exe", run=run)
+    assert doc["text"] == "XP scroll 20 min"
+    assert [c for c in calls if "-File" in c][1][-3] == "1.0"  # x1 pass re-preps
+
+
+def test_chain_maps_boxes_by_applied_scale(tmp_path):
+    run, _ = _fake_chain(["Silver 5"], prep_scale=2.0)
+    doc = ocr.run_tesseract_chain(tmp_path / "a.png", tmp_path / "w", "t.exe", run=run)
+    assert doc["lines"][0]["h"] == 15  # 30 px / applied 2.0, not / requested 3.0
+
+
+def test_auto_falls_back_to_windows_on_tesseract_failure(tmp_path):
+    run, calls = _fake_chain(["x"], prep_rc=1)
+    doc = ocr.run_auto(tmp_path / "a.png", tmp_path / "w", run=run, engine="auto", exe="t.exe")
+    assert doc["text"] == "Silver 7" and calls[-1][calls[-1].index("-File") + 1] == str(ocr.PS1)
+    with pytest.raises(ocr.OcrError):
+        ocr.run_auto(tmp_path / "a.png", tmp_path / "w", run=run, engine="tesseract",
+                     exe="t.exe")
+
+
+def test_auto_engine_choice(tmp_path, monkeypatch):
+    run, calls = _fake_chain(["Silver 9"])
+    assert ocr.run_auto(tmp_path / "a.png", tmp_path / "w", run=run, engine="windows",
+                        exe="t.exe")["text"] == "Silver 7"
+    assert ocr.run_auto(tmp_path / "a.png", tmp_path / "w", run=run, engine="auto",
+                        exe="t.exe")["text"] == "Silver 9"
+    monkeypatch.setattr(ocr, "tesseract_exe", lambda: None)
+    assert ocr.run_auto(tmp_path / "a.png", tmp_path / "w", run=run,
+                        engine="auto")["text"] == "Silver 7"
+    with pytest.raises(ocr.OcrError):
+        ocr.run_auto(tmp_path / "a.png", tmp_path / "w", run=run, engine="tesseract")
+
+
+def test_ocr_engine_config(tmp_path):
+    cfg = tmp_path / "local.json"
+    assert ocr.ocr_engine(cfg) == "auto"
+    for val, want in (("windows", "windows"), ("tesseract", "tesseract"), ("bogus", "auto")):
+        cfg.write_text(json.dumps({"ocr": {"engine": val}}), encoding="utf-8")
+        assert ocr.ocr_engine(cfg) == want
+
+
+@pytest.mark.parametrize("text", ["Silver 1 234 567", "Silver 1,234 567",
+                                  "Silver 1 ,234,567", "Silver: 1, 234, 567"])
+def test_silver_tesseract_separator_forms(text):
+    assert ocr.extract_silver([L(text)]) == 1234567
+
+
+def test_bench_cases_and_scoring():
+    sys.path.insert(0, str(ROOT / "tools"))
+    import ocr_bench
+    cs = ocr_bench.cases(quick=True)
+    assert len(cs) == len({c["id"] for c in cs}) and any(c["want"] == 1234567 for c in cs)
+    c = next(c for c in cs if c["kind"] == "silver")
+    assert ocr_bench.score(c, {"lines": [L(c["text"])]})
+    assert not ocr_bench.score(c, {"lines": [L("Silver 1")]})
+    b = next(c for c in cs if c["kind"] == "bare")
+    assert ocr_bench.score(b, {"lines": [L(b["text"])]})

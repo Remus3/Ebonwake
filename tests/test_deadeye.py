@@ -401,3 +401,11 @@ def test_state_reports_deadeye_source(dsrv):
          {"add_step": {"item": "A", "current": "+0", "target": "+1"}})
     _, doc, _ = _req(dsrv, "GET", "/api/state")
     assert doc["sources"]["deadeye"] == {"done": 0, "total": 1}
+
+
+def test_over_cap_413_is_never_a_reset(dsrv):
+    # hand-off 08caa5c: an undrained 128 KiB+ body made the close a TCP reset
+    huge = json.dumps({"note": {"section": "misc", "text": "x"},
+                       "pad": "x" * (2 * ewapp.MAX_DEADEYE_POST_BYTES)}).encode()
+    for _ in range(25):
+        assert _req(dsrv, "POST", "/api/deadeye", huge)[0] == 413
