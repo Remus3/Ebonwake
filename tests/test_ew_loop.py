@@ -795,14 +795,18 @@ def test_dirty_lane_claim_is_flagged_not_dropped(tmp_path):
     root = make_root(tmp_path, handoff="")
     items = _dispatched(root)
 
+    wt = tmp_path / "ew-worktrees" / "lane-1"
+    wt.mkdir(parents=True)
+
     def run_lane(lane, prompt, **kw):
-        raise RuntimeError("LaneRefused: lane worktree lane-1 is dirty - resolve it by hand")
+        raise RuntimeError(f"LaneRefused: lane worktree {wt} is dirty - resolve it by hand")
 
     assert ew_loop.lane_worker("012", deps=deps(root), run_lane=run_lane) == 1
     rec = items.get("012")
     assert rec["state"] == "lane-dirty" and "dirty" in rec["error"]
     assert not ew_loop.dispatchable(rec)
-    doc = ew_loop.tick(deps=deps(root), no_push=True)
+    # still dirty: it waits (recover_lane_dirty clears it once clean)
+    doc = ew_loop.tick(deps=deps(root, git=FakeGit(dirty=" M x")), no_push=True)
     row = next(r for r in doc["checklist"] if r["id"] == "012")
     assert row["state"] == "lane-dirty" and row["eta_s"] == 0
 
@@ -1459,3 +1463,128 @@ def test_rearm_falls_back_to_git_when_dependency_has_no_merged_at(tmp_path):
     ew_loop.tick(deps=d, no_push=True)
     assert d.seen["launch"] == ["012"] and items.get("012")["rearmed"] is True
     assert any(a[0] == "log" and "--first-parent" in a for a in calls)
+
+
+# ---------------------------------------------------------------- lane race (fix 2026-10-05)
+# An item that finished ("ran") or was committed holds its unmerged work in its
+# lane worktree; the kit claims the LOWEST non-RUNNING index and refuses a
+# dirty worktree, so a dispatch onto it became lane-dirty and waited forever.
+
+ONE_ROW = ROADMAP.replace("| 013 | Season pass tracker | [ ] open |\n", "")
+
+
+def lane_wt(tmp_path, i):
+    return tmp_path / "ew-worktrees" / f"lane-{i}"
+
+
+def finishes_mid_tick(root, wt, rows, state="ran"):
+    """lane_state that, like the 14:00:27 run, flips item 013 from
+    dispatched to `state` between tick start and the dispatch step."""
+    def lane_state():
+        rec = ew_loop.Items(root).get("013")
+        if rec.get("state") == "dispatched":
+            ew_loop.Items(root).put(dict(rec, state=state, worktree=str(wt), rc=0))
+        return rows
+    return lane_state
+
+
+def test_item_finishing_mid_tick_keeps_its_lane_busy(tmp_path):
+    root = make_root(tmp_path, roadmap=ONE_ROW, handoff="")
+    _dispatched(root, iid="013", lane="review", pid=7)
+    rows = [{"index": 0, "state": "RUNNING", "lane": "build"},
+            {"index": 1, "state": "RUNNING", "lane": "data"},
+            {"index": 2, "state": "FREE", "lane": None}]
+    for state in ("ran", "committed"):
+        ew_loop.Items(root).put(dict(ew_loop.Items(root).get("013"), state="dispatched"))
+        d = deps(root, lane_state=finishes_mid_tick(root, lane_wt(tmp_path, 2), rows, state))
+        ew_loop.tick(deps=d, no_push=True)
+        assert d.seen["launch"] == [], state
+        assert ew_loop.Items(root).get("012") is None
+
+
+def test_held_worktree_at_a_lower_index_blocks_dispatch(tmp_path):
+    """The kit picks the lowest non-RUNNING index, not a lane name: a held
+    index 0 under a free index 2 would still be claimed and refused."""
+    root = make_root(tmp_path, roadmap=ONE_ROW, handoff="")
+    _dispatched(root, iid="013", lane="build", pid=7)
+    rows = [{"index": 0, "state": "FREE", "lane": None},
+            {"index": 1, "state": "RUNNING", "lane": "data"},
+            {"index": 2, "state": "FREE", "lane": None}]
+    d = deps(root, lane_state=finishes_mid_tick(root, lane_wt(tmp_path, 0), rows))
+    ew_loop.tick(deps=d, no_push=True)
+    assert d.seen["launch"] == []
+
+
+def dirty_lane_world(tmp_path, index=0):
+    root = make_root(tmp_path, roadmap=ONE_ROW, handoff="")
+    git(root, "init", "-q", "-b", "main")
+    (root / ".gitignore").write_text("ops/\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "init")
+    wt = lane_wt(tmp_path, index)
+    git(root, "worktree", "add", "-q", "--detach", str(wt))
+    (wt / "crash.txt").write_text("left by a crashed run\n")
+    return root, wt
+
+
+def test_physically_dirty_lowest_worktree_blocks_dispatch_until_clean(tmp_path):
+    root, wt = dirty_lane_world(tmp_path)
+    d = deps(root, git=real_git)
+    ew_loop.tick(deps=d, no_push=True)
+    assert d.seen["launch"] == []
+    (wt / "crash.txt").unlink()
+    ew_loop.tick(deps=d, no_push=True)
+    assert d.seen["launch"] == ["012"]
+
+
+def lane_dirty(root, wt, attempts=1):
+    ew_loop.Items(root).put({
+        "id": "012", "kind": "plan", "state": "lane-dirty", "lane": "review", "prompt": "p",
+        "title": "Grind spot recommender", "label": "plan 012: Grind spot recommender",
+        "attempts": attempts, "dispatched": ew_loop.iso(T0 - 600),
+        "error": f"LaneRefused: lane worktree {wt} is dirty - resolve it by hand"})
+
+
+def test_lane_dirty_recovers_once_its_worktree_is_clean_and_unheld(tmp_path):
+    root, wt = dirty_lane_world(tmp_path, index=2)
+    lane_dirty(root, wt)
+    d = deps(root, git=real_git)
+    ew_loop.tick(deps=d, no_push=True)  # still dirty: waits, no attempt spent
+    rec = ew_loop.Items(root).get("012")
+    assert rec["state"] == "lane-dirty" and "012" not in d.seen["launch"]
+    # another item's unmerged work holds that worktree: still waits
+    ew_loop.Items(root).put({"id": "013", "kind": "plan", "state": "committed",
+                             "lane": "build", "worktree": str(wt), "title": "t",
+                             "label": "l", "commit": "x"})
+    (wt / "crash.txt").unlink()
+    ew_loop.Tick(d, False, True).recover_lane_dirty()
+    assert ew_loop.Items(root).get("012")["state"] == "lane-dirty"
+    ew_loop.Items(root).put(dict(ew_loop.Items(root).get("013"), state="merged"))
+    doc = ew_loop.tick(deps=d, no_push=True)
+    rec = ew_loop.Items(root).get("012")
+    assert d.seen["launch"].count("012") == 1 and rec["state"] == "dispatched"
+    assert rec["attempts"] == 2  # bounded by MAX_ATTEMPTS like any retry
+    assert any("012: lane-dirty cleared" in s for s in doc["log"])
+    ew_loop.Tick(d, False, True).recover_lane_dirty()  # idempotent: no-op now
+    assert ew_loop.Items(root).get("012")["state"] == "dispatched"
+
+
+def test_lane_dirty_out_of_attempts_gives_up_with_the_error(tmp_path):
+    root, wt = dirty_lane_world(tmp_path, index=2)
+    (wt / "crash.txt").unlink()
+    lane_dirty(root, wt, attempts=ew_loop.MAX_ATTEMPTS)
+    d = deps(root, git=real_git)
+    ew_loop.tick(deps=d, no_push=True)
+    rec = ew_loop.Items(root).get("012")
+    assert rec["state"] == "gave-up" and "dirty" in rec["error"]
+    assert "012" not in d.seen["launch"]
+
+
+def test_lane_dirty_without_a_worktree_in_its_error_stays(tmp_path):
+    root = make_root(tmp_path, roadmap=ONE_ROW, handoff="")
+    lane_dirty(root, "x")
+    ew_loop.Items(root).put(dict(ew_loop.Items(root).get("012"), error="LaneRefused: dirty"))
+    d = deps(root)
+    ew_loop.tick(deps=d, no_push=True)
+    assert ew_loop.Items(root).get("012")["state"] == "lane-dirty"
+    assert "012" not in d.seen["launch"]
