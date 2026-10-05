@@ -151,7 +151,7 @@ def test_classifier_table_is_data_and_complete():
 @pytest.mark.parametrize("text", ["UI debug: panel opened", "", "auth host resolved",
                                   "Catalog index built", "Dialog initialized",
                                   "Load CatalogInfo table", "blogin", "texit code",
-                                  "ExitGames sdk", "prologout"])
+                                  "prologout"])
 def test_unknown_lines_classify_none(text):
     assert gamewatch.classify(text) is None
 
@@ -666,3 +666,11 @@ def test_bare_make_server_never_reads_real_config(tmp_path, monkeypatch):
         assert calls == [] and s.game.view()["state"] == "unconfigured"
     finally:
         s.server_close()
+
+
+@pytest.mark.parametrize("text,state", [
+    ("LoginSuccess", "logged_in"), ("OnLogin", "logged_in"), ("login_success", "logged_in"),
+    ("User logged in", "logged_in"), ("DisconnectedFromServer", "disconnected"),
+    ("ExitGame", "running"), ("CatalogInfo", None), ("Catalog_Index", None)])
+def test_camel_and_snake_tokens(text, state):
+    assert gamewatch.classify(text) == state

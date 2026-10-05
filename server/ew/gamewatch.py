@@ -47,10 +47,11 @@ CLASSIFIERS = (
     (r"\bconnection lost\b", "disconnected"),
     (r"\blog ?out\b", "running"),
     (r"\bexit(?:ed|ing)?\b", "running"),
-    (r"\blog ?in\b", "logged_in"),
+    (r"\blog(?:ged)? ?in\b", "logged_in"),
     (r"\bserver ?select", "logged_in"),
-    (r"\bselectserver", "logged_in"),
+    (r"\bselect ?server", "logged_in"),
 )
+_CAMEL = re.compile(r"([a-z0-9])([A-Z])")
 _CLASSIFIERS = tuple((re.compile(p), s) for p, s in CLASSIFIERS)
 
 
@@ -70,6 +71,11 @@ def config_bdo(root):
 
 def classify(text):
     """`Log` text -> logged_in | running | disconnected, or None (unknown)."""
+    # camelCase and snake_case tokens split into words first, so "OnLogin",
+    # "login_success" and "DisconnectedFromServer" still match word-bounded rows
+    # (plan 008 refute round 2 note).
+    if isinstance(text, str):
+        text = _CAMEL.sub(r"\1 \2", text).replace("_", " ")
     low = text.lower() if isinstance(text, str) else ""
     for pattern, state in _CLASSIFIERS:
         if pattern.search(low):
