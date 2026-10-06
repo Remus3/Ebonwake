@@ -7,9 +7,11 @@ assets, browser fallback),
 /api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006; plan 014
 adds its `suggested` coupon block),
 /api/deadeye (plan 007; /api/deadeye/enhance GET plan 035; /api/deadeye/shopping GET plan 037), /api/game (plan 008), /api/leveling (plan 011),
-/api/spots (plan 012, GET only), /api/bosses (plan 031), /api/settings (plan 030), and POST
+/api/spots (plan 012, GET only), /api/bosses (plan 031), /api/settings (plan 030), /api/pets
+(plan 043), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
-/api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings behind one shared guard.
+/api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings + /api/pets behind one
+shared guard.
 """
 
 import datetime as _dt
@@ -27,8 +29,8 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 from . import (__version__, bosses, coupons, deadeye, enhance, events, gamewatch, grind, itemnames,
-               leveling, market, ocr, ports, progress, settings, shopping, single, spots, today,
-               weekly)
+               leveling, market, ocr, pets, ports, progress, settings, shopping, single, spots,
+               today, weekly)
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -186,6 +188,8 @@ class EWServer(ThreadingHTTPServer):
         self.coupons = coupons.CouponService(coupon_client, self.events, spawn=coupon_spawn)
         # Plan 031: NA world boss table + operator loot ticks.
         self.bosses = bosses.BossService(self.store, clock=bosses_clock or time.time)
+        # Plan 043: operator-typed pet roster over the tracked pets.json rules.
+        self.pets = pets.PetService(self.store)
         # Plan 035: EV math on tracked rate rows; prices from the market cache only.
         self.enhance = enhance.EnhanceService(self.store, prices=self.market.cached_price)
         # Plan 036: stack advice reads the same effective rows (overrides included).
@@ -344,6 +348,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(e)})
         if path == "/api/settings":
             return self._send(200, self.server.settings.view())
+        if path == "/api/pets":
+            q = parse_qs(query)
+            if "exchange" not in q:
+                return self._send(200, self.server.pets.view())
+            try:
+                return self._send(200, self.server.pets.exchange(q["exchange"][0]))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
         if path == "/events":
             return self._sse()
         if path == "/":  # plan 020: redirect so relative asset paths resolve
@@ -447,11 +459,20 @@ class Handler(BaseHTTPRequestHandler):
         (op, arg), = body.items()
         return getattr(self.server.bosses, op)(arg)
 
+    def _post_pets(self, body):
+        ops = {"add": "add", "edit": "edit", "remove": "remove", "feed": "feed",
+               "goals": "set_goals"}
+        if len(body) != 1 or not (set(ops) & set(body)):
+            raise ValueError("body must be one of {add|edit|remove|feed|goals: ...}")
+        (op, arg), = body.items()
+        return getattr(self.server.pets, ops[op])(arg)
+
     POST_ROUTES = {"/api/market/watch": _post_market_watch, "/api/today": _post_today,
                    "/api/progress": _post_progress, "/api/grind": _post_grind,
                    "/api/events": _post_events, "/api/deadeye": _post_deadeye,
                    "/api/ocr": _post_ocr, "/api/leveling": _post_leveling,
-                   "/api/bosses": _post_bosses, "/api/settings": _post_settings}
+                   "/api/bosses": _post_bosses, "/api/settings": _post_settings,
+                   "/api/pets": _post_pets}
 
     def do_POST(self):  # noqa: N802
         """Shared guard for every POST route: loopback Host + application/json +

@@ -47,7 +47,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 040 | OCR loot-window import: operator screenshot -> item counts for the grind log | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 041 | Profile history: hourly BDO-REST-API snapshots, trend sparklines, auto level sample | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 042 | Lifeskill / energy / contribution card from the profile API | [ ] open |
-| 043 | Pet roster: 5 slots, tier, talents, special-skill coverage, exchange planner | [ ] open |
+| 043 | Pet roster: 5 slots, tier, talents, special-skill coverage, exchange planner | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 044 | Mount tracker: horses (tier, level, skills), Royal Fern Root counter, T10 breed pity calc | [ ] open |
 | 045 | Inventory / weight / storage planner + Value Pack ledger | [ ] open |
 | 046 | Session-end summary: prompt to stop the grind on game exit, nightly and weekly recap | [ ] open |
