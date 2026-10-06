@@ -65,6 +65,33 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 058 | Loop resolves its own merge conflicts: re-dispatch a resolve lane | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 059 | Official event-notice import: maintenance-relative windows, suggest-only | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 060 | Combat Secret Book ledger: books per activity, observed XP, books-to-level | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
+| 061 | Profile source robots gate: public BDO-REST-API host is robots-disallowed; self-host base, graceful degrade | [ ] open (priority) |
+| 062 | Auto play-session: login opens, exit closes the grind log (no Start/Stop, no exit prompt) | [ ] open (priority) |
+| 063 | Auto-OCR every new screenshot while logged in: confidence-gated auto-commit + review queue | [ ] open (priority) |
+| 064 | Official notice auto-import: maintenance UTC, Hot Time windows, events + coupons auto-add with undo | [ ] open (priority) |
+| 065 | Zero-config first run: Documents / Steam library path auto-detect, self-ticking onboarding | [ ] open (priority) |
+| 066 | Progress inference from screenshot OCR: level, XP %, silver, buffs, AP/DP, book use | [ ] open |
+| 067 | Context-aware overlay: widgets chosen by state (in game, idle, maint/reset/boss soon), pins and blocks | [ ] open |
+| 068 | Auto-tick inferable checklist rows: login dailies, dice ready, boss-shot suggestion | [ ] open |
+| 069 | One "What now" card on Home + overlay: next best action ranked by urgency | [ ] open |
+| 070 | Prompt hygiene: stale-prompt expiry, dedupe, game-closed quiet, 15/5/1 alert ladder | [ ] open |
+| 071 | Self-curating market watch: seeded from shopping list / loot / recipes, thresholds from price bands | [ ] open |
+| 072 | World boss schedule drift check against a public NA table (robots-gated, banner only) | [ ] open |
+| 073 | Signal health digest: per-signal liveness with one-line fix hints | [ ] open |
+
+Autonomy deep dive 2026-10-06 (research 0007, operator order: self-aware,
+low-input EW): 13 plans 061-073 ranked by operator inputs removed per play
+session vs build cost. Priority: 061 first - the shipped profile default
+calls a robots-disallowed host (floor defect); then 062 auto session and
+063 auto-OCR (the two biggest per-session input sinks), 064 notice
+auto-import (weekly typing), 065 zero-config paths (unblocks 062/063 on a
+fresh box). 066 waits on 063 (Depends on). Every plan uses only the ToS
+floor's passive signals (session log, saved screenshots + OCR, arsha GETs,
+robots-allowed public pages, clock, stored data). Dedupe vs 001-060: 059
+parser reused by 064; 046 prompt superseded by 062 for auto sessions; 041
+auto level sample replaced by 066; 025 Home hosts 069. Rejected: input-idle
+AFK detection (needs an input hook), live window capture, clipboard reads,
+roster OCR, auto-tick of redeemed coupons.
 
 Deep dive 2026-10-06 (research 0006): two plans. Ranking: 059 first - pays
 off every week from today, removes the biggest manual-typing chore on the
