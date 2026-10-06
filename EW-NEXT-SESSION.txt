@@ -1,13 +1,15 @@
 EW NEXT SESSION
 ---------------
-SESSION: 7
+SESSION: 8
 
 Next action: watch the loop's self-continuing deep-dive -> plan -> build
-cycle (ROADMAP has 0 open rows at /done; deep-dive 20261006 added plans
-059/060, both merged). Read the inbox, read progress/loop.json and
-loop_items/*.json; adjudicate anything in adjudicate / merge-conflict /
-gave-up / failed-dirty. Plan 018 matters at the 2026-10-08 maintenance
-(level cap 75): check the Leveling card accepts 71+.
+cycle (ROADMAP 0 open rows at /done; autonomy round plans 061-073 all
+merged). Read the inbox, progress/loop.json and loop_items/*.json;
+adjudicate anything in adjudicate / merge-conflict / gave-up /
+failed-dirty (session 7: 061 merge-refused and 070 merge-conflict were
+NOT auto-retried by the loop - check for that pattern each session).
+Plan 018 at the 2026-10-08 maintenance (cap 75): LEVEL_MAX=75 already in
+server/ew/levels.py; confirm the Leveling card in use after maintenance.
 
 Carried forward (not acted on yet):
 - Scorecard BEFORE/AFTER (MAIN order 0300 section 4): needs the OpenSSF
@@ -52,6 +54,21 @@ Carried forward (not acted on yet):
   (053), cooking/alchemy margins (054), Jetina/Caphras (055), dice timer
   (056), Deadeye notes (057), event-notice import (059), Secret Book ledger
   (060) - sanity-check in the dashboard / overlay.
+- OPERATOR (plans 061-073 QA, new session 7 - autonomy round): auto play
+  session from login/exit (062), auto-OCR of new screenshots with
+  confidence-gated commit (063), official notice auto-import with undo (064),
+  auto-detected game/screenshot folders (065), progress read from OCR (066),
+  context-aware overlay widgets (067), auto-ticked checklist rows (068),
+  "What now" card (069), stale-prompt expiry / quiet when game closed (070),
+  self-curating market watch (071), boss schedule drift banner (072),
+  signal health digest (073) - play a normal session and note anything that
+  still needs a click.
+- NOTE (new): ew/salvage-031 deleted session 7 with git branch -D; 32e8ed5
+  was NOT an ancestor of main (031 landed as a different commit a808a8c);
+  recoverable from the reflog for ~90 days if ever needed.
+- NOTE (new): research 0007 lists Black Desert Foundry / Grumpy Green
+  wp-json feeds and Steam RSS (app 582660) as clean backup sources;
+  bdoplanner robots forbids; garmoth likely bot-challenged - link only.
 - MAIN to record EW's port block 8940-8959 in the machine-wide registry and
   add EW to the roster / lane widget (roster INFO 0230 says EW is a member).
 - NOTE: write gitignored config/leak_needles.json on any new host before
@@ -72,11 +89,14 @@ Carried forward (not acted on yet):
   since 56be70f a backslash-escaped letter (\d) is no longer a drive path.
 - NOTE: SS's 2245 ANSWER to MAIN (v6) was misdelivered into EW's inbox; not
   acted on, reported to MAIN in EW's v6 ANSWER; marked seen in the loop watch.
-- NOTE: arsha.io v2 history / orderbook / queue / search / category
-  endpoints return 500 "blocked by Imperva" (research 0004, 2026-10-05);
-  plans 028/052 use fallbacks. Re-probe before any new market plan.
-- NOTE: BDO-REST-API host was unreachable 2026-10-05 (research 0004);
-  re-check if plan 004 profile card / 041 / 042 show errors.
+- NOTE: arsha.io v2 re-probed 2026-10-06 (research 0007): list endpoints
+  (wait/hot/search/category/util db) work; per-item sublist/history/
+  orderbook for tradable items still 500 code 103 (Imperva). Fallbacks stay.
+- NOTE: BDO-REST-API moved to a host whose robots.txt is Disallow: / ; old
+  host dead (research 0007). Plan 061 removed the default and gates any
+  configured host on robots; profile features (004/041/042) are quiet until
+  a self-hosted instance (docker man90/bdo-rest-api, port 8001) is set in
+  config/local.json. Self-hosting = an install, adjudicator call.
 - NOTE: research 0003 dates (Olvia Class 3 enrol 2026-11-05, quests
   2026-11-11) are BDFoundry-sourced, unverified vs the official notice;
   NA world boss times after the 2026-11-01 DST change unconfirmed (plan 031
@@ -87,40 +107,38 @@ Carried forward (not acted on yet):
   lane-1; pushed, left as is.
 - NOTE: 028 merge kept 028's rounding fmtSilverExact over 027's; 027 test
   expects fmtSilverExact(1.5) == '2'.
-- NOTE (new): backup branch ew/salvage-031 (32e8ed5) is redundant (031
-  merged a808a8c); delete with `git branch -D ew/salvage-031`.
-- NOTE (new): operator authorized a reset of EW's headless run counter on
+- NOTE: operator authorized a reset of EW's headless run counter on
   2026-10-05 ~21:10 (loop had paused at 117/120, lane widget showed idle);
   ops/loop/control/headless_budget.json set to starts=[], read back; old
   counts in ops/runtime/headless_budget.pre-reset-*.json. A widget "idle"
   with inbox_status state "limit" = the 120/24 h cap, not a stall.
-- NOTE (new): known limit of the 56be70f salvage path: a real leak that
+- NOTE: known limit of the 56be70f salvage path: a real leak that
   main's hook refuses lands in merge-conflict and burns up to 2 resolve
   runs before stopping.
 
 Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew, HALT absent at
 /done. State: ops/loop/control/loop_items/*.json, progress/loop.json,
-progress/lane-<i>.json (lanes now write per-index files), inbox_status.json
-(runs_in_window / cap). Session 6 loop fix 56be70f: leak-sweep false
-positive on \d regex fixed; refused lane commits salvaged to
-refs/ew/keep/<id> and the lane reset; failed-dirty items with staged work
-are retried each tick. EW server restarted on 04af777 (version read back =
-HEAD); restart again after more server merges if /api/version lags.
+progress/lane-<i>.json, inbox_status.json. Merge-stuck items are fixed by a
+session agent (pattern: merge refs/ew/keep/<id> onto main, keep both sides,
+mark item merged, delete keep ref, push). EW server restarted on 4649c98
+(version read back = HEAD); restart after more server merges if
+/api/version lags (server was found offline once this session).
 
 Acceptance: each new deep-dive plan merged by the loop with ci green,
 nothing in adjudicate / merge-conflict / gave-up / failed-dirty.
 
-Do NOT redo: plans 019-060 merged (plan 058 resolve lane proven on 030,
-merge 8ef620e), H521108 eta.py npm fix (fe3f3c0), loop stall fix 56be70f,
-lane-race fix bc5a6bd, deep-dive 20261006, research 0003-0005, LaneLoop
-arm, kit v8, plans 012-018, agent worktree a6e7cdd38c14ab6e3 removed.
+Do NOT redo: plans 019-073 merged (061 c019766 via leak-sweep false
+positive fix; 070 4649c98 with 069/070 whatnow-filter reconcile), research
+0007 autonomy deep-dive (4c03025), H9665a8 merged, H77a68e/H5850e9
+no-change (records), loop stall fix 56be70f, lane-race fix bc5a6bd,
+LaneLoop arm, kit v8.
 
 In flight: none (all 3 lanes FREE at /done; loop idle, next deep-dive
 2026-10-07).
 
-Status: main 04af777 = origin/main (nothing new to push this /done).
-Gates this /done: pytest exit 0, node 528 pass / 0 fail, leak sweep ARMED
-(19). CI: ci 37440948010 + codeql 37440948070 success on 04af777. Server
-health ok, version 04af777. Session jsonl ~0.7 MB.
+Status: main 4649c98 = origin/main before this hand-off commit. Gates this
+/done: pytest exit 0, node 600 pass / 0 fail, leak sweep ARMED (19). CI:
+ci 37547948158 + codeql 37547948217 success on 4649c98. Server health ok,
+version 4649c98. Session jsonl ~1 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
