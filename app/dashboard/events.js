@@ -163,7 +163,11 @@
     const parts = [];
     if (typeof r.rewards === 'string' && r.rewards) parts.push(r.rewards);
     if (typeof r.url === 'string' && r.url) parts.push(r.url);
-    if (typeof r.ends === 'string') parts.push('ends ' + r.ends);
+    if (typeof r.ends === 'string') {
+      // Plan 048: local time first, the stored UTC beside it.
+      const t = C.fmtLocal(r.ends);
+      parts.push('ends ' + (t ? t.text + ' (' + t.title + ')' : r.ends));
+    }
     return parts.join('\n');
   }
 

@@ -52,7 +52,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 045 | Inventory / weight / storage planner + Value Pack ledger | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 046 | Session-end summary: prompt to stop the grind on game exit, nightly and weekly recap | [ ] open |
 | 047 | Density and accessibility rework: content-sized cards, focus-visible, keyboard tabs, tab badges | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
-| 048 | Quick-entry parsers (1.2b, 30d, 90m) + local time everywhere | [ ] open |
+| 048 | Quick-entry parsers (1.2b, 30d, 90m) + local time everywhere | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 049 | Shared SSE event bus in the dashboard, hidden-tab poll pause, keyed row updates | [ ] open |
 | 050 | Command palette (Ctrl+K) with typed commands and cross-tab search | [ ] open |
 | 051 | First-run checklist: profile family, log path, ScreenShot folder, overlay corner, watch items, dailies | [ ] open |

@@ -199,11 +199,15 @@ test('buffRows: every server buff listed (armed or not), defaults only for missi
   assert.ok(r2.every((r) => r.minutes >= 1));
 });
 
-test('grind.js: buff minutes input fits 43200', () => {
+// Plan 048: the buff field holds a short duration ('30d', '1h30m') or minutes.
+test('grind.js: buff minutes input fits 30d / 43200', () => {
   const src = read('dashboard/grind.js');
-  assert.match(src, /min\.maxLength = 5;/);
-  assert.match(src, /1-43200/);
+  assert.match(src, /min\.maxLength = 8;/);
+  assert.match(src, /max 30d/);
+  assert.match(src, /C\.buffRowView\(row\)/);
   assert.doesNotMatch(src, /minutes \(1-1440\)/);
+  assert.ok('43200'.length <= 8 && C.fmtDurationShort(43200).length <= 8);
+  assert.strictEqual(C.parseGrindForm('buff', { name: 'Value Pack', minutes: '43200' }).ok, true);
 });
 
 test('buffRows: server buffs merged with defaults by name, armed first by time left', () => {

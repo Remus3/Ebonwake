@@ -140,7 +140,11 @@
     ui.count.className = 'ew-muted ew-gnum' + (n > NOTE_MAX ? ' ew-over' : '');
     ui.dirty.hidden = !dirty(sec);
     ui.save.disabled = !sec || !dirty(sec) || n > NOTE_MAX;
-    ui.updated.textContent = sec && typeof sec.updated === 'string' && sec.updated ? 'saved ' + sec.updated.slice(0, 16).replace('T', ' ') + ' UTC' : '';
+    // Plan 048: local time, UTC on hover.
+    const saved = sec && typeof sec.updated === 'string' && sec.updated ? C.fmtLocal(sec.updated) : null;
+    ui.updated.textContent = saved ? 'saved ' + saved.text :
+      (sec && typeof sec.updated === 'string' && sec.updated ? 'saved ' + sec.updated.slice(0, 16).replace('T', ' ') + ' UTC' : '');
+    ui.updated.title = saved ? saved.title : '';
     ui.secTabs.forEach(function (b) {
       const s = sections().filter(function (x) { return x.id === b.dataset.sec; })[0];
       b.classList.toggle('dirty', dirty(s));
@@ -462,9 +466,11 @@
     silver.maxLength = 22;
     silver.autocomplete = 'off';
     silver.placeholder = 'silver on hand';
+    silver.title = 'silver on hand: 1.2b, 850m or 1,234,567';
     const hours = el('input');
     hours.type = 'text';
-    hours.maxLength = 5;
+    hours.maxLength = 6;
+    hours.title = 'grind hours per day: 2.5 or 2h30m';
     hours.size = 6;
     hours.autocomplete = 'off';
     hours.placeholder = 'h/day';

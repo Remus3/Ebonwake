@@ -127,8 +127,8 @@
       f.sid.value = it.sid || 0;
       f.q.value = it.name || '';
       f.hits.textContent = '';
-      f.below.value = it.below === null || it.below === undefined ? '' : it.below;
-      f.above.value = it.above === null || it.above === undefined ? '' : it.above;
+      f.below.value = typeof it.below === 'number' ? C.fmtSilverExact(it.below) : '';
+      f.above.value = typeof it.above === 'number' ? C.fmtSilverExact(it.above) : '';
     }
     loadItem();
     draw();
@@ -402,8 +402,11 @@
     field(adv, 'id', 'item id', true);
     field(adv, 'sid', 'enhance (sid)', true);
     form.appendChild(adv);
-    field(form, 'below', 'alert below', true);
-    field(form, 'above', 'alert above', true);
+    // Plan 048: alert prices take 1.2b / 850m / 1,234,567.
+    field(form, 'below', 'alert below', false);
+    field(form, 'above', 'alert above', false);
+    f.below.placeholder = '850m';
+    f.above.placeholder = '1.2b';
     const btns = el('div', 'ew-btns');
     const save = el('button', 'ew-btn', 'Save');
     save.type = 'submit';
