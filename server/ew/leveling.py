@@ -552,6 +552,11 @@ class LevelingService:
                                  and _parse_iso(s["ts"]) < since)
                             for s in reversed(samples[-VIEW_SAMPLES:])]}
 
+    def hot_active(self, now=None):
+        """Plan 067: True while a Hot Time window (typed or plan 064 dated) is on."""
+        doc = self._load()
+        return bool(hot_status(doc["hot_windows"], now or self._now(), doc["hot_auto"])["active"])
+
     def current_level(self):
         """Current level (newest typed sample, raised by a newer-higher plan 041
         profile marker), or None (plan 013 season auto-tick)."""
