@@ -4529,6 +4529,134 @@
     };
   }
 
+  // ---- Imperial delivery (plan 053) ----
+  // Formatters over GET /api/imperial: {day, reset: {next_utc, left_s}, cp:
+  // {value, source, typed}, types: [{type, cap, delivered, left, done,
+  // mastery_pct}], boxes: [{id, type, name, items, payout, cost, ratio,
+  // missing, origin}], best: {cooking: [ids], alchemy: [ids]}, rules,
+  // data_error}. Bounds mirror server/ew/imperial.py. Operator ticks and
+  // cached market prices only; nothing comes from the game.
+
+  const IMP_TYPES = ['cooking', 'alchemy'];
+  const IMP_BOX_ID = /^(cooking|alchemy)-[a-z0-9-]{1,40}$/;
+  const IMP_NAME_MAX = 40;
+  const IMP_ITEMS_MAX = 10;
+  const IMP_ITEM_ID = [1, 2147483647];
+  const IMP_QTY = [1, 9999];
+  const IMP_CP = [0, 10000];
+  const IMP_COUNT_MAX = 10000;
+  const IMP_MASTERY_MAX = 500;
+
+  function impTitle(t) { return t.charAt(0).toUpperCase() + t.slice(1); }
+
+  function validImpItems(v) {
+    if (!Array.isArray(v) || !v.length || v.length > IMP_ITEMS_MAX) return false;
+    const seen = {};
+    return v.every(function (it) {
+      if (!exact(it, ['id', 'qty']) || !inRange(it.id, IMP_ITEM_ID) || !inRange(it.qty, IMP_QTY) || seen[it.id]) return false;
+      seen[it.id] = true;
+      return true;
+    });
+  }
+
+  // POST /api/imperial body: exactly one of deliver|cp|mastery|box_add|box_del.
+  function validImperialBody(body) {
+    if (!plainObject(body)) return false;
+    const keys = Object.keys(body);
+    if (keys.length !== 1) return false;
+    const v = body[keys[0]];
+    switch (keys[0]) {
+      case 'deliver': return exact(v, ['type', 'add']) && IMP_TYPES.indexOf(v.type) >= 0 &&
+        isInt(v.add, -IMP_COUNT_MAX) && v.add <= IMP_COUNT_MAX && v.add !== 0;
+      case 'cp': return v === null || inRange(v, IMP_CP);
+      case 'mastery': return exact(v, ['type', 'pct']) && IMP_TYPES.indexOf(v.type) >= 0 &&
+        isNum(v.pct) && v.pct >= 0 && v.pct <= IMP_MASTERY_MAX;
+      case 'box_add': return exact(v, ['type', 'name', 'items']) && IMP_TYPES.indexOf(v.type) >= 0 &&
+        validAscii(v.name, IMP_NAME_MAX) && validImpItems(v.items);
+      case 'box_del': return typeof v === 'string' && IMP_BOX_ID.test(v);
+      default: return false;
+    }
+  }
+
+  // One row per type: {type, label, delivered, cap, left, done, text, mastery}.
+  // Without CP the cap is unknown: the text asks for it instead of guessing.
+  function imperialRows(view) {
+    const types = plainObject(view) && Array.isArray(view.types) ? view.types : [];
+    return types.filter(function (t) {
+      return plainObject(t) && IMP_TYPES.indexOf(t.type) >= 0 && isNum(t.delivered);
+    }).map(function (t) {
+      const cap = isNum(t.cap) ? t.cap : null;
+      const left = cap === null ? null : Math.max(0, cap - t.delivered);
+      return { type: t.type, label: impTitle(t.type), delivered: t.delivered, cap: cap, left: left,
+        done: left === 0,
+        text: cap === null ? t.delivered + ' delivered (set CP for the cap)' : left + ' / ' + cap + ' left',
+        mastery: isNum(t.mastery_pct) ? t.mastery_pct : 0 };
+    });
+  }
+
+  // Countdown to the next reset from reset.next_utc (live between polls).
+  function imperialReset(view, now) {
+    const r = plainObject(view) && plainObject(view.reset) ? view.reset : null;
+    const at = r && typeof r.next_utc === 'string' && ISO_TS.test(r.next_utc) ? Date.parse(r.next_utc) : NaN;
+    return isFinite(at) ? 'resets in ' + fmtDuration(at - now) : '';
+  }
+
+  function imperialCpText(view) {
+    const c = plainObject(view) && plainObject(view.cp) ? view.cp : null;
+    if (!c || !isNum(c.value)) return 'CP ?';
+    return 'CP ' + c.value + (c.source === 'operator' ? ' (typed)' : '');
+  }
+
+  // Best boxes of one type in server order: [{id, name, text, cls}].
+  function imperialBest(view, type) {
+    if (!plainObject(view) || !plainObject(view.best) || !Array.isArray(view.boxes)) return [];
+    const ids = Array.isArray(view.best[type]) ? view.best[type] : [];
+    return ids.map(function (id) {
+      const b = view.boxes.filter(function (x) { return plainObject(x) && x.id === id; })[0];
+      if (!b || !isNum(b.payout) || typeof b.name !== 'string') return null;
+      return { id: id, name: b.name, cls: '',
+        text: fmtSilver(b.payout) + ' for ' + fmtSilver(b.cost) + (isNum(b.ratio) ? ' (x' + b.ratio + ')' : '') };
+    }).filter(Boolean);
+  }
+
+  // Boxes no price could value (shown so the operator can watch the items).
+  function imperialUnpriced(view) {
+    const boxes = plainObject(view) && Array.isArray(view.boxes) ? view.boxes : [];
+    return boxes.filter(function (b) { return plainObject(b) && Array.isArray(b.missing) && b.missing.length; })
+      .map(function (b) { return String(b.name) + ': no cached price for ' + b.missing.join(', '); });
+  }
+
+  // "9213 x 10, 5961 x 2" -> [{id, qty}] or null.
+  function parseImpItems(text) {
+    if (typeof text !== 'string' || !text.trim()) return null;
+    const out = [];
+    const parts = text.split(',');
+    for (let i = 0; i < parts.length; i++) {
+      const m = /^\s*(\d{1,10})\s*[xX*]\s*(\d{1,4})\s*$/.exec(parts[i]);
+      if (!m) return null;
+      out.push({ id: Number(m[1]), qty: Number(m[2]) });
+    }
+    return validImpItems(out) ? out : null;
+  }
+
+  // Add-box form {type, name, items} -> {ok, body} | {ok: false, error}.
+  function parseImperialBox(f) {
+    const name = f && typeof f.name === 'string' ? f.name.trim() : '';
+    if (!f || IMP_TYPES.indexOf(f.type) < 0) return { ok: false, error: 'pick cooking or alchemy' };
+    if (!validAscii(name, IMP_NAME_MAX)) return { ok: false, error: 'name: 1-40 plain characters' };
+    const items = parseImpItems(f.items);
+    if (!items) return { ok: false, error: 'items: "item id x qty", comma separated, up to 10' };
+    return { ok: true, body: { box_add: { type: f.type, name: name, items: items } } };
+  }
+
+  // CP input: blank clears the typed value.
+  function parseImperialCp(text) {
+    const t = typeof text === 'string' ? text.trim().replace(/,/g, '') : '';
+    if (!t) return { ok: true, body: { cp: null } };
+    if (!/^\d{1,5}$/.test(t) || !inRange(Number(t), IMP_CP)) return { ok: false, error: 'CP: a whole number 0-10000' };
+    return { ok: true, body: { cp: Number(t) } };
+  }
+
   // The only routes the dashboard bridge forwards, each with its body check.
   const POST_VALIDATORS = {
     '/api/market/watch': validWatchBody, '/api/today': validTodayBody, '/api/progress': validProgressBody,
@@ -4536,7 +4664,7 @@
     '/api/ocr': validOcrBody, '/api/leveling': validLevelingBody, '/api/settings': validSettingsBody,
     '/api/bosses': validBossesBody, '/api/pets': validPetsBody, '/api/inventory': validInventoryBody,
     '/api/mounts': validMountsBody, '/api/onboarding': validOnboardingBody,
-    '/api/crafting': validCraftingBody
+    '/api/crafting': validCraftingBody, '/api/imperial': validImperialBody
   };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
@@ -4883,7 +5011,8 @@
     '/api/grind': 'Grind', '/api/events': 'Events', '/api/deadeye': 'Deadeye', '/api/ocr': 'OCR',
     '/api/leveling': 'Leveling', '/api/settings': 'Settings', '/api/bosses': 'World bosses',
     '/api/pets': 'Pets', '/api/inventory': 'Inventory', '/api/mounts': 'Mounts',
-    '/api/onboarding': 'Get started', '/api/crafting': 'Crafting'
+    '/api/onboarding': 'Get started', '/api/crafting': 'Crafting',
+    '/api/imperial': 'Imperial delivery'
   };
 
   // One POST result (the ew:post bridge reply) -> one toast.
@@ -5317,6 +5446,15 @@
     invNextLines: invNextLines,
     invTownRows: invTownRows,
     invSaleRows: invSaleRows,
+    IMP_TYPES: IMP_TYPES,
+    validImperialBody: validImperialBody,
+    imperialRows: imperialRows,
+    imperialReset: imperialReset,
+    imperialCpText: imperialCpText,
+    imperialBest: imperialBest,
+    imperialUnpriced: imperialUnpriced,
+    parseImperialBox: parseImperialBox,
+    parseImperialCp: parseImperialCp,
     validPost: validPost,
     POST_ROUTES: POST_ROUTES,
     PALETTE_COMMANDS: PALETTE_COMMANDS,

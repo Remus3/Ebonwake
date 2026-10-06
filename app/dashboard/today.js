@@ -9,7 +9,8 @@
    lists Events-tab items ending before the weekly reset (read-only, GET
    /api/events), and the add form no longer offers `event` - events are added
    once, on the Events tab. Plan 032: the World bosses card (bosses.js,
-   window.EWBosses) mounts between Events and Add item. Plan 033: a "This
+   window.EWBosses) mounts between Events and Add item, followed by plan 053's
+   Imperial delivery card (imperial.js, window.EWImperial). Plan 033: a "This
    week" card lists GET /api/today weekly_plan (eligible first, locked rows
    with their level / AP / DP gap) and counts clears with POST
    {weekly_tick|weekly_untick: id}. Every node is built
@@ -449,6 +450,7 @@
     const fm = formCard();
     [d, w, wk, e].forEach(function (c) { panel.appendChild(c.card); });
     if (window.EWBosses) window.EWBosses.mount(panel); // plan 032: World bosses card
+    if (window.EWImperial) window.EWImperial.mount(panel); // plan 053: Imperial delivery card
     panel.appendChild(fm.card);
     S.ui = { daily: d, weekly: w, week: wk, event: e, form: fm.form };
     if (!S.timer) {
@@ -463,6 +465,7 @@
   function show() {
     poll(false);
     if (window.EWBosses) window.EWBosses.show();
+    if (window.EWImperial) window.EWImperial.show();
   }
 
   window.EWToday = { mount: mount, show: show };

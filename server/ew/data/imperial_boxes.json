@@ -1,0 +1,13 @@
+{
+  "rules": {
+    "types": ["cooking", "alchemy"],
+    "cap_divisor": 2,
+    "payout_pct": 250,
+    "taxed": false,
+    "reset": {"every": "day", "at": "00:00"},
+    "note": "Daily boxes = contribution points / 2, separately per type; the NPC pays 250 percent of the packed items' market price, no tax, mastery adds more; resets at midnight server time (NA = 00:00 UTC, the daily reset); Professional 1+ to package.",
+    "source": "https://www.naeu.playblackdesert.com/en-US/Wiki?wikiNo=133",
+    "verified": "2026-10-05"
+  },
+  "boxes": []
+}
