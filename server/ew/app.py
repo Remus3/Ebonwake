@@ -32,8 +32,8 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import (__version__, bosses, coupons, crafting, deadeye, enhance, events, gamewatch, grind,
-               imperial, inventory, itemnames, leveling, market, mounts, ocr, onboarding, pets,
+from . import (__version__, bosses, coupons, crafting, deadeye, enhance, eventnotices, events,
+               gamewatch, grind, imperial, inventory, itemnames, leveling, market, mounts, ocr, onboarding, pets,
                ports,
                progress, settings, shopping, single, spots, summary, today, weekly)
 from .store import Store
@@ -144,7 +144,7 @@ class EWServer(ThreadingHTTPServer):
                  deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
                  ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
                  coupon_client=None, coupon_spawn=None, bosses_clock=None,
-                 config_path=None):
+                 config_path=None, notice_client=None, notice_spawn=None):
         super().__init__(addr, Handler)
         self.started = _now_iso()
         self.commit = commit
@@ -212,6 +212,11 @@ class EWServer(ThreadingHTTPServer):
         # Coupon suggestions (plan 014): off unless a client is passed; only main()
         # passes the live one, so no test ever reaches the network.
         self.coupons = coupons.CouponService(coupon_client, self.events, spawn=coupon_spawn)
+        # Plan 059: official event-notice windows, suggest-only, gated like plan 014;
+        # maintenance-relative ends follow the events.maintenance_start_utc setting.
+        self.notices = eventnotices.NoticeService(
+            notice_client, self.events, self.store, spawn=notice_spawn,
+            maint_start=lambda: self.settings.view()["settings"]["events.maintenance_start_utc"])
         # Plan 031: NA world boss table + operator loot ticks.
         self.bosses = bosses.BossService(self.store, clock=bosses_clock or time.time)
         # Plan 043: operator-typed pet roster over the tracked pets.json rules.
@@ -383,7 +388,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(e)})
         if path == "/api/events":
             return self._send(200, dict(self.server.events.view(),
-                                        suggested=self.server.coupons.view(refresh=True)))
+                                        suggested=self.server.coupons.view(refresh=True),
+                                        suggested_events=self.server.notices.view(refresh=True)))
         if path == "/api/deadeye":
             return self._send(200, self.server.deadeye.view())
         if path == "/api/deadeye/enhance":
@@ -482,12 +488,18 @@ class Handler(BaseHTTPRequestHandler):
         return getattr(self.server.grind, op)(arg)
 
     def _post_events(self, body):
-        ops = {"add", "edit", "done", "delete", "purge_expired"}
+        ops = {"add", "edit", "done", "delete", "purge_expired", "dismiss_notice"}
         if len(body) != 1 or not (ops & set(body)):
-            raise ValueError("body must be one of {add|edit|done|delete|purge_expired: ...}")
+            raise ValueError("body must be one of "
+                             "{add|edit|done|delete|purge_expired|dismiss_notice: ...}")
         (op, arg), = body.items()
-        out = getattr(self.server.events, op)(arg)
+        if op == "dismiss_notice":  # plan 059
+            self.server.notices.dismiss(arg)
+            out = self.server.events.view()
+        else:
+            out = getattr(self.server.events, op)(arg)
         out["suggested"] = self.server.coupons.view(refresh=False)  # a POST never fetches
+        out["suggested_events"] = self.server.notices.view(refresh=False)
         return out
 
     def _post_deadeye(self, body):
@@ -705,7 +717,7 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                 deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
                 ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
                 coupon_client=None, coupon_spawn=None, bosses_clock=None,
-                config_path=None):
+                config_path=None, notice_client=None, notice_spawn=None):
     return EWServer(("127.0.0.1", port), store_root=store_root, commit=commit,
                     sse_interval=sse_interval, market_client=market_client,
                     market_seed=market_seed, today_clock=today_clock,
@@ -715,7 +727,8 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                     game_cfg=game_cfg, game_poll=game_poll, ocr_runner=ocr_runner,
                     ocr_cache_dir=ocr_cache_dir, leveling_clock=leveling_clock,
                     coupon_client=coupon_client, coupon_spawn=coupon_spawn,
-                    bosses_clock=bosses_clock, config_path=config_path)
+                    bosses_clock=bosses_clock, config_path=config_path,
+                    notice_client=notice_client, notice_spawn=notice_spawn)
 
 
 def main(argv=None, probe=None):
@@ -723,10 +736,13 @@ def main(argv=None, probe=None):
     if (probe or single.probe)() == "ew":
         return 0
     # Plan 030: settings coupons.check = false keeps coupon suggestions off.
-    check = settings.Settings(CONFIG_PATH).view()["settings"]["coupons.check"]
+    # Plan 059: events.notice_check = false keeps event-notice suggestions off.
+    cfg = settings.Settings(CONFIG_PATH).view()["settings"]
     srv = make_server(commit=read_commit(), game_poll=True,
                       game_cfg=gamewatch.config_bdo(REPO_ROOT),
-                      coupon_client=coupons.CouponClient() if check else None)
+                      coupon_client=coupons.CouponClient() if cfg["coupons.check"] else None,
+                      notice_client=(eventnotices.NoticeClient()
+                                     if cfg["events.notice_check"] else None))
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

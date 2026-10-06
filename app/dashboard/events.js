@@ -7,7 +7,9 @@
    https hosts, an open button (plan 057: the operator's browser via the
    ew:open-external bridge) - the dashboard itself never navigates. Every node is built with DOM APIs - no HTML from data.
    Plan 014: a Suggested coupons card lists codes the server found on the
-   official news page (robots.txt-gated); each needs one click to add. */
+   official news page (robots.txt-gated); each needs one click to add.
+   Plan 059: a Suggested events card lists windows from the official Events
+   board; add posts a normal event with its link, dismiss hides the notice. */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -245,6 +247,52 @@
     body.appendChild(box);
   }
 
+  // Plan 059: windows from the official Events board (server side,
+  // robots.txt-gated). Add posts a plain event entry with the source link;
+  // dismiss is remembered server side. Nothing automatic.
+  function drawNotices() {
+    const ui = S.ui;
+    const body = ui.noticeBody;
+    body.textContent = '';
+    const sug = S.data ? S.data.suggested_events : null;
+    const st = C.noticeStatus(sug);
+    const list = C.noticeRows(sug, S.data ? S.data.items : []);
+    ui.noticePill.textContent = S.data ? (list.length ? list.length + ' new' : st.status) : '-';
+    ui.noticePill.className = 'ew-pill ' + (list.length ? 'warn' : 'unknown');
+    if (!list.length) { empty(body, st.status === 'ok' ? 'No new event windows on the Events board.' : st.text); return; }
+    const box = el('div', 'ew-list' + (S.err || st.status === 'stale' ? ' ew-stale' : ''));
+    list.forEach(function (c) {
+      const row = el('div', 'ew-erow suggested');
+      const head = el('div', 'ew-ehead');
+      const t = el('span', 'ew-mname', c.title);
+      t.title = c.url + (c.ends_text ? '\nends ' + c.ends_text : '');
+      head.appendChild(t);
+      if (st.status === 'stale') head.appendChild(el('span', 'ew-badge', 'stale'));
+      const addB = el('button', 'ew-btn ew-bbtn', 'add');
+      addB.type = 'button';
+      addB.title = 'add as an event entry';
+      addB.addEventListener('click', function () {
+        const b = C.noticeAddBody(c);
+        if (b) send(b, 'added');
+      });
+      head.appendChild(addB);
+      const dis = el('button', 'ew-btn ew-bbtn', 'dismiss');
+      dis.type = 'button';
+      dis.title = 'hide this notice';
+      dis.addEventListener('click', function () {
+        const b = C.noticeDismissBody(c);
+        if (b) send(b, 'dismissed');
+      });
+      head.appendChild(dis);
+      const open = window.EWToast && window.EWToast.linkButton(c.url);
+      if (open) head.appendChild(open);
+      row.appendChild(head);
+      row.appendChild(el('div', 'ew-mname ew-muted ew-gnum', 'ends ' + C.noticeEndText(c)));
+      box.appendChild(row);
+    });
+    body.appendChild(box);
+  }
+
   function deadlines() {
     const raw = S.data && Array.isArray(S.data.deadlines) ? S.data.deadlines : [];
     return raw.filter(function (d) { return C.deadlineBrief(d) !== null && typeof d.left_s === 'number'; });
@@ -297,8 +345,9 @@
     body.textContent = '';
     const list = S.data && Array.isArray(S.data.sources) ? S.data.sources : [];
     if (!list.length) { empty(body, 'No sources listed.'); return; }
-    const st = C.suggestStatus(S.data.suggested);
-    body.appendChild(el('div', st.status === 'off' || st.status === 'error' ? 'ew-err' : 'ew-muted', st.text));
+    [C.suggestStatus(S.data.suggested), C.noticeStatus(S.data.suggested_events)].forEach(function (st) {
+      body.appendChild(el('div', st.status === 'off' || st.status === 'error' ? 'ew-err' : 'ew-muted', st.text));
+    });
     const box = el('div', 'ew-list');
     list.forEach(function (s) {
       if (!s || typeof s.name !== 'string' || typeof s.url !== 'string') return;
@@ -333,6 +382,7 @@
     ui.err.textContent = S.err ? (S.data ? 'last data - ' : '') + S.err : '';
     drawCoupons(list.filter(function (r) { return r.kind === 'coupon'; }));
     drawSuggested();
+    drawNotices();
     drawEvents(list.filter(function (r) { return r.kind !== 'coupon'; }));
     drawSources();
   }
@@ -430,12 +480,14 @@
     const cp = card('Coupons');
     const sg = card('Suggested coupons');
     const ev = card('Events and drops');
+    const sn = card('Suggested events');
     const src = card('Sources');
     src.pill.textContent = 'official';
-    [a, cp, sg, ev, src].forEach(function (x) { panel.appendChild(x.card); });
+    [a, cp, sg, ev, sn, src].forEach(function (x) { panel.appendChild(x.card); });
     S.ui = {
       form: a.form, msg: a.msg, err: a.err,
       couponBody: cp.body, couponPill: cp.pill, suggestBody: sg.body, suggestPill: sg.pill,
+      noticeBody: sn.body, noticePill: sn.pill,
       eventBody: ev.body, eventPill: ev.pill,
       sourceBody: src.body, clocks: []
     };

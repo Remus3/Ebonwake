@@ -11,7 +11,7 @@ const read = (p) => fs.readFileSync(path.join(APP, p), 'utf8');
 
 test('groups in plan order, every key dotted, no secrets or loop keys', () => {
   assert.deepStrictEqual(C.SETTINGS_GROUPS.map((g) => g.title),
-    ['Overlay', 'Hotkeys', 'Profile', 'Appearance', 'Notifications', 'Market']);
+    ['Overlay', 'Hotkeys', 'Profile', 'Appearance', 'Notifications', 'Events', 'Market']);
   for (const k of C.SETTINGS_KEYS) {
     assert.match(k, /^[a-z]+(\.[A-Za-z_]+)+$/, k);
     assert.doesNotMatch(k, /^(secrets|loop)\b/, k);
@@ -62,6 +62,16 @@ test('parseSettingInput turns form text into typed values or a hint', () => {
     assert.ok(typeof r.error === 'string' && r.error && !('value' in r), k + '=' + v);
   }
   assert.match(C.parseSettingInput('hotkeys.toggleOverlay', 'Q').error, /modifier/);
+});
+
+test('plan 059: maintenance start is blank or HH:MM UTC', () => {
+  assert.deepStrictEqual(C.parseSettingInput('events.maintenance_start_utc', ' 08:30 '), { value: '08:30' });
+  assert.deepStrictEqual(C.parseSettingInput('events.maintenance_start_utc', ''), { value: '' });
+  for (const v of ['8:30', '24:00', '07:60', 'noon']) {
+    assert.match(C.parseSettingInput('events.maintenance_start_utc', v).error, /HH:MM/, v);
+  }
+  assert.strictEqual(C.validSettingsBody({ set: { 'events.notice_check': false } }), true);
+  assert.strictEqual(C.validSettingsBody({ set: { 'events.maintenance_start_utc': 7 } }), false);
 });
 
 test('settingInputText round-trips through parseSettingInput', () => {

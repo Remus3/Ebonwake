@@ -82,6 +82,9 @@ def test_get_reads_values_and_drops_invalid(cfg):
     ("market.vp", [False], ["false"]),
     ("market.fame_pct", [0, 1.5, 0.75], [-0.1, 1.6, True]),
     ("coupons.check", [True, False], [None]),
+    ("events.notice_check", [True, False], [None, "true"]),
+    ("events.maintenance_start_utc", ["", "07:00", "23:59", "00:00"],
+     ["7:00", "24:00", "07:60", "07:00\n", " 07:00", None, 700]),
 ])
 def test_each_validator(key, good, bad):
     for v in good:
@@ -169,6 +172,9 @@ def test_round_trip_on_the_example_config(tmp_path):
 def test_restart_keys_reported(cfg):
     out = settings.Settings(cfg).apply({"set": {"profile.family": "Abc", "coupons.check": True}})
     assert out["restart"] == ["profile.family"]  # coupons.check already defaulted True
+    out = settings.Settings(cfg).apply({"set": {"events.notice_check": False,
+                                                "events.maintenance_start_utc": "08:00"}})
+    assert out["restart"] == ["events.notice_check"]  # the maintenance start is read live
 
 
 def test_ancestor_not_an_object_is_replaced(tmp_path):

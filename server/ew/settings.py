@@ -20,7 +20,7 @@ import time
 from json.decoder import scanstring
 from pathlib import Path
 
-from . import market, progress
+from . import maint, market, progress
 
 ANCHORS = ("tl", "tr", "bl", "br", "ml", "mr")
 WIDGETS = {"grindSession": True, "grindBuff": True, "eventsSoon": True,
@@ -36,7 +36,7 @@ MODS = ("Control", "Ctrl", "Alt", "Shift", "CommandOrControl", "Super")
 _KEY_RE = re.compile(r"^([A-Z0-9]|F([1-9]|1[0-9]|2[0-4]))$")
 MAX_SET = 64
 # Keys the running server reads only at start (dashboard offers a restart).
-RESTART_KEYS = ("profile.family", "coupons.check")
+RESTART_KEYS = ("profile.family", "coupons.check", "events.notice_check")
 _LOCK = threading.Lock()
 
 
@@ -80,6 +80,11 @@ def valid_family(v):
     return isinstance(v, str) and (v == "" or bool(progress.FAMILY_RE.fullmatch(v)))
 
 
+def valid_maint_start(v):
+    """"" (use data/maintenance.json) or HH:MM UTC."""
+    return v == "" or maint.valid_hhmm(v)
+
+
 def _one_of(choices):
     return lambda v: isinstance(v, str) and v in choices
 
@@ -105,6 +110,9 @@ SPEC.update({
     "market.vp": (_is_bool, False),
     "market.fame_pct": (_num_in(0, market.FAME_MAX), 0),
     "coupons.check": (_is_bool, True),
+    # Plan 059: official event-notice suggestions + the maintenance start override.
+    "events.notice_check": (_is_bool, True),
+    "events.maintenance_start_utc": (valid_maint_start, ""),
 })
 
 
