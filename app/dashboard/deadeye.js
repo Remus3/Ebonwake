@@ -263,7 +263,7 @@
   function loadTable() {
     getJSON('/api/deadeye/enhance').then(function (d) {
       if (d && Array.isArray(d.families) && Array.isArray(d.rows)) S.table = d;
-    }, function (e) { S.table = { err: e.message, families: [], rows: [] }; }).then(drawPlan);
+    }, function (e) { S.table = { err: e.message, families: [], rows: [] }; }).then(draw);
   }
 
   function evInputs(r) {
@@ -389,6 +389,125 @@
     sel.value = want.indexOf(keep) >= 0 ? keep : want[0];
   }
 
+  // ---- Stacks card (plan 036) ----
+
+  function fillOptions(sel, values, labels) {
+    if (Array.prototype.map.call(sel.options, function (o) { return o.value; }).join() === values.join()) return;
+    const keep = sel.value;
+    sel.textContent = '';
+    values.forEach(function (v) {
+      const o = el('option', null, labels ? labels[v] || v : v);
+      o.value = v;
+      sel.appendChild(o);
+    });
+    if (values.indexOf(keep) >= 0) sel.value = keep;
+  }
+
+  function stacksForm(parse, okText, after) {
+    const r = parse();
+    if (!r.ok) { S.ui.stMsg.textContent = r.error; return; }
+    S.ui.stMsg.textContent = '';
+    send(r.body, okText).then(function (ok) { if (ok && after) after(); });
+  }
+
+  function drawStacks() {
+    const ui = S.ui;
+    const body = ui.stBody;
+    body.textContent = '';
+    const fams = S.table && Array.isArray(S.table.families) ? S.table.families : [];
+    fillOptions(ui.st.family, fams);
+    const s = S.data && S.data.stacks;
+    if (!s) {
+      body.appendChild(el('div', 'ew-muted', S.data ? 'stacks need a newer server' : 'loading...'));
+      return;
+    }
+    const f = C.fmtStacks(s);
+    body.appendChild(el('div', 'ew-gnum', 'next: ' + f.advice));
+    body.appendChild(el('div', 'ew-gnum', f.budget));
+    if (f.unknown) body.appendChild(el('div', 'ew-muted', f.unknown));
+    const list = el('div', 'ew-list');
+    f.bank.forEach(function (b) {
+      const row = el('div', 'ew-dline');
+      row.appendChild(el('span', 'ew-gnum', b.text));
+      row.appendChild(button('ew-tx', 'use', 'take one out of the bank', function () {
+        send({ fs_use: { kind: b.kind, value: b.value } }, 'used');
+      }));
+      list.appendChild(row);
+    });
+    f.agris.forEach(function (a) {
+      const row = el('div', 'ew-dline');
+      row.appendChild(el('span', 'ew-gnum', a.text));
+      row.appendChild(button('ew-tx', 'x', 'clear these pity stacks', function () {
+        send({ agris_set: { family: a.family, step: a.step, stacks: 0 } }, 'cleared');
+      }));
+      list.appendChild(row);
+    });
+    if (!f.bank.length && !f.agris.length) list.appendChild(el('div', 'ew-muted', 'No stored stacks or Agris stacks yet.'));
+    body.appendChild(list);
+  }
+
+  function input(ph, max, size) {
+    const i = el('input');
+    i.type = 'text';
+    i.maxLength = max;
+    i.size = size;
+    i.placeholder = ph;
+    i.autocomplete = 'off';
+    return i;
+  }
+
+  function stacksCard() {
+    const c = card('Stacks', 'ew-dstacks');
+    c.pill.textContent = 'FS / Agris / crons';
+    const body = el('div', 'ew-cbody ew-dev');
+    c.card.appendChild(body);
+    const st = {};
+    const form = el('div', 'ew-form ew-dform');
+    st.kind = el('select');
+    st.kind.title = 'stack kind';
+    fillOptions(st.kind, C.FS_KINDS, { advice: 'Advice', saved: 'Saved', cry: 'Cry' });
+    st.value = input('FS', 3, 4);
+    st.count = input('count', 3, 4);
+    const fsForm = function () { return C.parseFsForm({ kind: st.kind.value, value: st.value.value, count: st.count.value }); };
+    const l1 = el('div', 'ew-dline');
+    [st.kind, st.value, st.count,
+      button('ew-btn ew-bbtn', 'Add', 'store failstacks', function () {
+        stacksForm(fsForm, 'stored', function () { st.value.value = ''; st.count.value = ''; });
+      }),
+      button('ew-btn ew-bbtn', 'Use', 'take failstacks out', function () {
+        stacksForm(function () { return C.parseFsForm({ kind: st.kind.value, value: st.value.value, count: st.count.value }, true); }, 'used');
+      })].forEach(function (x) { l1.appendChild(x); });
+    form.appendChild(l1);
+    st.family = el('select');
+    st.family.title = 'gear family';
+    st.step = el('select');
+    st.step.title = 'level the attempt reaches';
+    fillOptions(st.step, C.ENHANCE_STEPS);
+    st.step.value = 'PRI';
+    st.stacks = input('Agris stacks', 4, 6);
+    const l2 = el('div', 'ew-dline');
+    [st.family, st.step, st.stacks,
+      button('ew-btn ew-bbtn', 'Set', 'Agris pity stacks (0 clears)', function () {
+        stacksForm(function () { return C.parseAgrisForm({ family: st.family.value, step: st.step.value, stacks: st.stacks.value }); },
+          'set', function () { st.stacks.value = ''; });
+      })].forEach(function (x) { l2.appendChild(x); });
+    form.appendChild(l2);
+    st.owned = input('crons owned', 13, 9);
+    st.weekly = input('crons / week', 10, 9);
+    const l3 = el('div', 'ew-dline');
+    [st.owned, st.weekly,
+      button('ew-btn ew-bbtn', 'Save', 'crons on hand and weekly income (blank = unchanged)', function () {
+        stacksForm(function () { return C.parseCronsForm({ owned: st.owned.value, weekly_income: st.weekly.value }); },
+          'saved', function () { st.owned.value = ''; st.weekly.value = ''; });
+      })].forEach(function (x) { l3.appendChild(x); });
+    form.appendChild(l3);
+    const m = el('div', 'ew-muted ew-msg', '');
+    form.appendChild(m);
+    c.card.appendChild(form);
+    c.card.appendChild(el('div', 'ew-muted', 'Typed by you; budget assumes each attempt at the level\'s soft-cap FS.'));
+    return { card: c.card, body: body, st: st, msg: m };
+  }
+
   function draw() {
     const ui = S.ui;
     if (!ui || !ui.planBody.isConnected) return;
@@ -396,6 +515,7 @@
     fillSelect(ui.form.target, 'PRI');
     drawNotes();
     drawPlan();
+    drawStacks();
   }
 
   // ---- mount ----
@@ -491,9 +611,13 @@
     panel.classList.add('ew-deadeye');
     const n = notesCard();
     const p = planCard();
+    const k = stacksCard();
     panel.appendChild(n.card);
     panel.appendChild(p.card);
-    S.ui = Object.assign(n, { planBody: p.body, planPill: p.pill, form: p.form, msg: p.msg });
+    panel.appendChild(k.card);
+    S.ui = Object.assign(n, { planBody: p.body, planPill: p.pill, form: p.form, msg: p.msg,
+      stBody: k.body, st: k.st, stMsg: k.msg });
+    if (!S.table) loadTable(); // plan 036: families for the Agris picker
     if (!S.timer) poll(false);
     else draw();
   }

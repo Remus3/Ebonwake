@@ -3,13 +3,21 @@
 Operator-authored text only: markdown notes per fixed section and an ordered
 list of enhancement steps. Nothing here is executed, sent to the game or turned
 into input (Game ToS floor); the dashboard renders the markdown as a safe subset.
+
+Plan 036 adds the operator-typed stack inventory beside the plan: stored
+failstacks (`fs_bank`), Agris Essence pity stacks (`agris`) and crons on hand
+(`crons`), plus advice computed on the plan 035 rate rows: the stored FS for the
+next open step closest to its soft cap without exceeding it, "guaranteed in N
+fails" per Agris row, and owned vs expected crons for every open step.
 """
 
 import datetime as _dt
+import math
 import re
 import threading
 import time
 
+from . import enhance
 from .today import _iso, _parse_iso
 
 SECTIONS = (("addons", "Skill add-ons"), ("crystals", "Crystals"), ("artifacts", "Artifacts"),
@@ -21,6 +29,14 @@ MAX_NOTE = 200
 MAX_STEPS = 100
 STEP_RE = re.compile(r"^d[0-9]{1,9}$")
 _SECTION_IDS = {sid for sid, _ in SECTIONS}
+# Plan 036: Advice of Valks, a saved (stored) stack, Valks' Cry. Order = tie-break.
+FS_KINDS = ("advice", "saved", "cry")
+MAX_FS_ROWS = 60
+MAX_FS_COUNT = 999
+MAX_AGRIS_ROWS = 60
+MAX_AGRIS_STACKS = 1000
+MAX_CRONS = 10 ** 9
+MAX_CRONS_WEEKLY = 10 ** 7
 
 
 # -- validation ----------------------------------------------------------------
@@ -56,6 +72,12 @@ def _span(current, target):
         raise ValueError("target must be above current")
 
 
+def _int(v, name, lo, hi):
+    if not isinstance(v, int) or isinstance(v, bool) or not lo <= v <= hi:
+        raise ValueError(f"{name} must be an int in {lo}..{hi}")
+    return v
+
+
 def _text(v):
     if not isinstance(v, str):
         raise ValueError("text must be a string")
@@ -88,14 +110,73 @@ def _clean_step(it):
             "target": it["target"], "note": it.get("note", ""), "done": it["done"]}
 
 
+def _ok_int(v, lo, hi):
+    return isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi
+
+
+def _clean_bank(raw):
+    out, seen = [], set()
+    for r in raw if isinstance(raw, list) else []:
+        if (isinstance(r, dict) and r.get("kind") in FS_KINDS
+                and _ok_int(r.get("value"), 1, enhance.MAX_FS)
+                and _ok_int(r.get("count"), 1, MAX_FS_COUNT)
+                and (r["kind"], r["value"]) not in seen):
+            seen.add((r["kind"], r["value"]))
+            out.append({"kind": r["kind"], "value": r["value"], "count": r["count"]})
+    return out[:MAX_FS_ROWS]
+
+
+def _clean_agris(raw):
+    out, seen = [], set()
+    for r in raw if isinstance(raw, list) else []:
+        if (isinstance(r, dict) and isinstance(r.get("family"), str)
+                and enhance.FAMILY_RE.fullmatch(r["family"]) and r.get("step") in enhance.STEPS
+                and _ok_int(r.get("stacks"), 1, MAX_AGRIS_STACKS)
+                and (r["family"], r["step"]) not in seen):
+            seen.add((r["family"], r["step"]))
+            out.append({"family": r["family"], "step": r["step"], "stacks": r["stacks"]})
+    return out[:MAX_AGRIS_ROWS]
+
+
+def _clean_crons(raw):
+    raw = raw if isinstance(raw, dict) else {}
+    owned, weekly = raw.get("owned"), raw.get("weekly_income")
+    return {"owned": owned if _ok_int(owned, 0, MAX_CRONS) else 0,
+            "weekly_income": weekly if _ok_int(weekly, 0, MAX_CRONS_WEEKLY) else 0}
+
+
+def _family_guess(item, families):
+    """Same rule as ewcore.enhanceFamilyGuess: the first family (sorted) whose
+    name, underscores as spaces, appears in the item text."""
+    low = item.lower()
+    for f in families:
+        if f.replace("_", " ") in low:
+            return f
+    return None
+
+
+def _sub_steps(current, target):
+    """Levels a plan step climbs through, each the level one attempt reaches."""
+    return LEVELS[LEVELS.index(current) + 1:LEVELS.index(target) + 1]
+
+
+def _fails_left(threshold, stacks):
+    return None if threshold is None else max(0, threshold - stacks)
+
+
 class DeadeyeService:
     """Store domain `deadeye`: {"notes": {section: {text, updated}}, "plan": [{id,
     item, current, target, note, done}] (operator order), "next_id": int,
-    "updated": "<iso>"}."""
+    "fs_bank": [{kind, value, count}], "agris": [{family, step, stacks}],
+    "crons": {owned, weekly_income}, "updated": "<iso>"}.
 
-    def __init__(self, store, clock=time.time):
+    `rates()` returns the effective plan 035 rate rows (the app passes the
+    enhance service's merged rows; default the tracked table)."""
+
+    def __init__(self, store, clock=time.time, rates=None):
         self.store = store
         self.clock = clock
+        self.rates = rates or (lambda: enhance.load_table()["rows"])
         self._lock = threading.Lock()  # read-modify-write; Store guards each file op
         with self._lock:
             if "notes" not in store.get("deadeye"):
@@ -124,7 +205,9 @@ class DeadeyeService:
         nxt = doc.get("next_id")
         top = max((int(s["id"][1:]) for s in plan), default=0) + 1
         ok = isinstance(nxt, int) and not isinstance(nxt, bool) and 1 <= nxt < 10 ** 9
-        return {"notes": notes, "plan": plan, "next_id": max(nxt, top) if ok else top}
+        return {"notes": notes, "plan": plan, "next_id": max(nxt, top) if ok else top,
+                "fs_bank": _clean_bank(doc.get("fs_bank")), "agris": _clean_agris(doc.get("agris")),
+                "crons": _clean_crons(doc.get("crons"))}
 
     def _save(self, doc):
         doc["updated"] = _iso(self._now())
@@ -151,7 +234,92 @@ class DeadeyeService:
         plan = [dict(s, steps=LEVELS.index(s["target"]) - LEVELS.index(s["current"]))
                 for s in doc["plan"]]
         return {"now": _iso(self._now()), "levels": list(LEVELS), "sections": sections,
-                "plan": plan, "progress": self._progress(doc["plan"])}
+                "plan": plan, "progress": self._progress(doc["plan"]), "stacks": self._stacks(doc)}
+
+    # -- plan 036 advice ---------------------------------------------------------
+
+    def _stacks(self, doc):
+        rows = {(r["family"], r["step"]): r for r in self.rates()}
+        families = sorted({f for f, _ in rows})
+        pity = {(a["family"], a["step"]): a["stacks"] for a in doc["agris"]}
+        bank = sorted(doc["fs_bank"], key=lambda r: (FS_KINDS.index(r["kind"]), r["value"]))
+        agris = [dict(a, threshold=t, fails_to_guarantee=_fails_left(t, a["stacks"]))
+                 for a in sorted(doc["agris"], key=lambda a: (a["family"],
+                                                              enhance.STEPS.index(a["step"])))
+                 for t in [rows.get((a["family"], a["step"]), {}).get("agris_threshold")]]
+        open_steps = [s for s in doc["plan"] if not s["done"]]
+        return {"fs_bank": bank, "agris": agris, "crons": doc["crons"],
+                "advice": self._advice(open_steps[:1], rows, families, pity, bank),
+                "budget": self._budget(open_steps, rows, families, pity, doc["crons"])}
+
+    @staticmethod
+    def _advice(first, rows, families, pity, bank):
+        out = {"step_id": None, "item": None, "family": None, "level": None, "softcap_fs": None,
+               "suggest": None, "agris": None, "reason": None}
+        if not first:
+            return dict(out, reason="no open plan step")
+        s = first[0]
+        out.update(step_id=s["id"], item=s["item"])
+        fam = _family_guess(s["item"], families)
+        if fam is None:
+            return dict(out, reason="no gear family named in the item")
+        out["family"] = fam
+        # The first level of the step that has a rate row: an accessory at +0
+        # goes straight to PRI because its family has no +1..+15 rows.
+        level = next((lv for lv in _sub_steps(s["current"], s["target"]) if (fam, lv) in rows),
+                     None)
+        if level is None:
+            return dict(out, reason=f"no {fam} rate rows for {s['current']} -> {s['target']}")
+        row = rows[(fam, level)]
+        stacks = pity.get((fam, level), 0)
+        t = row.get("agris_threshold")
+        out.update(level=level, softcap_fs=row.get("softcap_fs"),
+                   agris={"stacks": stacks, "threshold": t,
+                          "fails_to_guarantee": _fails_left(t, stacks)})
+        soft = row.get("softcap_fs")
+        if soft is None:
+            return dict(out, reason="no soft cap for this level")
+        if not bank:
+            return dict(out, reason="no stored stacks")
+        under = [b for b in bank if b["value"] <= soft]
+        if not under:
+            return dict(out, reason=f"every stored stack is above the soft cap ({soft})")
+        best = max(b["value"] for b in under)
+        pick = next(b for b in under if b["value"] == best)  # bank is in FS_KINDS order
+        return dict(out, suggest={"kind": pick["kind"], "value": pick["value"]})
+
+    @staticmethod
+    def _budget(open_steps, rows, families, pity, crons):
+        """Expected crons for every open step's levels, each attempt at the row's
+        soft-cap FS, the Agris threshold reduced by stacks already on hand."""
+        lines, unknown = [], []
+        for s in open_steps:
+            fam = _family_guess(s["item"], families)
+            if fam is None:
+                continue
+            for lv in _sub_steps(s["current"], s["target"]):
+                row = rows.get((fam, lv))
+                if row is None or not row.get("crons_per_attempt"):
+                    continue
+                pct = (enhance.chance(row, row["softcap_fs"])["pct"]
+                       if row.get("softcap_fs") is not None else None)
+                if pct is None:
+                    unknown.append({"step_id": s["id"], "family": fam, "level": lv})
+                    continue
+                t = row.get("agris_threshold")
+                if t is not None:
+                    t = max(0, t - pity.get((fam, lv), 0))
+                a = enhance.attempts(pct / 100, t)
+                lines.append({"step_id": s["id"], "family": fam, "level": lv,
+                              "fs": row["softcap_fs"], "chance_pct": pct,
+                              "crons_per_attempt": row["crons_per_attempt"],
+                              "crons_mean": row["crons_per_attempt"] * a["crons_attempts"]})
+        needed = sum(ln["crons_mean"] for ln in lines)
+        gap = max(0, needed - crons["owned"])
+        weekly = crons["weekly_income"]
+        weeks = 0 if gap <= 0 else (math.ceil(gap / weekly) if weekly else None)
+        return {"needed": needed, "owned": crons["owned"], "gap": gap, "weekly_income": weekly,
+                "weeks": weeks, "lines": lines, "unknown": unknown}
 
     def source(self):
         """`/api/state` sources.deadeye: {done, total}."""
@@ -244,4 +412,85 @@ class DeadeyeService:
                 plan = doc["plan"]
                 plan[i], plan[j] = plan[j], plan[i]
                 self._save(doc)
+        return self.view()
+
+    # -- plan 036 writes ---------------------------------------------------------
+
+    @staticmethod
+    def _fs_arg(arg, op):
+        arg = _fields(arg, op, ("kind", "value"), ("count",))
+        if arg["kind"] not in FS_KINDS:
+            raise ValueError(f"kind must be one of {', '.join(FS_KINDS)}")
+        return (arg["kind"], _int(arg["value"], "value", 1, enhance.MAX_FS),
+                _int(arg.get("count", 1), "count", 1, MAX_FS_COUNT))
+
+    def fs_add(self, arg):
+        """`{kind, value, count?=1}`: adds to the matching (kind, value) row."""
+        kind, value, n = self._fs_arg(arg, "fs_add")
+        with self._lock:
+            doc = self._load()
+            row = next((r for r in doc["fs_bank"] if (r["kind"], r["value"]) == (kind, value)),
+                       None)
+            if row is None:
+                if len(doc["fs_bank"]) >= MAX_FS_ROWS:
+                    raise ValueError(f"at most {MAX_FS_ROWS} stored-stack rows")
+                doc["fs_bank"].append({"kind": kind, "value": value, "count": n})
+            elif row["count"] + n > MAX_FS_COUNT:
+                raise ValueError(f"count would exceed {MAX_FS_COUNT}")
+            else:
+                row["count"] += n
+            self._save(doc)
+        return self.view()
+
+    def fs_use(self, arg):
+        """`{kind, value, count?=1}`: takes stacks out; a row at 0 is removed."""
+        kind, value, n = self._fs_arg(arg, "fs_use")
+        with self._lock:
+            doc = self._load()
+            row = next((r for r in doc["fs_bank"] if (r["kind"], r["value"]) == (kind, value)),
+                       None)
+            if row is None:
+                raise ValueError(f"no stored {kind} {value}")
+            if row["count"] < n:
+                raise ValueError(f"only {row['count']} stored {kind} {value}")
+            row["count"] -= n
+            if not row["count"]:
+                doc["fs_bank"].remove(row)
+            self._save(doc)
+        return self.view()
+
+    def agris_set(self, arg):
+        """`{family, step, stacks}`: pity stacks after that many failures; 0 clears."""
+        arg = _fields(arg, "agris_set", ("family", "step", "stacks"))
+        if not isinstance(arg["family"], str) or not enhance.FAMILY_RE.fullmatch(arg["family"]):
+            raise ValueError("family must be 1-24 of a-z 0-9 _ (starting a-z)")
+        if arg["step"] not in enhance.STEPS:
+            raise ValueError(f"step must be one of {', '.join(enhance.STEPS)}")
+        stacks = _int(arg["stacks"], "stacks", 0, MAX_AGRIS_STACKS)
+        key = (arg["family"], arg["step"])
+        with self._lock:
+            doc = self._load()
+            rest = [a for a in doc["agris"] if (a["family"], a["step"]) != key]
+            if stacks and len(rest) >= MAX_AGRIS_ROWS:
+                raise ValueError(f"at most {MAX_AGRIS_ROWS} Agris rows")
+            doc["agris"] = rest + ([{"family": key[0], "step": key[1], "stacks": stacks}]
+                                   if stacks else [])
+            self._save(doc)
+        return self.view()
+
+    def crons_set(self, arg):
+        """`{owned?, weekly_income?}` (at least one)."""
+        arg = _fields(arg, "crons_set", (), ("owned", "weekly_income"))
+        if not arg:
+            raise ValueError("crons_set needs owned and/or weekly_income")
+        new = {}
+        if "owned" in arg:
+            new["owned"] = _int(arg["owned"], "owned", 0, MAX_CRONS)
+        if "weekly_income" in arg:
+            new["weekly_income"] = _int(arg["weekly_income"], "weekly_income", 0,
+                                        MAX_CRONS_WEEKLY)
+        with self._lock:
+            doc = self._load()
+            doc["crons"].update(new)
+            self._save(doc)
         return self.view()
