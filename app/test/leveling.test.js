@@ -171,7 +171,7 @@ test('leveling card: DOM-built, bridge writes, SSE leveling event, collapsed edi
   assert.doesNotMatch(src, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
   assert.doesNotMatch(src, /method:\s*'POST'/, 'renderer never POSTs directly');
   assert.match(src, /\/api\/leveling/);
-  assert.match(src, /addEventListener\('leveling'/);
+  assert.match(src, /EWBus\.on\('leveling'/); // plan 049: via the shared dashboard stream
   assert.match(src, /createElement|el\('details'/);
   assert.match(src, /'details'/);
   assert.doesNotMatch(src, /\.open\s*=\s*true/, 'editor collapsed by default');

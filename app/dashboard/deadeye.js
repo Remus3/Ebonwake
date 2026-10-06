@@ -72,7 +72,7 @@
     if (!force && !C.pollDue(S.last, now, POLL_MS)) { draw(); return; }
     S.last = now;
     clearTimeout(S.timer);
-    S.timer = setTimeout(function () { poll(true); }, POLL_MS);
+    S.timer = setTimeout(function () { if (!C.pollPaused(S.panel, document)) poll(true); }, POLL_MS);
     getJSON('/api/deadeye').then(accept, function (e) { S.err = e.message; }).then(draw);
     loadShop();
   }
@@ -732,6 +732,7 @@
   }
 
   function mount(panel) {
+    S.panel = panel;
     panel.classList.add('ew-deadeye');
     const n = notesCard();
     const p = planCard();

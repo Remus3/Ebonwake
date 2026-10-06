@@ -668,6 +668,88 @@
     return lastMs === null || lastMs === undefined || nowMs - lastMs >= intervalMs;
   }
 
+  // ---- Plan 049: shared SSE bus, hidden-tab pause, keyed rows ----
+
+  // In-page pub/sub fed by the dashboard's one EventSource. on() returns off();
+  // a throwing listener never stops the others.
+  function createBus() {
+    const subs = {};
+    return {
+      on: function (domain, fn) {
+        if (typeof domain !== 'string' || !domain || typeof fn !== 'function') return function () {};
+        (subs[domain] = subs[domain] || []).push(fn);
+        return function () {
+          const i = subs[domain] ? subs[domain].indexOf(fn) : -1;
+          if (i >= 0) subs[domain].splice(i, 1);
+        };
+      },
+      emit: function (domain, data) {
+        (subs[domain] || []).slice().forEach(function (fn) {
+          try { fn(data); } catch (e) { /* one bad listener stays local */ }
+        });
+      },
+      domains: function () {
+        return Object.keys(subs).filter(function (k) { return subs[k].length > 0; });
+      }
+    };
+  }
+
+  // A timer poll skips while the window is hidden or the node's tab panel is
+  // not the active one; show() re-polls (pollDue) when the tab comes back.
+  function pollPaused(node, doc) {
+    if (doc && doc.hidden) return true;
+    const p = node && typeof node.closest === 'function' ? node.closest('.ew-panel') : null;
+    return !!(p && p.classList && !p.classList.contains('active'));
+  }
+
+  // Keyed children update: a row whose key and JSON stay the same keeps its
+  // node (focus, scroll, an open <details> survive); a changed row is rebuilt
+  // in place, a new one inserted, a gone one removed, non-keyed nodes dropped.
+  // render(row) builds a fresh node; only the container's own methods are used.
+  function reconcile(container, rows, key, render) {
+    const out = { added: 0, updated: 0, moved: 0, removed: 0 };
+    const old = {};
+    Array.prototype.slice.call(container.children).forEach(function (n) {
+      if (n.ewKey !== undefined && !(n.ewKey in old)) old[n.ewKey] = n;
+    });
+    const want = [];
+    const seen = {};
+    (rows || []).forEach(function (row) {
+      const k = String(key(row));
+      if (seen[k]) return;
+      seen[k] = true;
+      const sig = JSON.stringify(row);
+      let n = old[k];
+      if (n && n.ewSig !== sig) {
+        const fresh = render(row);
+        container.insertBefore(fresh, n);
+        container.removeChild(n);
+        n = fresh;
+        out.updated++;
+      } else if (!n) {
+        n = render(row);
+        out.added++;
+      }
+      n.ewKey = k;
+      n.ewSig = sig;
+      want.push(n);
+    });
+    const keep = new Set(want);
+    Array.prototype.slice.call(container.children).forEach(function (n) {
+      if (keep.has(n)) return;
+      container.removeChild(n);
+      if (n.ewKey !== undefined) out.removed++;
+    });
+    want.forEach(function (n, i) {
+      const at = container.children[i];
+      if (at === n) return;
+      const isNew = n.parentNode !== container;
+      container.insertBefore(n, at || null);
+      if (!isNew) out.moved++;
+    });
+    return out;
+  }
+
   // ---- Today (plan 003) ----
   // A tick is a timestamp; done = ticked_at >= last reset of its kind. Same rule
   // as the server (slice A), so the client re-derives across a reset by itself.
@@ -4729,6 +4811,9 @@
     validWatchBody: validWatchBody,
     parseWatchForm: parseWatchForm,
     pollDue: pollDue,
+    createBus: createBus,
+    pollPaused: pollPaused,
+    reconcile: reconcile,
     netProceeds: netProceeds,
     parseSilver: parseSilver,
     parseDuration: parseDuration,
