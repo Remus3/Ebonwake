@@ -1810,6 +1810,31 @@ def test_refused_lane_commit_is_salvaged_and_merged_in_main(tmp_path):
         root / "docs/plans/ROADMAP.md").read_text()
 
 
+def test_main_hook_refused_merge_is_parked_without_resolve_runs(tmp_path):
+    # a real leak main's hook refuses no longer burns MAX_ATTEMPTS blind resolve
+    # runs: the merge is clean, so a resolve run could only be refused again
+    root, wt = git_world(tmp_path)
+
+    def g(args, cwd, input=None):
+        if args[:1] == ["commit"] and Path(cwd) == Path(root):
+            return subprocess.CompletedProcess(args, 1, "", "[leak-sweep] HALT t.py:1 email")
+        return real_git(args, cwd, input=input)
+    lanes = lambda: [{"index": i, "state": "RUNNING", "lane": n}  # noqa: E731
+                     for i, n in enumerate(("build", "data", "review"))]
+    d = deps(root, spawn=_passing(), git=g, lane_state=lanes)
+    ew_loop.tick(deps=d, no_push=True)
+    rec = ew_loop.Items(root).get("012")
+    assert rec["state"] == "merge-refused" and "leak-sweep" in rec["error"]
+    assert keep_refs(root) == f"refs/ew/keep/012 {rec['commit']}"
+    assert not (root / "feature.txt").exists()  # never merged
+    assert git(root, "status", "--porcelain") == ""  # merge aborted
+    assert not ew_loop.dispatchable(rec)
+    d = deps(root, spawn=_passing(), git=g, lane_state=lanes)
+    ew_loop.tick(deps=d, no_push=True)
+    assert "012" not in d.seen["launch"]
+    assert ew_loop.Items(root).get("012")["state"] == "merge-refused"
+
+
 def test_pre_fix_failed_dirty_record_is_retried(tmp_path):
     # backfill: the 031 shape - failed-dirty, verdict PASS, work staged, no counters
     root, wt = git_world(tmp_path)

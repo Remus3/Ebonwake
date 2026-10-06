@@ -80,3 +80,14 @@ gates.
 6. The merge-conflict row of an item out of resolve runs keeps showing
    `merge-conflict`; when nothing else is open the tick still idles into
    the daily deep-dive (unchanged pre-058 behaviour).
+7. Hand-off item (56be70f salvage limit): a main-side merge commit that
+   main's own pre-commit hook refuses (a real leak; the merge itself was
+   clean) is parked as `merge-refused` (an attention state, ref kept, hook
+   output in `error`) instead of `merge-conflict`. Decision: no resolve
+   runs for it. Alternatives: keep `merge-conflict` (each resolve run merges
+   cleanly, changes nothing, is refused again: 2 runs burned blind); feed
+   the hook output into the resolve prompt (an unattended lane would edit
+   leak-sweep patterns or content to get past the floor). Why: the leak
+   sweep is a floor a session rules on, not something a lane retries.
+   Reverses if: a hook refusal is shown to be routinely fixable by a lane
+   (then route it to a `fix` run with the hook output).
