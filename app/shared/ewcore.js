@@ -253,12 +253,41 @@
     return { min: Math.min.apply(null, ps), max: Math.max.apply(null, ps), last: ps[ps.length - 1] };
   }
 
-  // Same rule as the server (slice A): below wins when both hold.
-  function alertFor(price, below, above) {
+  // Same rule as the server (slice A): below wins when both hold; plan 052
+  // `below_p20` (opt-in) only when no explicit threshold hit.
+  function alertFor(price, below, above, bands, p20) {
     if (!isNum(price)) return null;
     if (isNum(below) && price <= below) return 'below';
     if (isNum(above) && price >= above) return 'above';
+    if (p20 === true && bands && isNum(bands.p20) && price < bands.p20) return 'below_p20';
     return null;
+  }
+
+  const MARKET_ALERTS = ['below', 'above', 'below_p20'];
+
+  // A watch row's alert: the server's when it sent a known kind, else derived.
+  function watchAlert(it) {
+    if (!it || typeof it !== 'object') return null;
+    if (MARKET_ALERTS.indexOf(it.alert) >= 0) return it.alert;
+    return alertFor(it.price, it.below, it.above, it.bands, it.p20);
+  }
+
+  // Plan 052 band strip: positions (0..1) of p20/p50/p80 and the current
+  // price on a scale spanning the band and the price, or null without a band.
+  function bandStrip(bands, price) {
+    if (!bands || typeof bands !== 'object' || !['p20', 'p50', 'p80'].every(function (k) { return isNum(bands[k]); })) return null;
+    const vals = [bands.p20, bands.p80].concat(isNum(price) ? [price] : []);
+    const lo = Math.min.apply(null, vals);
+    const hi = Math.max.apply(null, vals);
+    const x = function (v) { return hi === lo ? 0.5 : (v - lo) / (hi - lo); };
+    const basis = bands.basis === 'history' ? '90d history' : 'own samples';
+    return {
+      p20: x(bands.p20), p50: x(bands.p50), p80: x(bands.p80),
+      price: isNum(price) ? x(price) : null,
+      zone: !isNum(price) ? null : price < bands.p20 ? 'low' : price > bands.p80 ? 'high' : 'mid',
+      text: 'p20 ' + fmtSilver(bands.p20) + '  p50 ' + fmtSilver(bands.p50) + '  p80 ' + fmtSilver(bands.p80),
+      source: basis + ', n=' + (isNum(bands.n) ? bands.n : '?') + (isNum(bands.age_s) ? ', ' + fmtAge(bands.age_s) + ' old' : '')
+    };
   }
 
   // Order book -> top-n sell levels (lowest first) and buy levels (highest
@@ -330,9 +359,10 @@
     if (keys.length !== 1 || (keys[0] !== 'add' && keys[0] !== 'remove')) return false;
     const e = body[keys[0]];
     if (!plainObject(e)) return false;
-    const allowed = keys[0] === 'add' ? ['id', 'sid', 'below', 'above'] : ['id', 'sid'];
+    const allowed = keys[0] === 'add' ? ['id', 'sid', 'below', 'above', 'p20'] : ['id', 'sid'];
     if (!Object.keys(e).every(function (k) { return allowed.indexOf(k) >= 0; })) return false;
     if (!isInt(e.id, 1) || !isInt(e.sid, 0)) return false;
+    if (e.p20 !== undefined && typeof e.p20 !== 'boolean') return false;
     return ['below', 'above'].every(function (k) {
       return e[k] === undefined || e[k] === null || isInt(e[k], 0);
     });
@@ -362,6 +392,7 @@
       if (v === null) return { ok: false, error: k + ': a silver amount like 1.2b, 850m or 1,234,567' };
       add[k] = v;
     }
+    if (f.p20 === true) add.p20 = true; // plan 052 opt-in; off = key absent
     return { ok: true, body: { add: add } };
   }
 
@@ -628,7 +659,7 @@
       return plainObject(it) && isInt(it.id, 1);
     }).map(function (it, i) {
       const key = tickerKey(it);
-      const alert = it.alert === 'below' || it.alert === 'above' ? it.alert : alertFor(it.price, it.below, it.above);
+      const alert = watchAlert(it);
       const prev = Object.prototype.hasOwnProperty.call(b, key) ? b[key] : null;
       let arrow = null;
       if (isNum(it.price) && isNum(prev) && it.price !== prev) arrow = it.price > prev ? 'up' : 'down';
@@ -4719,11 +4750,13 @@
     });
     const out = [];
     (Array.isArray(next.market.items) ? next.market.items : []).forEach(function (it) {
-      if (!plainObject(it) || (it.alert !== 'below' && it.alert !== 'above')) return;
+      if (!plainObject(it) || MARKET_ALERTS.indexOf(it.alert) < 0) return;
       const k = it.id + ':' + (it.sid || 0);
       if (was[k] === it.alert) return;
       const name = typeof it.name === 'string' && it.name ? it.name : 'item ' + it.id;
-      const limit = it.alert === 'below' ? 'at or below ' + fmtSilver(it.below) : 'at or above ' + fmtSilver(it.above);
+      const limit = it.alert === 'below' ? 'at or below ' + fmtSilver(it.below)
+        : it.alert === 'above' ? 'at or above ' + fmtSilver(it.above)
+          : 'under its 90-day p20 ' + fmtSilver(it.bands && it.bands.p20); // plan 052
       out.push(hit('marketAlert:' + k + ':' + it.alert, 'Market alert: ' + name,
         name + ' at ' + fmtSilver(it.price) + ', ' + limit));
     });
@@ -5156,6 +5189,9 @@
     sparkPath: sparkPath,
     historyStats: historyStats,
     alertFor: alertFor,
+    MARKET_ALERTS: MARKET_ALERTS,
+    watchAlert: watchAlert,
+    bandStrip: bandStrip,
     depthBars: depthBars,
     fmtAge: fmtAge,
     marketPill: marketPill,

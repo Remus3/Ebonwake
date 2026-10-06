@@ -1,6 +1,7 @@
 /* EW Market tab (plan 002 slice B): watchlist, item detail (sparkline + order
    book depth), add/edit, hot list. Plan 027: net-after-tax column, buy/sell
-   pair calculator and a pre-order badge for capped / stock-0 queues. Reads only the local EW server; writes go
+   pair calculator and a pre-order badge for capped / stock-0 queues. Plan 052:
+   p20/p50/p80 band strip + opt-in below-p20 alert. Reads only the local EW server; writes go
    through the dashboard preload (window.ewApi) because the server refuses
    renderer POSTs. Every node is built with DOM APIs - no HTML from data. */
 (function () {
@@ -44,8 +45,7 @@
   }
 
   function alertOf(it) {
-    const a = 'alert' in it ? it.alert : C.alertFor(it.price, it.below, it.above);
-    return a === 'below' || a === 'above' ? a : null;
+    return C.watchAlert(it);
   }
 
   function pillEl(fr) {
@@ -136,6 +136,7 @@
       f.hits.textContent = '';
       f.below.value = typeof it.below === 'number' ? C.fmtSilverExact(it.below) : '';
       f.above.value = typeof it.above === 'number' ? C.fmtSilverExact(it.above) : '';
+      f.p20.checked = it.p20 === true;
     }
     loadItem();
     draw();
@@ -144,7 +145,7 @@
   function send(action) {
     const f = S.ui.form;
     const r = C.parseWatchForm({
-      id: f.id.value, sid: f.sid.value, below: f.below.value, above: f.above.value
+      id: f.id.value, sid: f.sid.value, below: f.below.value, above: f.above.value, p20: f.p20.checked
     }, action);
     if (!r.ok) { f.msg.textContent = r.error; return; }
     const bridge = window.ewApi;
@@ -179,7 +180,9 @@
     row.appendChild(netEl(it));
     const a = alertOf(it);
     const badges = el('span', 'ew-badges');
-    badges.appendChild(el('span', a ? 'ew-badge ' + a : 'ew-badge', a || ''));
+    const ab = el('span', a ? 'ew-badge ' + a : 'ew-badge', a === 'below_p20' ? '< p20' : a || '');
+    if (a === 'below_p20' && it.bands) ab.title = 'under the 90-day p20 ' + C.fmtSilverExact(it.bands.p20);
+    badges.appendChild(ab);
     const pre = badgeEl(it);
     if (pre) badges.appendChild(pre);
     row.appendChild(badges);
@@ -225,6 +228,7 @@
     const rows = live.map(function (it) {
       const rest = Object.assign({}, it);
       delete rest.freshness;
+      if (rest.bands) { rest.bands = Object.assign({}, rest.bands); delete rest.bands.age_s; } // ages every GET too
       return { it: rest, tax: tax };
     });
     C.reconcile(w.list, rows, function (r) { return key(r.it); }, watchRow);
@@ -245,6 +249,31 @@
     path.setAttribute('vector-effect', 'non-scaling-stroke');
     svg.appendChild(path);
     return svg;
+  }
+
+  // Plan 052: p20-p80 band as a strip, p50 tick, current price marked.
+  function bandEl(bands, price) {
+    const b = C.bandStrip(bands, price);
+    if (!b) return el('div', 'ew-muted', 'no price band yet');
+    const box = el('div', 'ew-band');
+    const strip = el('div', 'ew-band-strip');
+    const fill = el('span', 'ew-band-fill');
+    fill.style.left = (b.p20 * 100).toFixed(1) + '%'; // CSSOM, allowed by the CSP
+    fill.style.width = ((b.p80 - b.p20) * 100).toFixed(1) + '%';
+    strip.appendChild(fill);
+    const mid = el('span', 'ew-band-p50');
+    mid.style.left = (b.p50 * 100).toFixed(1) + '%';
+    strip.appendChild(mid);
+    if (b.price !== null) {
+      const at = el('span', 'ew-band-at ' + b.zone);
+      at.style.left = (b.price * 100).toFixed(1) + '%';
+      at.title = 'now ' + C.fmtSilverExact(price);
+      strip.appendChild(at);
+    }
+    box.appendChild(strip);
+    const txt = el('div', 'ew-muted', b.text + '  (' + b.source + ')');
+    box.appendChild(txt);
+    return box;
   }
 
   function depth(orders) {
@@ -285,6 +314,7 @@
     if (st.last === null) wrap.appendChild(el('div', 'ew-muted', 'no 90-day history'));
     else wrap.appendChild(sparkline(d.history));
     const last = sub && typeof sub.lastSoldPrice === 'number' ? sub.lastSoldPrice : st.last;
+    wrap.appendChild(bandEl(d.bands, last));
     const stats = el('div', 'ew-stats');
     [['min', st.min], ['max', st.max], ['last', last]].forEach(function (s) {
       const x = el('span', null);
@@ -453,6 +483,14 @@
     field(form, 'above', 'alert above', false);
     f.below.placeholder = '850m';
     f.above.placeholder = '1.2b';
+    // Plan 052: opt-in alert when the price drops under its 90-day p20.
+    const p20lab = el('label', 'ew-check');
+    f.p20 = el('input');
+    f.p20.type = 'checkbox';
+    f.p20.name = 'p20';
+    p20lab.appendChild(f.p20);
+    p20lab.appendChild(el('span', 'ew-muted', ' alert under p20 band'));
+    form.appendChild(p20lab);
     const btns = el('div', 'ew-btns');
     const save = el('button', 'ew-btn', 'Save');
     save.type = 'submit';

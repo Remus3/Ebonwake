@@ -180,14 +180,131 @@ def settings_from(doc):
             "fame_pct": fame if _valid_fame(fame) else 0}
 
 
-def alert_for(price, below, above):
+def alert_for(price, below, above, bands=None, p20=False):
+    """Explicit thresholds win; then `below_p20` (plan 052, opt-in per item):
+    price strictly under the band's p20."""
     if price is None:
         return None
     if below is not None and price <= below:
         return "below"
     if above is not None and price >= above:
         return "above"
+    low = bands.get("p20") if p20 and isinstance(bands, dict) else None
+    if _is_int(low) and price < low:
+        return "below_p20"
     return None
+
+
+# -- plan 052: price bands -------------------------------------------------
+
+BAND_DAYS = 90
+SAMPLE_GAP_S = 3600  # at most one own sample per item an hour (bounds the file)
+DAY_MS = 86_400_000
+_MS_FLOOR = 10 ** 11  # below this a timestamp is taken as seconds
+
+
+def _clean_series(series):
+    out = []
+    for p in series if isinstance(series, list) else []:
+        if not (isinstance(p, (list, tuple)) and len(p) == 2):
+            continue
+        t, v = p
+        if not (_is_int(t) and _is_int(v) and v > 0 and t > 0):
+            continue
+        out.append([t * 1000 if t < _MS_FLOOR else t, v])
+    return out
+
+
+def _rank(sorted_vals, pct):
+    """Nearest-rank percentile: the ceil(pct/100 * n)-th smallest value."""
+    n = len(sorted_vals)
+    return sorted_vals[max(1, math.ceil(pct * n / 100)) - 1]
+
+
+def price_bands(series, days=BAND_DAYS, now_ms=None):
+    """[[t, price], ...] (t in ms or s) -> {p20, p50, p80, n, from, to} over the
+    last `days` (relative to now_ms, else to the newest point), or None."""
+    pts = _clean_series(series)
+    if not pts:
+        return None
+    end = now_ms if now_ms is not None else max(t for t, _ in pts)
+    pts = [p for p in pts if p[0] >= end - days * DAY_MS]
+    if not pts:
+        return None
+    vals = sorted(v for _, v in pts)
+    ts = [t for t, _ in pts]
+    return {"p20": _rank(vals, 20), "p50": _rank(vals, 50), "p80": _rank(vals, 80),
+            "n": len(vals), "from": min(ts), "to": max(ts)}
+
+
+def history_points(data):
+    """arsha GetMarketPriceInfo body -> [[t, price], ...] sorted by t."""
+    h = data.get("history") if isinstance(data, dict) else None
+    points = []
+    if isinstance(h, dict):
+        for k, v in h.items():
+            try:
+                points.append([int(k), v])
+            except (TypeError, ValueError):
+                continue
+    points.sort(key=lambda p: p[0])
+    return points
+
+
+class PriceSamples:
+    """EW's own price samples, one per watch refresh (at most one an hour),
+    kept BAND_DAYS in a runtime JSON file: {"<id>_<sid>": [[t_ms, price], ...]}.
+    The fallback series when arsha /history is blocked (plan 052)."""
+
+    def __init__(self, path, clock=time.time):
+        self.path = Path(path)
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._doc = None
+
+    def _load(self):
+        if self._doc is None:
+            try:
+                raw = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                raw = None
+            raw = raw if isinstance(raw, dict) else {}
+            self._doc = {k: _clean_series(v) for k, v in raw.items() if isinstance(k, str)}
+        return self._doc
+
+    def series(self, item_id, sid=0):
+        with self._lock:
+            return [list(p) for p in self._load().get(f"{int(item_id)}_{int(sid)}", [])]
+
+    def record(self, item_id, sid, ts_s, price):
+        """Add one sample at `ts_s` (epoch seconds); no-op for a missing price, a
+        repeat of the same refresh or one under SAMPLE_GAP_S after the last."""
+        if not _is_int(price) or price <= 0 or ts_s is None:
+            return False
+        t = int(ts_s) * 1000
+        with self._lock:
+            doc = self._load()
+            key = f"{int(item_id)}_{int(sid)}"
+            pts = doc.get(key, [])
+            if pts and t - pts[-1][0] < SAMPLE_GAP_S * 1000:
+                return False
+            cut = int(self.clock() * 1000) - BAND_DAYS * DAY_MS
+            doc[key] = [p for p in pts + [[t, price]] if p[0] >= cut]
+            for k in list(doc):
+                doc[k] = [p for p in doc[k] if p[0] >= cut]
+                if not doc[k]:
+                    del doc[k]
+            self._save(doc)
+            return True
+
+    def _save(self, doc):
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_name(self.path.name + ".tmp")
+            tmp.write_text(json.dumps(doc, separators=(",", ":")), encoding="utf-8")
+            tmp.replace(self.path)
+        except OSError:
+            pass  # samples are best effort; the next refresh retries
 
 
 def _check_int(entry, name, required, default=None):
@@ -206,6 +323,11 @@ def validate_entry(entry, thresholds=True):
     if thresholds:
         out["below"] = _check_int(entry, "below", False)
         out["above"] = _check_int(entry, "above", False)
+        p20 = entry.get("p20", False)
+        if not isinstance(p20, bool):
+            raise ValueError("p20 must be true or false")
+        if p20:  # plan 052 opt-in; stored only when on, so old rows keep their shape
+            out["p20"] = True
     return out
 
 
@@ -249,11 +371,27 @@ class Watchlist:
 
 
 class MarketService:
-    def __init__(self, client, watchlist, settings=None):
+    def __init__(self, client, watchlist, settings=None, samples=None):
         self.client = client
         self.watchlist = watchlist
         self.settings = settings_from({"market": settings or {}})
         self._last = None  # freshness summary of the last watch refresh
+        self.samples = samples if samples is not None else PriceSamples(
+            Path(client.cache_dir).parent / "market_samples.json", clock=client.clock)
+
+    def bands(self, item_id, sid=0):
+        """Plan 052 band from the cached history (stale or not; never fetches),
+        else from EW's own samples. Adds `basis` (history|samples) and `age_s`."""
+        now = self.client.clock()
+        res = self.client.peek(self.client._key("history", item_id, sid), TTL["history"])
+        if res and res["data"] is not None:
+            b = price_bands(history_points(res["data"]), now_ms=int(now * 1000))
+            if b:
+                return dict(b, basis="history", age_s=res["age_s"])
+        b = price_bands(self.samples.series(item_id, sid), now_ms=int(now * 1000))
+        if b:
+            return dict(b, basis="samples", age_s=max(0, int(now - b["to"] / 1000)))
+        return None
 
     def tax(self):
         """Rates the dashboard's pair calculator mirrors (plan 027)."""
@@ -268,14 +406,19 @@ class MarketService:
             res = self.client.sublist(w["id"], w["sid"])
             sub = res["data"] if isinstance(res["data"], dict) else {}
             price = price_of(sub)
+            if res["age_s"] is not None:  # one sample per refresh (plan 052)
+                self.samples.record(w["id"], w["sid"], self.client.clock() - res["age_s"], price)
+            bands = self.bands(w["id"], w["sid"])
+            p20 = w.get("p20") is True
             items.append({"id": w["id"], "sid": w["sid"], "name": sub.get("name"),
                           "price": price, "stock": sub.get("currentStock"),
                           "trades": sub.get("totalTrades"), "below": w.get("below"),
-                          "above": w.get("above"), "alert": alert_for(price, w.get("below"),
-                                                                      w.get("above")),
+                          "above": w.get("above"),
+                          "alert": alert_for(price, w.get("below"), w.get("above"),
+                                             bands=bands, p20=p20),
                           "net": net_proceeds(price, vp, fame),
                           "preorder": preorder_state(sub),
-                          "freshness": _freshness(res)})
+                          "freshness": _freshness(res), "p20": p20, "bands": bands})
         self._last = [it["freshness"] for it in items]
         return {"items": items, "tax": self.tax(), "updated": iso(self.client.clock())}
 
@@ -283,19 +426,12 @@ class MarketService:
         sub = self.client.sublist(item_id, sid)
         hist = self.client.history(item_id, sid)
         orders = self.client.orders(item_id, sid)
-        h = hist["data"].get("history") if isinstance(hist["data"], dict) else None
-        points = []
-        if isinstance(h, dict):
-            for k, v in h.items():
-                try:
-                    points.append([int(k), v])
-                except (TypeError, ValueError):
-                    continue
-        points.sort(key=lambda p: p[0])
+        points = history_points(hist["data"])
         o = orders["data"].get("orders") if isinstance(orders["data"], dict) else None
         return {"sub": sub["data"], "history": points, "orders": o if isinstance(o, list) else [],
                 "freshness": {"sub": _freshness(sub), "history": _freshness(hist),
-                              "orders": _freshness(orders)}}
+                              "orders": _freshness(orders)},
+                "bands": self.bands(item_id, sid)}
 
     def hot(self):
         res = self.client.hot()

@@ -253,7 +253,9 @@ def test_service_watch_view(tmp_path):
     it = doc["items"][0]
     assert it == {"id": 4901, "sid": 0, "name": "Black Stone", "price": 210, "stock": 5000,
                   "trades": 99, "below": 250, "above": None, "alert": "below",
-                  "net": 136, "preorder": None, "freshness": it["freshness"]}
+                  "net": 136, "preorder": None, "freshness": it["freshness"],
+                  "p20": False, "bands": it["bands"]}
+    assert it["bands"]["basis"] == "samples" and it["bands"]["p50"] == 210
     assert it["freshness"]["stale"] is False and doc["updated"]
     assert set(it["freshness"]) == {"fetched_at", "age_s", "ttl_s", "stale", "error"}
 
@@ -545,3 +547,186 @@ def test_route_watch_carries_net_and_preorder(msrv):
     st, doc = _req(msrv, "GET", "/api/market/watch")
     it = doc["items"][0]
     assert st == 200 and "net" in it and "preorder" in it and "tax" in doc
+
+
+# --- plan 052: price bands, cached-history fallback, below-p20 alert ---------
+
+DAY_MS = 86_400_000
+NOW_S = 1_000_000_000.0  # band tests run the clock here (2001-09-09)
+NOW_MS = int(NOW_S * 1000)
+
+
+@pytest.mark.parametrize("prices,want", [
+    ([5], (5, 5, 5)),
+    ([1, 2], (1, 1, 2)),
+    ([1, 2, 3, 4, 5], (1, 3, 4)),
+    (list(range(1, 11)), (2, 5, 8)),
+    (list(range(10, 0, -1)), (2, 5, 8)),  # order does not matter
+    ([7, 7, 7, 7], (7, 7, 7)),
+])
+def test_price_bands_nearest_rank(prices, want):
+    series = [[NOW_MS - i * DAY_MS, p] for i, p in enumerate(prices)]
+    b = market.price_bands(series, now_ms=NOW_MS)
+    assert (b["p20"], b["p50"], b["p80"]) == want and b["n"] == len(prices)
+    assert b["from"] == min(t for t, _ in series) and b["to"] == max(t for t, _ in series)
+
+
+def test_price_bands_empty_and_junk():
+    assert market.price_bands([], now_ms=NOW_MS) is None
+    assert market.price_bands(None, now_ms=NOW_MS) is None
+    junk = [[NOW_MS, 0], [NOW_MS, -1], [NOW_MS, "9"], [NOW_MS, True], ["x", 5], [NOW_MS],
+            None, [NOW_MS, 1.5]]
+    assert market.price_bands(junk, now_ms=NOW_MS) is None
+
+
+def test_price_bands_window_days():
+    series = [[NOW_MS - 100 * DAY_MS, 1], [NOW_MS - 10 * DAY_MS, 50], [NOW_MS, 60]]
+    b = market.price_bands(series, now_ms=NOW_MS)
+    assert b["n"] == 2 and b["p20"] == 50 and b["from"] == NOW_MS - 10 * DAY_MS
+    assert market.price_bands(series, days=200, now_ms=NOW_MS)["n"] == 3
+    assert market.price_bands(series, days=5, now_ms=NOW_MS)["n"] == 1
+
+
+def test_price_bands_seconds_timestamps_normalised():
+    b = market.price_bands([[int(NOW_S) - 86400, 10], [int(NOW_S), 20]], now_ms=NOW_MS)
+    assert b["n"] == 2 and b["to"] == NOW_MS
+
+
+@pytest.mark.parametrize("price,p20,on,want", [
+    (99, 100, True, "below_p20"), (100, 100, True, None), (101, 100, True, None),
+    (99, 100, False, None), (None, 100, True, None), (99, None, True, None),
+])
+def test_alert_below_p20_edge(price, p20, on, want):
+    bands = None if p20 is None else {"p20": p20}
+    assert market.alert_for(price, None, None, bands=bands, p20=on) == want
+
+
+def test_alert_threshold_wins_over_p20():
+    assert market.alert_for(50, 60, None, bands={"p20": 100}, p20=True) == "below"
+    assert market.alert_for(50, None, 40, bands={"p20": 100}, p20=True) == "above"
+
+
+def test_samples_one_per_hour_pruned_90d(tmp_path):
+    clk = Clock(NOW_S)
+    s = market.PriceSamples(tmp_path / "samples.json", clock=clk)
+    s.record(4901, 0, NOW_S - 91 * 86400, 5)  # older than the window: dropped
+    s.record(4901, 0, NOW_S - 10800, 100)
+    s.record(4901, 0, NOW_S - 10800, 100)     # same refresh: no duplicate
+    s.record(4901, 0, NOW_S - 10000, 999)     # under an hour after the last: skipped
+    s.record(4901, 0, NOW_S - 7200, 110)      # exactly an hour: kept
+    s.record(4901, 0, NOW_S, 120)
+    s.record(4901, 1, NOW_S, 7)
+    s.record(4901, 0, NOW_S + 7200, None)     # no price: ignored
+    want = [[int(NOW_S - 10800) * 1000, 100], [int(NOW_S - 7200) * 1000, 110], [NOW_MS, 120]]
+    assert s.series(4901, 0) == want
+    assert market.PriceSamples(tmp_path / "samples.json", clock=clk).series(4901, 0) == want
+    assert s.series(4901, 1) == [[NOW_MS, 7]] and s.series(1, 0) == []
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_samples_pruned_when_clock_moves(tmp_path):
+    clk = Clock(NOW_S)
+    s = market.PriceSamples(tmp_path / "samples.json", clock=clk)
+    s.record(1, 0, NOW_S, 5)
+    clk.t += 91 * 86400
+    s.record(1, 0, clk.t, 6)
+    assert s.series(1, 0) == [[int(clk.t) * 1000, 6]]
+
+
+def test_samples_corrupt_file_degrades(tmp_path):
+    p = tmp_path / "samples.json"
+    p.write_text("{bad", encoding="utf-8")
+    s = market.PriceSamples(p, clock=Clock(NOW_S))
+    assert s.series(4901, 0) == []
+    p.write_text(json.dumps({"4901_0": "junk", "1_0": [[NOW_MS, 2.5], "x", [NOW_MS, 3]]}),
+                 encoding="utf-8")
+    s = market.PriceSamples(p, clock=Clock(NOW_S))
+    assert s.series(4901, 0) == [] and s.series(1, 0) == [[NOW_MS, 3]]
+    s.record(4901, 0, NOW_S, 9)
+    assert s.series(4901, 0) == [[NOW_MS, 9]]
+
+
+def _bands_svc(tmp_path, routes, clk):
+    c, f = _client(tmp_path, routes, clk)
+    svc = market.MarketService(c, market.Watchlist(Store(tmp_path / "store"), seed=[4901]),
+                               samples=market.PriceSamples(tmp_path / "samples.json", clock=clk))
+    return svc, f
+
+
+def test_watch_bands_from_cached_history_without_new_calls(tmp_path):
+    clk = Clock(NOW_S)
+    hist = {"id": 4901, "sid": 0,
+            "history": {str(NOW_MS - i * DAY_MS): 100 + i for i in range(10)}}
+    svc, f = _bands_svc(tmp_path, {"GetWorldMarketSubList": SUB, "GetMarketPriceInfo": hist,
+                                   "GetBiddingInfoList": {"orders": []}}, clk)
+    svc.item(4901, 0)  # operator opened the detail: history now cached
+    n = len(f.calls)
+    clk.t += 5000      # history cache past its TTL: still used, never refetched by watch
+    it = svc.watch()["items"][0]
+    assert [u for u in f.calls[n:] if "GetMarketPriceInfo" in u] == []
+    b = it["bands"]
+    assert (b["p20"], b["p50"], b["p80"], b["n"]) == (101, 104, 107, 10)
+    assert b["basis"] == "history" and b["age_s"] == 5000
+    assert it["p20"] is False and it["alert"] is None
+
+
+def test_watch_bands_fall_back_to_samples_when_history_blocked(tmp_path):
+    clk = Clock(NOW_S)
+    blocked = FIXTURES / "history_blocked.json"
+    assert json.loads(blocked.read_text(encoding="utf-8"))["code"] == 103
+    svc, f = _bands_svc(tmp_path, {"GetWorldMarketSubList": SUB,
+                                   "GetMarketPriceInfo": blocked.read_bytes(),
+                                   "GetBiddingInfoList": {"orders": []}}, clk)
+    assert svc.item(4901, 0)["freshness"]["history"]["error"]
+    svc.watchlist.add({"id": 4901, "sid": 0, "p20": True})
+    for p in [300, 250, 260, 270, 280]:
+        clk.t += 3600  # past the sublist TTL: one refresh, one sample
+        f.routes["GetWorldMarketSubList"] = dict(SUB, lastSoldPrice=p)
+        it = svc.watch()["items"][0]
+    b = it["bands"]
+    assert b["basis"] == "samples" and b["n"] == 5 and b["p20"] == 250 and b["age_s"] == 0
+    assert it["p20"] is True and it["alert"] is None  # 280 is not below 250
+    clk.t += 3600
+    f.routes["GetWorldMarketSubList"] = dict(SUB, lastSoldPrice=200)
+    it = svc.watch()["items"][0]
+    assert it["alert"] == "below_p20" and it["bands"]["n"] == 6
+
+
+def test_watch_bands_none_without_any_data(tmp_path):
+    svc, _ = _bands_svc(tmp_path, {"GetWorldMarketSubList": OSError("x")}, Clock(NOW_S))
+    it = svc.watch()["items"][0]
+    assert it["bands"] is None and it["alert"] is None
+
+
+def test_watch_records_one_sample_per_refresh(tmp_path):
+    clk = Clock(NOW_S)
+    svc, _ = _bands_svc(tmp_path, {"GetWorldMarketSubList": SUB}, clk)
+    svc.watch()
+    clk.t += 10
+    svc.watch()
+    assert svc.samples.series(4901, 0) == [[NOW_MS, 210]]
+
+
+def test_item_carries_bands(tmp_path):
+    clk = Clock(NOW_S)
+    hist = {"id": 4901, "sid": 0, "history": {str(NOW_MS): 10, str(NOW_MS - DAY_MS): 20}}
+    svc, _ = _bands_svc(tmp_path, {"GetWorldMarketSubList": SUB, "GetMarketPriceInfo": hist,
+                                   "GetBiddingInfoList": {"orders": []}}, clk)
+    b = svc.item(4901, 0)["bands"]
+    assert b["basis"] == "history" and (b["p20"], b["p80"]) == (10, 20)
+
+
+def test_watchlist_p20_opt_in(tmp_path):
+    wl = market.Watchlist(Store(tmp_path), seed=None)
+    wl.add({"id": 4901, "sid": 0, "p20": True})
+    assert wl.items() == [{"id": 4901, "sid": 0, "below": None, "above": None, "p20": True}]
+    wl.add({"id": 4901, "sid": 0, "p20": False})
+    assert wl.items() == [{"id": 4901, "sid": 0, "below": None, "above": None}]
+    with pytest.raises(ValueError):
+        wl.add({"id": 4901, "p20": "yes"})
+
+
+def test_route_watch_rows_carry_bands(msrv):
+    st, doc = _req(msrv, "GET", "/api/market/watch")
+    it = doc["items"][0]
+    assert st == 200 and "bands" in it and it["p20"] is False

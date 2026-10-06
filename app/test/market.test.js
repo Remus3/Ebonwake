@@ -163,6 +163,61 @@ test('validWatchBody accepts exactly add/remove with int fields', () => {
   assert.strictEqual(C.validWatchBody(r.body), true);
 });
 
+// ---- plan 052: price bands + below-p20 alert ----
+
+test('alertFor mirrors the server: thresholds win, below_p20 strict and opt-in', () => {
+  const b = { p20: 100, p50: 120, p80: 140 };
+  assert.strictEqual(C.alertFor(99, null, null, b, true), 'below_p20');
+  assert.strictEqual(C.alertFor(100, null, null, b, true), null);
+  assert.strictEqual(C.alertFor(99, null, null, b, false), null);
+  assert.strictEqual(C.alertFor(99, null, null, null, true), null);
+  assert.strictEqual(C.alertFor(50, 60, null, b, true), 'below');
+  assert.strictEqual(C.alertFor(50, null, 40, b, true), 'above');
+  assert.strictEqual(C.alertFor(null, null, null, b, true), null);
+});
+
+test('watchAlert takes the server kind, else derives it', () => {
+  assert.strictEqual(C.watchAlert({ alert: 'below_p20', price: 999 }), 'below_p20');
+  assert.strictEqual(C.watchAlert({ price: 5, bands: { p20: 9 }, p20: true }), 'below_p20');
+  assert.strictEqual(C.watchAlert({ alert: 'bogus', price: 5, below: 6 }), 'below');
+  assert.strictEqual(C.watchAlert(null), null);
+});
+
+test('bandStrip places p20/p50/p80 and the price on one scale', () => {
+  const b = { p20: 100, p50: 150, p80: 200, n: 30, basis: 'history', age_s: 7200 };
+  const s = C.bandStrip(b, 50);
+  assert.deepStrictEqual([s.p20, s.p50, s.p80, s.price], [1 / 3, 2 / 3, 1, 0]);
+  assert.strictEqual(s.zone, 'low');
+  assert.strictEqual(s.text, 'p20 100  p50 150  p80 200');
+  assert.strictEqual(s.source, '90d history, n=30, 2h old');
+  assert.strictEqual(C.bandStrip(b, 150).zone, 'mid');
+  assert.strictEqual(C.bandStrip(b, 250).zone, 'high');
+  const none = C.bandStrip(Object.assign({}, b, { basis: 'samples' }), null);
+  assert.strictEqual(none.price, null);
+  assert.strictEqual(none.zone, null);
+  assert.match(none.source, /^own samples/);
+  const flat = C.bandStrip({ p20: 7, p50: 7, p80: 7 }, 7);
+  assert.deepStrictEqual([flat.p20, flat.price], [0.5, 0.5]);
+  assert.strictEqual(C.bandStrip(null, 5), null);
+  assert.strictEqual(C.bandStrip({ p20: 1, p50: 2 }, 5), null);
+});
+
+test('p20 opt-in: form -> body -> IPC check', () => {
+  const on = C.parseWatchForm({ id: '5', sid: '0', p20: true }, 'add');
+  assert.deepStrictEqual(on.body, { add: { id: 5, sid: 0, p20: true } });
+  assert.strictEqual(C.validWatchBody(on.body), true);
+  assert.deepStrictEqual(C.parseWatchForm({ id: '5', sid: '0', p20: false }, 'add').body, { add: { id: 5, sid: 0 } });
+  assert.strictEqual(C.validWatchBody({ add: { id: 5, sid: 0, p20: 'yes' } }), false);
+  assert.strictEqual(C.validWatchBody({ remove: { id: 5, sid: 0, p20: true } }), false);
+});
+
+test('market tab draws the band strip and the p20 checkbox', () => {
+  const src = read('dashboard/market.js');
+  assert.match(src, /C\.bandStrip\(/);
+  assert.match(src, /f\.p20\.checked/);
+  assert.match(src, /delete rest\.bands\.age_s/);
+});
+
 test('market POST goes through the dashboard preload only (overlay has no POST path)', () => {
   const pre = read('preload.js');
   // Plan 003 generalised the plan 002 bridge: window.ewApi.post(route, body).
