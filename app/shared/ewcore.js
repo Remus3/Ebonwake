@@ -3454,6 +3454,51 @@
     return rows;
   }
 
+  // ---- First-run checklist (plan 051) ----
+  // GET /api/onboarding {steps: [{id, title, hint, link: {tab, field?}, done}],
+  // done, total, complete, dismissed, show}. The Home card lists the steps
+  // still open, each with an `open` link to its tab (and Settings field).
+  const ONBOARD_ID = /^[a-z]{1,20}$/;
+  const ONBOARD_FIELD = /^[a-z][A-Za-z0-9_.]{0,63}$/;
+
+  function validOnboardingBody(b) {
+    return plainObject(b) && Object.keys(b).length === 1 &&
+      (b.dismiss === true || b.restore === true);
+  }
+
+  function onboardGo(link) {
+    if (!plainObject(link) || typeof link.tab !== 'string' || !ONBOARD_ID.test(link.tab)) return null;
+    const go = { tab: link.tab };
+    if (typeof link.field === 'string' && ONBOARD_FIELD.test(link.field)) go.field = link.field;
+    return go;
+  }
+
+  // Open steps in server order; junk steps are dropped.
+  function onboardingRows(ob) {
+    const steps = plainObject(ob) && Array.isArray(ob.steps) ? ob.steps : [];
+    return steps.filter(function (s) {
+      return plainObject(s) && s.done === false && typeof s.id === 'string' && ONBOARD_ID.test(s.id) &&
+        validTitle(s.title);
+    }).map(function (s) {
+      const r = nowRow(s.title, 'to do', typeof s.hint === 'string' ? s.hint.slice(0, 160) : '', 'warn');
+      r.step = s.id;
+      r.go = onboardGo(s.link);
+      return r;
+    });
+  }
+
+  // Home: the "Get started" card while the server says show (not every step
+  // done, not dismissed); null otherwise.
+  function nowOnboarding(ob) {
+    if (!plainObject(ob) || ob.show !== true) return null;
+    const rows = onboardingRows(ob);
+    if (!rows.length) return null;
+    const c = nowCard('onboarding', 'Get started', 'settings', rows, null);
+    c.meta = countText(ob.done, ob.total, 'done');
+    c.dismiss = true;
+    return c;
+  }
+
   // Home: the last game session's summary when present.
   function nowSummary(sum) {
     const s = plainObject(sum) ? sum.session : null;
@@ -3539,6 +3584,8 @@
     }
     if (has('bosses', 'next')) cards.push(nowBosses(s.bosses, nowMs));
     if (has('summary') && plainObject(s.summary.session)) cards.push(nowSummary(s.summary));
+    const ob = has('onboarding', 'steps') ? nowOnboarding(s.onboarding) : null;
+    if (ob) cards.unshift(ob);  // plan 051: first-run card leads until done or dismissed
     return cards;
   }
 
@@ -4216,7 +4263,7 @@
     '/api/grind': validGrindBody, '/api/events': validEventsBody, '/api/deadeye': validDeadeyeBody,
     '/api/ocr': validOcrBody, '/api/leveling': validLevelingBody, '/api/settings': validSettingsBody,
     '/api/bosses': validBossesBody, '/api/pets': validPetsBody, '/api/inventory': validInventoryBody,
-    '/api/mounts': validMountsBody
+    '/api/mounts': validMountsBody, '/api/onboarding': validOnboardingBody
   };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
@@ -4269,7 +4316,8 @@
     '/api/market/watch': 'Market watch', '/api/today': 'Today', '/api/progress': 'Progress',
     '/api/grind': 'Grind', '/api/events': 'Events', '/api/deadeye': 'Deadeye', '/api/ocr': 'OCR',
     '/api/leveling': 'Leveling', '/api/settings': 'Settings', '/api/bosses': 'World bosses',
-    '/api/pets': 'Pets', '/api/inventory': 'Inventory', '/api/mounts': 'Mounts'
+    '/api/pets': 'Pets', '/api/inventory': 'Inventory', '/api/mounts': 'Mounts',
+    '/api/onboarding': 'Get started'
   };
 
   // One POST result (the ew:post bridge reply) -> one toast.
@@ -4657,6 +4705,9 @@
     pendingStopText: pendingStopText,
     summaryRows: summaryRows,
     nowSummary: nowSummary,
+    validOnboardingBody: validOnboardingBody,
+    onboardingRows: onboardingRows,
+    nowOnboarding: nowOnboarding,
     eventsThisWeek: eventsThisWeek,
     countText: countText,
     tabBadges: tabBadges,

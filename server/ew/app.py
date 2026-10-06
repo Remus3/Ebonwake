@@ -9,10 +9,10 @@ adds its `suggested` coupon block),
 /api/deadeye (plan 007; /api/deadeye/enhance GET plan 035; /api/deadeye/shopping GET plan 037), /api/game (plan 008), /api/leveling (plan 011),
 /api/spots (plan 012, GET only), /api/bosses (plan 031), /api/settings (plan 030), /api/pets
 (plan 043), /api/inventory (plan 045), /api/mounts (plan 044), /api/summary (plan 046),
-and POST
+/api/onboarding (plan 051), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
 /api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings + /api/pets +
-/api/inventory + /api/mounts behind one shared guard.
+/api/inventory + /api/mounts + /api/onboarding behind one shared guard.
 """
 
 import datetime as _dt
@@ -30,8 +30,8 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 from . import (__version__, bosses, coupons, deadeye, enhance, events, gamewatch, grind,
-               inventory, itemnames, leveling, market, mounts, ocr, pets, ports, progress,
-               settings, shopping, single, spots, summary, today, weekly)
+               inventory, itemnames, leveling, market, mounts, ocr, onboarding, pets, ports,
+               progress, settings, shopping, single, spots, summary, today, weekly)
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -227,6 +227,9 @@ class EWServer(ThreadingHTTPServer):
         # Plan 040: loot import matches against the spot's grind loot list.
         self.ocr = ocr.OcrService(self.game, ocr_cache_dir, runner=ocr_runner,
                                   loot_names=self.grind.loot_names)
+        # Plan 051: first-run checklist over the same config file + store.
+        self.onboarding = onboarding.OnboardingService(self.store, self.settings.path,
+                                                       clock=today_clock or time.time)
         if game_poll:  # off by default so tests never probe processes; main() turns it on
             self.game.start()
 
@@ -376,6 +379,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.mounts.view())
         if path == "/api/summary":
             return self._send(200, self.server.summary.view())
+        if path == "/api/onboarding":
+            return self._send(200, self.server.onboarding.view())
         if path == "/events":
             return self._sse()
         if path == "/":  # plan 020: redirect so relative asset paths resolve
@@ -503,13 +508,20 @@ class Handler(BaseHTTPRequestHandler):
         (op, arg), = body.items()
         return getattr(self.server.mounts, op)(arg)
 
+    def _post_onboarding(self, body):
+        ops = {"dismiss", "restore"}
+        if len(body) != 1 or not (ops & set(body)):
+            raise ValueError("body must be {\"dismiss\": true} or {\"restore\": true}")
+        (op, arg), = body.items()
+        return getattr(self.server.onboarding, op)(arg)
+
     POST_ROUTES = {"/api/market/watch": _post_market_watch, "/api/today": _post_today,
                    "/api/progress": _post_progress, "/api/grind": _post_grind,
                    "/api/events": _post_events, "/api/deadeye": _post_deadeye,
                    "/api/ocr": _post_ocr, "/api/leveling": _post_leveling,
                    "/api/bosses": _post_bosses, "/api/settings": _post_settings,
                    "/api/pets": _post_pets, "/api/inventory": _post_inventory,
-                   "/api/mounts": _post_mounts}
+                   "/api/mounts": _post_mounts, "/api/onboarding": _post_onboarding}
 
     def do_POST(self):  # noqa: N802
         """Shared guard for every POST route: loopback Host + application/json +

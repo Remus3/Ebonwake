@@ -1,10 +1,12 @@
 /* EW Home / Now tab (plan 025): one glance screen. Reads the existing GETs
    (/api/today, /api/grind, /api/leveling, /api/events, /api/market/watch,
    plan 032 /api/bosses - a read-only World bosses card, plan 046
-   /api/summary - the last game session's summary card) and
+   /api/summary - the last game session's summary card, plan 051
+   /api/onboarding - the "Get started" first-run card) and
    lets C.composeNow order the cards; a 404 (old server) drops that payload's
    card, other errors keep the last data. Read-only except the one-click tick
-   of a daily, which reuses the Today tick route through the dashboard preload.
+   of a daily, which reuses the Today tick route through the dashboard preload,
+   and the first-run card's dismiss (POST /api/onboarding, same bridge).
    Countdowns update in place every second; a structural change redraws. Every
    node is built with DOM APIs - no HTML from data. */
 (function () {
@@ -12,9 +14,10 @@
   const C = window.EWCore;
   const POLL_MS = 60000;
   const SOURCES = { today: '/api/today', grind: '/api/grind', leveling: '/api/leveling',
-    events: '/api/events', market: '/api/market/watch', bosses: '/api/bosses', summary: '/api/summary' };
+    events: '/api/events', market: '/api/market/watch', bosses: '/api/bosses', summary: '/api/summary',
+    onboarding: '/api/onboarding' };
   const S = { snap: { at: {} }, err: {}, last: null, timer: null, panel: null, shape: null, vals: [],
-    pending: {}, msg: '' };
+    pending: {}, msg: '', obMsg: '' };
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -81,11 +84,51 @@
     });
   }
 
+  // Plan 051: hide the first-run card for good (stored server-side; only an
+  // API POST {restore: true} brings it back).
+  function dismissOnboarding() {
+    if ('onboarding' in S.pending) return;
+    const b = bridge();
+    if (!b) { S.obMsg = 'dismiss needs the Ebonwake app window'; draw(); return; }
+    S.pending.onboarding = true;
+    S.obMsg = '';
+    draw();
+    const done = function (res) {
+      delete S.pending.onboarding;
+      if (res && res.ok && res.data && Array.isArray(res.data.steps)) {
+        S.snap.onboarding = res.data;
+        S.snap.at.onboarding = Date.now();
+      } else {
+        S.obMsg = 'dismiss failed: ' + ((res && res.error) || 'unknown error');
+      }
+      draw();
+    };
+    window.EWToast.via(b).post('/api/onboarding', { dismiss: true }).then(done, function (e) {
+      done({ ok: false, error: String(e && e.message || e) });
+    });
+  }
+
   // ---- render ----
 
   function openTab(tab) {
-    const b = document.querySelector('.ew-tab[data-tab="' + tab + '"]');
+    const b = Array.prototype.find.call(document.querySelectorAll('.ew-tab'), function (t) {
+      return t.dataset.tab === tab;
+    });
     if (b) b.click();
+  }
+
+  // Open a step's tab, then focus its Settings field once the tab has drawn.
+  function openStep(go) {
+    openTab(go.tab);
+    if (!go.field) return;
+    let tries = 0;
+    (function focus() {
+      const f = Array.prototype.find.call(document.querySelectorAll('[data-key]'), function (n) {
+        return n.dataset.key === go.field;
+      });
+      if (f) { f.focus(); return; }
+      if (++tries < 20) setTimeout(focus, 100);
+    })();
   }
 
   // Card ids, labels and tick ids: a change means a full redraw; otherwise
@@ -93,7 +136,7 @@
   function shapeOf(cards) {
     return JSON.stringify(cards.map(function (c) {
       return [c.id, c.meta, c.empty, c.rows.map(function (r) { return [r.label, r.note, r.cls, r.tick]; })];
-    })) + '|' + JSON.stringify(S.err) + '|' + Object.keys(S.pending).join(',') + '|' + S.msg;
+    })) + '|' + JSON.stringify(S.err) + '|' + Object.keys(S.pending).join(',') + '|' + S.msg + '|' + S.obMsg;
   }
 
   function rowNode(r) {
@@ -105,6 +148,13 @@
       b.disabled = r.tick in S.pending;
       b.addEventListener('click', function () { tickDaily(r.tick); });
       n.appendChild(b);
+    }
+    if (r.go) {
+      const g = el('button', 'ew-btn ew-htick', 'open');
+      g.type = 'button';
+      g.title = 'open ' + r.go.tab + (r.go.field ? ' > ' + r.go.field : '');
+      g.addEventListener('click', function () { openStep(r.go); });
+      n.appendChild(g);
     }
     const lab = el('span', 'ew-mname', r.label);
     if (r.note) lab.title = r.note;
@@ -127,10 +177,19 @@
     go.title = 'open the ' + c.tab + ' tab';
     go.addEventListener('click', function () { openTab(c.tab); });
     meta.appendChild(go);
+    if (c.dismiss) {
+      const x = el('button', 'ew-tx', 'dismiss');
+      x.type = 'button';
+      x.title = 'hide this checklist';
+      x.disabled = 'onboarding' in S.pending;
+      x.addEventListener('click', dismissOnboarding);
+      meta.appendChild(x);
+    }
     h.appendChild(meta);
     sec.appendChild(h);
     const body = el('div', 'ew-cbody');
     if (c.id === 'dailies' && S.msg) body.appendChild(el('div', 'ew-err', S.msg));
+    if (c.id === 'onboarding' && S.obMsg) body.appendChild(el('div', 'ew-err', S.obMsg));
     if (c.empty) body.appendChild(el('div', 'ew-muted', c.empty));
     const list = el('div', 'ew-list');
     c.rows.forEach(function (r) { list.appendChild(rowNode(r)); });

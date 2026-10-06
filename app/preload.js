@@ -3,7 +3,8 @@
    allowlist, validates the body and POSTs (the server refuses renderer POSTs by
    design). Routes: /api/market/watch, /api/today, /api/progress, /api/grind,
    /api/events, /api/deadeye, /api/ocr, /api/leveling, /api/bosses (plan 032),
-   /api/pets (plan 043), /api/inventory (plan 045), /api/mounts (plan 044).
+   /api/pets (plan 043), /api/inventory (plan 045), /api/mounts (plan 044),
+   /api/onboarding (plan 051).
    Plan 020 adds the app's
    commit (a read-only launch argument) and a restart of EW's own server (the
    tray "Restart server" path; it never touches the game). Plan 026 adds an
