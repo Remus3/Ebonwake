@@ -2,7 +2,9 @@
    (/api/today, /api/grind, /api/leveling, /api/events, /api/market/watch,
    plan 032 /api/bosses - a read-only World bosses card, plan 046
    /api/summary - the last game session's summary card, plan 051
-   /api/onboarding - the "Get started" first-run card) and
+   /api/onboarding - the "Get started" first-run card, plan 069
+   /api/whatnow - the "What now" card on top, also replaced from each SSE
+   `whatnow` event's full view) and
    lets C.composeNow order the cards; a 404 (old server) drops that payload's
    card, other errors keep the last data. Read-only except the one-click tick
    of a daily, which reuses the Today tick route through the dashboard preload,
@@ -15,7 +17,7 @@
   const POLL_MS = 60000;
   const SOURCES = { today: '/api/today', grind: '/api/grind', leveling: '/api/leveling',
     events: '/api/events', market: '/api/market/watch', bosses: '/api/bosses', summary: '/api/summary',
-    onboarding: '/api/onboarding' };
+    onboarding: '/api/onboarding', whatnow: '/api/whatnow' };
   const S = { snap: { at: {} }, err: {}, last: null, timer: null, panel: null, shape: null, vals: [],
     pending: {}, msg: '', obMsg: '' };
 
@@ -228,6 +230,24 @@
     });
   }
 
+  // Plan 069: the SSE event carries the full view; null (a reconnect) re-GETs.
+  function onWhatNow(view) {
+    if (view && typeof view === 'object' && Array.isArray(view.next)) {
+      S.snap.whatnow = view;
+      S.snap.at.whatnow = Date.now();
+      delete S.err.whatnow;
+      draw();
+      return;
+    }
+    getJSON(SOURCES.whatnow).then(function (body) {
+      S.snap.whatnow = body;
+      S.snap.at.whatnow = Date.now();
+      delete S.err.whatnow;
+    }, function (e) {
+      if (e.gone) { S.snap.whatnow = null; delete S.err.whatnow; } else S.err.whatnow = e.message;
+    }).then(draw);
+  }
+
   // ---- mount ----
 
   function mount(panel) {
@@ -238,6 +258,7 @@
     if (!S.timer) {
       setInterval(draw, 1000);
       poll(false);
+      if (window.EWBus) window.EWBus.on('whatnow', onWhatNow);
     }
   }
 

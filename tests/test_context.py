@@ -126,7 +126,10 @@ def test_rules_file_shape():
     for c, r in raw["contexts"].items():
         assert set(r["widgets"]) <= known, c
     assert raw["contexts"]["closed"]["hidden"] is True
-    assert raw["contexts"]["in_game"]["widgets"][:3] == ["grindSession", "grindBuff", "leveling"]
+    # Plan 069: the What now row leads the calm contexts.
+    assert raw["contexts"]["in_game"]["widgets"][:4] == ["whatNow", "grindSession", "grindBuff",
+                                                         "leveling"]
+    assert raw["contexts"]["idle"]["widgets"][0] == "whatNow"
     assert raw["contexts"]["boss_soon"]["widgets"][0] == "worldBoss"
     assert raw["contexts"]["maint_soon"]["widgets"][0] == "maintenance"
     assert settings.WIDGETS.keys() == set(context.WIDGETS)
@@ -149,7 +152,7 @@ def test_load_rules_drops_junk(tmp_path):
 def test_pins_come_first_and_count_toward_the_cap():
     modes = {"season": "pin", "marketTicker": "pin"}
     w, hidden = context.pick_widgets(RULES, ["in_game"], modes)
-    assert not hidden and w == ["season", "marketTicker", "grindSession", "grindBuff"]
+    assert not hidden and w == ["season", "marketTicker", "whatNow", "grindSession"]
 
 
 def test_pins_are_never_cut():
@@ -162,7 +165,7 @@ def test_blocks_never_show_and_the_next_rule_widget_fills():
     w, _ = context.pick_widgets(RULES, ["boss_soon", "in_game"],
                                 {"worldBoss": "block", "grindBuff": "block"})
     assert "worldBoss" not in w and "grindBuff" not in w
-    assert w == ["grindSession", "leveling", "eventsSoon"]
+    assert w == ["grindSession", "whatNow", "leveling", "eventsSoon"]
 
 
 def test_manual_mode_uses_the_plan030_booleans():
@@ -246,7 +249,7 @@ def test_fixture_timeline_switches_widgets():
     step("not_running")
     assert [s[0] for s in seen] == ["closed", "in_game", "boss_soon", "in_game", "closed"]
     assert seen[0][1] == [] and seen[0][2] is True
-    assert seen[1][1] == ["grindSession", "grindBuff", "leveling", "eventsSoon"]
+    assert seen[1][1] == ["whatNow", "grindSession", "grindBuff", "leveling"]
     assert seen[2][1][0] == "worldBoss"
     assert seen[3][1] == seen[1][1] and seen[4] == seen[0]
 
@@ -270,7 +273,7 @@ def test_provider_failure_is_no_signal():
     svc = context.ContextService(clock=lambda: NOW, game=boom, settings=boom, boss_at=boom,
                                  maint_window=boom, reset_at=boom, hot=boom, rules=RULES)
     v = svc.view()
-    assert v["context"] == "in_game" and v["widgets"][0] == "grindSession"
+    assert v["context"] == "in_game" and v["widgets"][0] == "whatNow"
 
 
 def test_last_activity_uses_screenshots():

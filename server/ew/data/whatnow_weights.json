@@ -1,0 +1,13 @@
+{
+  "_doc": "Plan 069 What now weights. score = weight x 3600 / max(left_s, 60); an action due beyond horizon_s is dropped; an undated action (market alert, OCR review) counts as due in nominal_s.",
+  "boss": {"weight": 1.0, "horizon_s": 1800, "nominal_s": 1800},
+  "reset": {"weight": 1.0, "horizon_s": 10800, "nominal_s": 3600},
+  "buff": {"weight": 1.2, "horizon_s": 900, "nominal_s": 900},
+  "hot": {"weight": 0.6, "horizon_s": 86400, "nominal_s": 3600},
+  "maint": {"weight": 1.5, "horizon_s": 7200, "nominal_s": 3600},
+  "coupon": {"weight": 0.8, "horizon_s": 259200, "nominal_s": 86400},
+  "dice": {"weight": 0.7, "horizon_s": 86400, "nominal_s": 7200},
+  "market": {"weight": 0.5, "horizon_s": 86400, "nominal_s": 3600},
+  "deadline": {"weight": 0.6, "horizon_s": 1209600, "nominal_s": 86400},
+  "ocr": {"weight": 0.3, "horizon_s": 86400, "nominal_s": 7200}
+}

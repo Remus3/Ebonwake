@@ -28,7 +28,7 @@ BOSS_SOON_MIN = 15
 IDLE_MIN = 20
 # The plan 030 overlay widgets plus the maintenance countdown line.
 WIDGETS = ("grindSession", "grindBuff", "eventsSoon", "leveling", "season", "marketTicker",
-           "worldBoss", "dice")
+           "worldBoss", "dice", "whatNow")
 EXTRA_WIDGETS = ("maintenance",)
 MODES = ("auto", "pin", "block")
 MAX_WIDGETS = 4
