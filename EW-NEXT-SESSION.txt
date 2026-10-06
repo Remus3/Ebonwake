@@ -1,18 +1,13 @@
 EW NEXT SESSION
 ---------------
-SESSION: 6
+SESSION: 7
 
-Next action: watch the loop build plans 029-057 (029/030 ran, 031
-dispatched at /done). Plan 058 (loop resolves its own merge conflicts via a
-resolve lane) merged 2568047 - confirm on the FIRST real merge-conflict
-that the tick creates refs/ew/keep/<id>, dispatches kind resolve, and the
-resolve commit merges (state merged, ref dropped). If it misbehaves,
-resolve by hand with the 024/025/026/028 recipe (merges a01964e, b8e0099,
-17976b6, 230e8e4: pin commit with a branch, HALT between ticks, merge
---no-ff, keep both sides, gates, push, item state merged + merged_at) and
-fix 058. Adjudicate anything in adjudicate / merge-conflict / gave-up.
-Plan 018 matters at the 2026-10-08 maintenance (level cap 75): check the
-Leveling card accepts 71+.
+Next action: watch the loop's self-continuing deep-dive -> plan -> build
+cycle (ROADMAP has 0 open rows at /done; deep-dive 20261006 added plans
+059/060, both merged). Read the inbox, read progress/loop.json and
+loop_items/*.json; adjudicate anything in adjudicate / merge-conflict /
+gave-up / failed-dirty. Plan 018 matters at the 2026-10-08 maintenance
+(level cap 75): check the Leveling card accepts 71+.
 
 Carried forward (not acted on yet):
 - Scorecard BEFORE/AFTER (MAIN order 0300 section 4): needs the OpenSSF
@@ -20,8 +15,6 @@ Carried forward (not acted on yet):
   OPERATOR approves that download; BEFORE reference = MAIN audit 3.6. Loop
   item Hf8969a ended no-change (blocked). Nfa7953 ANSWER already sent with it
   marked BLOCKED.
-- Lanes still write progress/lane-<name>.json, not lane-<index>.json
-  (recorded in plan 015).
 - Loop gate limits: the loop runs one local Python (ci runs 3.11 + 3.14) and
   cannot run shell operators in ci.yml steps (none today).
 - EW sent two v8 ANSWERs to MAIN (04:00 loop note said "blocked on v6";
@@ -45,11 +38,20 @@ Carried forward (not acted on yet):
   config/local.json overlay.widgets.
 - OPERATOR (plans 012-014 QA): grind spot recommender, season pass tracker,
   coupon check cards in the dashboard - sanity-check against the game.
-- OPERATOR (plans 019-028 QA, new this session): Now tab (025), toasts +
-  opt-in Windows notifications (026), overlay placement off the minimap
-  (022), AP/DP bracket card (023), Olvia deadline pill (024), multi-cadence
-  resets (021), market name search + exact silver (028), System freshness
-  card (020) - sanity-check in the dashboard / overlay.
+- OPERATOR (plans 019-028 QA): Now tab (025), toasts + opt-in Windows
+  notifications (026), overlay placement off the minimap (022), AP/DP bracket
+  card (023), Olvia deadline pill (024), multi-cadence resets (021), market
+  name search + exact silver (028), System freshness card (020).
+- OPERATOR (plans 029-060 QA, new this session): overlay market ticker (029),
+  Settings tab (030), world boss schedule (031), weekly planner (033), gear
+  roadmap (034), enhancement EV / shopping list / price bands (035/037/052),
+  drop-buff cap (038), loot grind log + OCR loot import (039/040), profile
+  history + lifeskill (041/042), pets / mounts / inventory (043-045),
+  session-end summary (046), density/a11y (047), quick-entry parsers (048),
+  command palette Ctrl+K (050), first-run checklist (051), imperial delivery
+  (053), cooking/alchemy margins (054), Jetina/Caphras (055), dice timer
+  (056), Deadeye notes (057), event-notice import (059), Secret Book ledger
+  (060) - sanity-check in the dashboard / overlay.
 - MAIN to record EW's port block 8940-8959 in the machine-wide registry and
   add EW to the roster / lane widget (roster INFO 0230 says EW is a member).
 - NOTE: write gitignored config/leak_needles.json on any new host before
@@ -57,16 +59,17 @@ Carried forward (not acted on yet):
 - NOTE: npm install on this box does NOT fetch the Electron binary; after any
   Electron bump run `node node_modules/electron/install.js` in app/ (and in
   lane worktrees).
-- NOTE: GitHub dependabot is now configured (npm app/, pip /ci,
-  github-actions); its PRs merge by this tree once ci is green, never
-  auto-merged. Re-check the Security tab alert count.
+- NOTE: GitHub dependabot is configured (npm app/, pip /ci, github-actions);
+  its PRs merge by this tree once ci is green, never auto-merged. Re-check
+  the Security tab alert count.
 - NOTE: non-blocking verifier notes: OCR cache key mtime is whole seconds;
   bridge timeout 10 s vs server OCR timeout 60 s; normalizeOcr hides buffs
   found without a time; main.js postLocal keeps only the first 64 KiB of a
   reply; OCR after a cut can pick the "100" piece when "Silver" sits right of
   the amount; plan 011 client validLabel checks untrimmed length; gamewatch
   tasklist failure falls back to the 120 s log grace.
-- NOTE: lane tests must not hold drive-path literals (leak sweep HALTs).
+- NOTE: lane tests must not hold drive-path literals (leak sweep HALTs);
+  since 56be70f a backslash-escaped letter (\d) is no longer a drive path.
 - NOTE: SS's 2245 ANSWER to MAIN (v6) was misdelivered into EW's inbox; not
   acted on, reported to MAIN in EW's v6 ANSWER; marked seen in the loop watch.
 - NOTE: arsha.io v2 history / orderbook / queue / search / category
@@ -76,44 +79,48 @@ Carried forward (not acted on yet):
   re-check if plan 004 profile card / 041 / 042 show errors.
 - NOTE: research 0003 dates (Olvia Class 3 enrol 2026-11-05, quests
   2026-11-11) are BDFoundry-sourced, unverified vs the official notice;
-  NA world boss times after the 2026-11-01 DST change unconfirmed.
+  NA world boss times after the 2026-11-01 DST change unconfirmed (plan 031
+  data file server/ew/data/world_bosses_na.json).
 - NOTE: deferred candidates (0003 C15/C18/C19, 0004 F18-F21/F25) listed in
-  ROADMAP under the 019-057 paragraph; revisit after 023/035/037.
-- NOTE (new): `tools/eta.py run nodetest -- npm test --prefix app` fails on
-  Windows with FileNotFoundError (subprocess cannot resolve `npm` without
-  .cmd / shell). Fix in tools/eta.py (shutil.which) - small ROADMAP-worthy
-  defect; /done ran npm directly and recorded the timing by hand.
-- NOTE (new): merge 230e8e4 (plan 028) message says `lane-2` but 028 ran
-  on lane-1; pushed, left as is.
-- NOTE (new): 028 merge kept 028's rounding fmtSilverExact over 027's;
-  027 test now expects fmtSilverExact(1.5) == '2'.
-- NOTE (new): agent worktree .claude/worktrees/agent-a6e7cdd38c14ab6e3 and
-  its branch worktree-agent-a6e7cdd38c14ab6e3 (merged in bc5a6bd) remain;
-  remove with `git worktree remove` + `git branch -d` when convenient.
+  ROADMAP under the 019-057 paragraph; revisit now that 023/035/037 merged.
+- NOTE: merge 230e8e4 (plan 028) message says `lane-2` but 028 ran on
+  lane-1; pushed, left as is.
+- NOTE: 028 merge kept 028's rounding fmtSilverExact over 027's; 027 test
+  expects fmtSilverExact(1.5) == '2'.
+- NOTE (new): backup branch ew/salvage-031 (32e8ed5) is redundant (031
+  merged a808a8c); delete with `git branch -D ew/salvage-031`.
+- NOTE (new): operator authorized a reset of EW's headless run counter on
+  2026-10-05 ~21:10 (loop had paused at 117/120, lane widget showed idle);
+  ops/loop/control/headless_budget.json set to starts=[], read back; old
+  counts in ops/runtime/headless_budget.pre-reset-*.json. A widget "idle"
+  with inbox_status state "limit" = the 120/24 h cap, not a stall.
+- NOTE (new): known limit of the 56be70f salvage path: a real leak that
+  main's hook refuses lands in merge-conflict and burns up to 2 resolve
+  runs before stopping.
 
 Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew, HALT absent at
 /done. State: ops/loop/control/loop_items/*.json, progress/loop.json,
-progress/p<id>-build.json. Session 5 loop fixes: bc5a6bd (free_lanes holds
-lanes of ran/committed items; lane-dirty auto-recovers to refused when the
-lane is clean) and 2568047 (plan 058 resolve lanes, settle_conflicts for
-hand-merged records). EW server restarted on 2568047 (version read back =
+progress/lane-<i>.json (lanes now write per-index files), inbox_status.json
+(runs_in_window / cap). Session 6 loop fix 56be70f: leak-sweep false
+positive on \d regex fixed; refused lane commits salvaged to
+refs/ew/keep/<id> and the lane reset; failed-dirty items with staged work
+are retried each tick. EW server restarted on 04af777 (version read back =
 HEAD); restart again after more server merges if /api/version lags.
 
-Acceptance: plans 029-057 merged by the loop with ci green, 058's resolve
-lane seen working on a real conflict, nothing in adjudicate /
-merge-conflict / gave-up.
+Acceptance: each new deep-dive plan merged by the loop with ci green,
+nothing in adjudicate / merge-conflict / gave-up / failed-dirty.
 
-Do NOT redo: plans 019-028 + 058 merged (incl. hand merges 024 a01964e,
-025 b8e0099, 026 17976b6, 028 230e8e4), lane-race fix bc5a6bd, research
-0003-0005, plans 019-057 docs, LaneLoop arm, kit v8, plans 012-018.
+Do NOT redo: plans 019-060 merged (plan 058 resolve lane proven on 030,
+merge 8ef620e), H521108 eta.py npm fix (fe3f3c0), loop stall fix 56be70f,
+lane-race fix bc5a6bd, deep-dive 20261006, research 0003-0005, LaneLoop
+arm, kit v8, plans 012-018, agent worktree a6e7cdd38c14ab6e3 removed.
 
-In flight: loop lanes 029 (ran), 030 (ran), 031 (dispatched) - read
-progress/loop.json and progress/p0NN-build.json; the loop owns them.
+In flight: none (all 3 lanes FREE at /done; loop idle, next deep-dive
+2026-10-07).
 
-Status: main 2568047 = origin/main. Gates this /done: pytest exit 0, node
-285 pass / 0 fail, leak sweep ARMED (19). CI for 2568047: see the line
-below. Earlier ci runs for 17976b6 / 230e8e4 were cancelled by newer pushes
-(concurrency), not failed. Session jsonl ~1.1 MB.
-CI: ci 37373774445 success on 2568047.
+Status: main 04af777 = origin/main (nothing new to push this /done).
+Gates this /done: pytest exit 0, node 528 pass / 0 fail, leak sweep ARMED
+(19). CI: ci 37440948010 + codeql 37440948070 success on 04af777. Server
+health ok, version 04af777. Session jsonl ~0.7 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
