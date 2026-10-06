@@ -290,10 +290,13 @@ class EWServer(ThreadingHTTPServer):
                                   loot_names=self.grind.loot_names)
         # Plan 063: every shot taken while logged in is read on its own; confident
         # fields commit (undoable), the rest wait in the System review card.
+        # Plan 066: + level / XP % samples, AP / AAP / DP, book-use suggestions,
+        # silver/h over the plan 062 play session.
         self.ocr_auto = ocrauto.AutoOcr(
             self.store, self.game, self.ocr, self.grind,
             settings=lambda: self.settings.view()["settings"], clock=grind_clock or time.time,
-            on_change=self._ocr_auto_changed)
+            on_change=self._ocr_auto_changed, leveling=self.leveling, progress=self.progress,
+            play=self.play.view)
         if isinstance(listeners, list):
             listeners.append(self.ocr_auto.on_game)
         # Plan 051: first-run checklist over the same config file + store.
@@ -311,6 +314,7 @@ class EWServer(ThreadingHTTPServer):
     def _ocr_auto_changed(self):
         self.bus.bump("ocr")
         self.bus.bump("grind")
+        self.bus.bump("progress")  # plan 066: gs stats (leveling bumps its own seq)
 
     def _play_config(self):
         s = self.settings.view()["settings"]

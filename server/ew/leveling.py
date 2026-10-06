@@ -41,6 +41,7 @@ AUTO_ID_RE = re.compile(r"^a[0-9]{1,9}$")  # plan 064 auto (notice) windows
 AUTO_KEEP_S = 7 * 86400  # an auto window ended this long ago is pruned on the next add
 HHMM_RE = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 MARKER_SOURCE = "profile"  # plan 041: server-written level marker, pct unknown
+OCR_SOURCE = "ocr"  # plan 066: a sample read from a screenshot (ts = the shot time)
 _UTC = _dt.timezone.utc
 
 
@@ -270,8 +271,9 @@ def _is_marker(s):
 
 
 def _clean_sample(s):
-    """Typed {ts, level, pct}, or a plan 041 marker {ts, level, pct: None,
-    source: "profile"} (the only entry that may carry a null pct)."""
+    """Typed {ts, level, pct}, a plan 066 OCR read {ts, level, pct, source:
+    "ocr"}, or a plan 041 marker {ts, level, pct: None, source: "profile"} (the
+    only entry that may carry a null pct)."""
     if not isinstance(s, dict):
         return None
     when = _parse_iso(s.get("ts"))
@@ -285,17 +287,20 @@ def _clean_sample(s):
         return None
     if marker:
         return {"ts": ts, "level": s["level"], "pct": None, "source": MARKER_SOURCE}
-    return {"ts": ts, "level": s["level"], "pct": _norm_pct(s["pct"])}
+    out = {"ts": ts, "level": s["level"], "pct": _norm_pct(s["pct"])}
+    if s.get("source") == OCR_SOURCE:
+        out["source"] = OCR_SOURCE
+    return out
 
 
 def _level_now(samples):
     """(level, pct, level_source) from cleaned samples, oldest first: pct from
-    the last typed sample; level = max(last typed, last marker); a higher
+    the last typed (or plan 066 `ocr`, level_source "ocr") sample; level = max(last typed, last marker); a higher
     marker level means the XP percent of that level is unknown (pct None)."""
     typed = next((s for s in reversed(samples) if not _is_marker(s)), None)
     mark = next((s for s in reversed(samples) if _is_marker(s)), None)
     if typed is not None and (mark is None or mark["level"] <= typed["level"]):
-        return typed["level"], typed["pct"], "typed"
+        return typed["level"], typed["pct"], typed.get("source", "typed")
     if mark is not None:
         return mark["level"], None, "profile"
     return None, None, None
@@ -572,6 +577,43 @@ class LevelingService:
                                    "source": MARKER_SOURCE})
             self._save(doc)
         return True
+
+    def samples(self):
+        """Cleaned samples, oldest first (plan 066 sanity over history)."""
+        return [dict(s) for s in self._load()["samples"]]
+
+    def rate(self):
+        """Current level-percent per hour (epoch-aware), or None."""
+        return self.view()["rate_pct_h"]
+
+    def ocr_sample(self, level, pct, shot_ts):
+        """Plan 066, server side only (never a POST op): {ts = the shot time,
+        level, pct, source: "ocr"}. A typed sample in that second is never
+        replaced (manual entry wins); an OCR one is. Returns the ts."""
+        if not _ok_int(level, *LEVEL_RANGE) or not _ok_pct(pct):
+            raise ValueError("ocr sample must be a level and a pct 0..100")
+        ts = _iso(_dt.datetime.fromtimestamp(int(shot_ts), _UTC))
+        with self._lock:
+            doc = self._load()
+            if any(s["ts"] == ts and s.get("source") is None for s in doc["samples"]):
+                raise ValueError("a typed sample holds that second")
+            doc["samples"] = [s for s in doc["samples"] if s["ts"] != ts]
+            doc["samples"].append({"ts": ts, "level": level, "pct": _norm_pct(pct),
+                                   "source": OCR_SOURCE})
+            self._save(doc)
+        return ts
+
+    def ocr_sample_del(self, ts):
+        """Undo of one plan 066 sample: removed only while it is still the OCR
+        sample at `ts` (a typed sample that replaced it is never touched)."""
+        with self._lock:
+            doc = self._load()
+            keep = [s for s in doc["samples"]
+                    if not (s["ts"] == ts and s.get("source") == OCR_SOURCE)]
+            if len(keep) == len(doc["samples"]):
+                raise ValueError("that OCR sample was replaced or deleted; edit it in Leveling")
+            doc["samples"] = keep
+            self._save(doc)
 
     def source(self):
         """`/api/state` sources.leveling: {updated, status: "ok"}."""

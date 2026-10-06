@@ -319,6 +319,27 @@ class XpBooksService:
                 "used": [dict(u, index=i, gain=round(gain(u["pct_before"], u["pct_after"]), 3))
                          for i, u in reversed(list(enumerate(used)))][:VIEW_USED]}
 
+    def recent(self, level, since):
+        """Plan 066: {size: % of one book at `level`} for sizes still owned with
+        a gain (n > 0) added at or after epoch `since`; {} without the table."""
+        if self.data is None or level is None:
+            return {}
+        doc = self._load()
+        sizes = {a["size"] for a in doc["added"] if a["n"] > 0
+                 and _parse_iso(a["at"]).timestamp() >= since}
+        return {s: book_pct(self.data, doc["used"], s, level)["pct"]
+                for s in SIZES if s in sizes and doc["owned"][s] > 0}
+
+    def used_index(self, row):
+        """Index of the newest used entry equal to `row` on at / size / level /
+        pct_before / pct_after, or None (plan 066 undo)."""
+        keys = ("at", "size", "level", "pct_before", "pct_after")
+        used = self._load()["used"]
+        for i in range(len(used) - 1, -1, -1):
+            if all(used[i].get(k) == row.get(k) for k in keys):
+                return i
+        return None
+
     # -- writes ----------------------------------------------------------------
 
     def add(self, arg):
@@ -370,6 +391,7 @@ class XpBooksService:
                 row["from_owned"] = True
             doc["used"].append(row)
             self._save(doc)
+        return dict(row)
 
     def delete(self, idx):
         """Remove used entry `idx` (view `index`); a book spent from the owned
