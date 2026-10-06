@@ -172,9 +172,11 @@ class EWServer(ThreadingHTTPServer):
         self.coupons = coupons.CouponService(coupon_client, self.events, spawn=coupon_spawn)
         # Plan 031: NA world boss table + operator loot ticks.
         self.bosses = bosses.BossService(self.store, clock=bosses_clock or time.time)
-        self.deadeye = deadeye.DeadeyeService(self.store, clock=deadeye_clock or time.time)
         # Plan 035: EV math on tracked rate rows; prices from the market cache only.
         self.enhance = enhance.EnhanceService(self.store, prices=self.market.cached_price)
+        # Plan 036: stack advice reads the same effective rows (overrides included).
+        self.deadeye = deadeye.DeadeyeService(self.store, clock=deadeye_clock or time.time,
+                                              rates=self.enhance.rows)
         if game_watch is None:
             # Only main() passes the real config; a bare make_server (every test)
             # never reads config/local.json (plan 008 refute round 1).
@@ -365,11 +367,13 @@ class Handler(BaseHTTPRequestHandler):
         return out
 
     def _post_deadeye(self, body):
-        ops = {"note", "add_step", "edit_step", "step_done", "delete_step", "move_step"}
+        ops = {"note", "add_step", "edit_step", "step_done", "delete_step", "move_step",
+               "fs_add", "fs_use", "agris_set", "crons_set"}  # plan 036: the last four
         rates = {"rate_set": "override_set", "rate_del": "override_del"}  # plan 035
         if len(body) != 1 or not ((ops | set(rates)) & set(body)):
             raise ValueError("body must be one of {note|add_step|edit_step|step_done|"
-                             "delete_step|move_step|rate_set|rate_del: ...}")
+                             "delete_step|move_step|fs_add|fs_use|agris_set|crons_set|"
+                             "rate_set|rate_del: ...}")
         (op, arg), = body.items()
         if op in rates:
             return getattr(self.server.enhance, rates[op])(arg)

@@ -1822,7 +1822,8 @@
       return plainObject(v) && onlyKeys(v, ['id', 'item', 'current', 'target', 'note']) &&
         validRef(v.id, STEP_ID_RE) && Object.keys(v).length >= 2 && stepFieldsOk(v);
     }
-    return false;
+    const st = validStacksOp(k, v); // plan 036
+    return st === null ? false : st;
   }
 
   // Add-step form strings -> {add_step} body, or an error for the operator.
@@ -1911,6 +1912,135 @@
     const f = fmtEv(b);
     return f.step + '  ' + f.chance + '  ' + f.attempts + ' tries (p90 ' + f.p90 + ', pity ' + f.pity +
       ')  crons ' + f.crons + '  silver ' + f.silver + (f.unverified ? '  [unverified]' : '');
+  }
+
+  // ---- Stacks: failstack bank, Agris pity, cron budget (plan 036) ----
+  // GET /api/deadeye `stacks` block; writes are POST /api/deadeye fs_add /
+  // fs_use / agris_set / crons_set. Operator-typed inventory only.
+
+  const FS_KINDS = ['advice', 'saved', 'cry'];
+  const FS_KIND_LABELS = { advice: 'Advice of Valks', saved: 'saved stack', cry: "Valks' Cry" };
+  const FS_COUNT_MAX = 999;
+  const AGRIS_STACKS_MAX = 1000;
+  const CRONS_MAX = 1e9;
+  const CRONS_WEEKLY_MAX = 1e7;
+  const ENHANCE_STEPS = [];
+  for (let i = 1; i <= 15; i++) ENHANCE_STEPS.push('+' + i);
+  ENHANCE_STEPS.push('PRI', 'DUO', 'TRI', 'TET', 'PEN', 'HEX', 'SEP', 'OCT', 'NOV', 'DEC');
+  const GEAR_FAMILY_RE = /^[a-z][a-z0-9_]{0,23}$/;
+
+  function intIn(v, lo, hi) { return isInt(v, lo) && v <= hi; }
+
+  function validFsArg(v) {
+    return plainObject(v) && onlyKeys(v, ['kind', 'value', 'count']) && 'kind' in v && 'value' in v &&
+      FS_KINDS.indexOf(v.kind) >= 0 && intIn(v.value, 1, ENHANCE_MAX_FS) &&
+      (!('count' in v) || intIn(v.count, 1, FS_COUNT_MAX));
+  }
+
+  // Shape check for the plan 036 ops inside validDeadeyeBody; null = not a stacks op.
+  function validStacksOp(k, v) {
+    if (k === 'fs_add' || k === 'fs_use') return validFsArg(v);
+    if (k === 'agris_set') {
+      return exact(v, ['family', 'step', 'stacks']) && typeof v.family === 'string' && GEAR_FAMILY_RE.test(v.family) &&
+        ENHANCE_STEPS.indexOf(v.step) >= 0 && intIn(v.stacks, 0, AGRIS_STACKS_MAX);
+    }
+    if (k === 'crons_set') {
+      return plainObject(v) && onlyKeys(v, ['owned', 'weekly_income']) && Object.keys(v).length >= 1 &&
+        (!('owned' in v) || intIn(v.owned, 0, CRONS_MAX)) &&
+        (!('weekly_income' in v) || intIn(v.weekly_income, 0, CRONS_WEEKLY_MAX));
+    }
+    return null;
+  }
+
+  // Typed whole number lo..hi -> int, or null.
+  function parseWhole(text, lo, hi) {
+    const s = typeof text === 'string' ? text.trim().replace(/,/g, '') : (isNum(text) ? String(text) : '');
+    if (!/^[0-9]{1,10}$/.test(s)) return null;
+    const n = Number(s);
+    return n >= lo && n <= hi ? n : null;
+  }
+
+  // Bank form {kind, value, count} strings -> {fs_add|fs_use: ...}; `use` picks the op.
+  function parseFsForm(form, use) {
+    const f = form || {};
+    if (FS_KINDS.indexOf(f.kind) < 0) return { ok: false, error: 'pick a stack kind' };
+    const value = parseWhole(f.value, 1, ENHANCE_MAX_FS);
+    if (value === null) return { ok: false, error: 'FS: a whole number 1-' + ENHANCE_MAX_FS };
+    const blank = typeof f.count !== 'string' || !f.count.trim();
+    const count = blank ? 1 : parseWhole(f.count, 1, FS_COUNT_MAX);
+    if (count === null) return { ok: false, error: 'count: a whole number 1-' + FS_COUNT_MAX };
+    const arg = { kind: f.kind, value: value };
+    if (count !== 1) arg.count = count;
+    const body = {};
+    body[use ? 'fs_use' : 'fs_add'] = arg;
+    return { ok: true, body: body };
+  }
+
+  function parseAgrisForm(form) {
+    const f = form || {};
+    if (typeof f.family !== 'string' || !GEAR_FAMILY_RE.test(f.family)) return { ok: false, error: 'pick a gear family' };
+    if (ENHANCE_STEPS.indexOf(f.step) < 0) return { ok: false, error: 'pick a level' };
+    const stacks = parseWhole(f.stacks, 0, AGRIS_STACKS_MAX);
+    if (stacks === null) return { ok: false, error: 'stacks: a whole number 0-' + AGRIS_STACKS_MAX };
+    return { ok: true, body: { agris_set: { family: f.family, step: f.step, stacks: stacks } } };
+  }
+
+  // Blank fields are left out; at least one is needed.
+  function parseCronsForm(form) {
+    const f = form || {};
+    const arg = {};
+    const fields = [['owned', CRONS_MAX], ['weekly_income', CRONS_WEEKLY_MAX]];
+    for (const pair of fields) {
+      const raw = f[pair[0]];
+      if (typeof raw !== 'string' || !raw.trim()) continue;
+      const n = parseWhole(raw, 0, pair[1]);
+      if (n === null) return { ok: false, error: pair[0].replace('_', ' ') + ': a whole number 0-' + fmtSilverExact(pair[1]) };
+      arg[pair[0]] = n;
+    }
+    if (!Object.keys(arg).length) return { ok: false, error: 'type crons owned and/or weekly income' };
+    return { ok: true, body: { crons_set: arg } };
+  }
+
+  function fmtCrons(n) { return isNum(n) ? fmtSilverExact(Math.ceil(n - 1e-9)) : '-'; }
+
+  function fsKind(k) { return FS_KIND_LABELS[k] || String(k); }
+
+  function pityText(fails) {
+    if (!isNum(fails)) return 'no Agris threshold';
+    return fails === 0 ? 'next attempt guaranteed' : 'guaranteed in ' + fails + (fails === 1 ? ' fail' : ' fails');
+  }
+
+  // stacks block -> display strings (never HTML).
+  function fmtStacks(s) {
+    const o = plainObject(s) ? s : {};
+    const bank = (Array.isArray(o.fs_bank) ? o.fs_bank : []).filter(plainObject).map(function (r) {
+      return { kind: r.kind, value: r.value, text: fsKind(r.kind) + ' ' + r.value + ' x' + r.count };
+    });
+    const agris = (Array.isArray(o.agris) ? o.agris : []).filter(plainObject).map(function (r) {
+      return { family: r.family, step: r.step, text: r.family + ' ' + r.step + ': ' + r.stacks + ' stacks, ' + pityText(r.fails_to_guarantee) };
+    });
+    const a = plainObject(o.advice) ? o.advice : {};
+    let advice;
+    if (typeof a.level !== 'string') {
+      advice = typeof a.reason === 'string' ? a.reason : '-';
+    } else {
+      const head = (typeof a.item === 'string' ? a.item + ' ' : '') + '-> ' + a.level +
+        (isNum(a.softcap_fs) ? ' (soft cap ' + a.softcap_fs + ')' : '');
+      const pick = plainObject(a.suggest) ? 'use ' + fsKind(a.suggest.kind) + ' ' + a.suggest.value :
+        (typeof a.reason === 'string' ? a.reason : '-');
+      const pity = plainObject(a.agris) && isNum(a.agris.threshold) ? '; Agris ' + pityText(a.agris.fails_to_guarantee) : '';
+      advice = head + ': ' + pick + pity;
+    }
+    const b = plainObject(o.budget) ? o.budget : {};
+    let budget = 'crons ' + fmtCrons(b.owned) + ' owned / ' + fmtCrons(b.needed) + ' expected';
+    if (isNum(b.gap) && b.gap > 0) {
+      budget += ', short ' + fmtCrons(b.gap) + (isNum(b.weeks) ? ' (~' + b.weeks + (b.weeks === 1 ? ' week)' : ' weeks)') : ' (no weekly income set)');
+    } else if (isNum(b.needed)) {
+      budget += ', covered';
+    }
+    const unk = (Array.isArray(b.unknown) ? b.unknown : []).filter(plainObject).map(function (u) { return u.family + ' ' + u.level; });
+    return { bank: bank, agris: agris, advice: advice, budget: budget,
+      unknown: unk.length ? 'no chance data (not counted): ' + unk.join(', ') : '' };
   }
 
   // ---- Game state (plan 008) ----
@@ -3299,6 +3429,12 @@
     enhancePath: enhancePath,
     fmtEv: fmtEv,
     evLine: evLine,
+    FS_KINDS: FS_KINDS,
+    ENHANCE_STEPS: ENHANCE_STEPS,
+    parseFsForm: parseFsForm,
+    parseAgrisForm: parseAgrisForm,
+    parseCronsForm: parseCronsForm,
+    fmtStacks: fmtStacks,
     validLevelingBody: validLevelingBody,
     parseSampleForm: parseSampleForm,
     parseHotForm: parseHotForm,
