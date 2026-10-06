@@ -10,7 +10,8 @@ adds its `suggested` coupon block),
 /api/deadeye/calc GET plan 055), /api/game (plan 008), /api/leveling (plan 011),
 /api/spots (plan 012, GET only), /api/bosses (plan 031), /api/settings (plan 030), /api/pets
 (plan 043), /api/inventory (plan 045), /api/mounts (plan 044), /api/summary (plan 046),
-/api/onboarding (plan 051), /api/crafting (plan 054), /api/imperial (plan 053), and POST
+/api/onboarding (plan 051), /api/crafting (plan 054), /api/imperial (plan 053),
+/api/whatnow (plan 069; SSE `whatnow` carries the full view on change), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
 /api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings + /api/pets +
 /api/inventory + /api/mounts + /api/onboarding + /api/crafting + /api/imperial behind one
@@ -33,10 +34,11 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 from . import (__version__, bosses, coupons, crafting, deadeye, detect, enhance, eventnotices, events,
-               gamewatch, grind, imperial, inventory, itemnames, leveling, market, mounts, ocr, ocrauto, onboarding, pets,
+               gamewatch, grind, imperial, inventory, itemnames, leveling, maint, market, mounts, ocr, ocrauto,
+               onboarding, pets,
                ports,
                playsession, progress, settings, shopping, single, spots, summary, today,
-               weekly, xpbooks)
+               weekly, whatnow, xpbooks)
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -56,6 +58,9 @@ MAX_DEADEYE_POST_BYTES = 131072
 DRAIN_MAX_BYTES = 1 << 20
 POST_CAPS = {"/api/deadeye": MAX_DEADEYE_POST_BYTES}
 SSE_TICK_S = 0.25  # SSE wakes this often to notice a leveling change (plan 011)
+# Plan 069: each SSE stream re-checks What now at most this often (the result is
+# shared across streams) and at once after any domain change.
+WHATNOW_CHECK_S = 10.0
 # Plan 049: a 200 POST on these routes pushes `event: <domain>` (data: the JSON
 # domain name); clients re-GET. /api/leveling keeps its plan 011 full-view event.
 POST_DOMAINS = {"/api/today": "today", "/api/grind": "grind", "/api/market/watch": "market",
@@ -314,6 +319,13 @@ class EWServer(ThreadingHTTPServer):
             self.store, clock=today_clock or time.time,
             cp=lambda: (self.progress.lifeskill_view().get("cp") or {}).get("value"),
             prices=self.market.cached_prices, name=self.names.name)
+        # Plan 069: next best action over the views above; never fetches (market
+        # prices come from the cache only, coupons / notices from the store).
+        self.whatnow = whatnow.WhatNowService({
+            "bosses": self.bosses.view, "today": self.today_view, "grind": self.grind.view,
+            "leveling": self.leveling.view, "maint": self._maint_inputs,
+            "events": self.events.view, "market": self._market_alerts,
+            "ocr": self.ocr_auto.view}, clock=today_clock or time.time)
         if game_poll:  # off by default so tests never probe processes; main() turns it on
             self.game.start()
             self.ocr_auto.start()
@@ -326,6 +338,24 @@ class EWServer(ThreadingHTTPServer):
     def _play_config(self):
         s = self.settings.view()["settings"]
         return s["play.auto_session"], s["play.grace_s"]
+
+    def _maint_inputs(self):
+        """Plan 069: the effective maintenance slot + official notices (plan 059 / 064)."""
+        start = self.settings.view()["settings"]["events.maintenance_start_utc"]
+        return {"slot": maint.slot(start),
+                "notices": maint.clean_notices(self.store.get("maint_notices"))}
+
+    def _market_alerts(self):
+        """Plan 069: watched items' alerts from the sublist cache only (never fetches)."""
+        out = []
+        for w in self.market.watchlist.items():
+            price = self.market.cached_price(w["id"], w["sid"])
+            bands = self.market.bands(w["id"], w["sid"]) if w.get("p20") is True else None
+            out.append({"id": w["id"], "name": self.names.name(w["id"], w["sid"]), "price": price,
+                        "below": w.get("below"), "above": w.get("above"),
+                        "alert": market.alert_for(price, w.get("below"), w.get("above"),
+                                                  bands=bands, p20=w.get("p20") is True)})
+        return out
 
     def _weekly_character(self):
         ch = self.progress.view(refresh=False)["character"]
@@ -491,6 +521,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.crafting.view())
         if path == "/api/imperial":
             return self._send(200, self.server.imperial.view())
+        if path == "/api/whatnow":
+            return self._send(200, self.server.whatnow.view())
         if path == "/events":
             return self._sse()
         if path == "/":  # plan 020: redirect so relative asset paths resolve
@@ -748,6 +780,8 @@ class Handler(BaseHTTPRequestHandler):
         game, lev, bus, play = self.server.game, self.server.leveling, self.server.bus, \
             self.server.play
         seq, lseq, dseq, pseq = game.seq, lev.seq, bus.snapshot(), play.seq
+        wn = self.server.whatnow
+        wseq, wcheck = wn.seq, time.monotonic()
         interval = self.server.sse_interval
         try:
             msg = json.dumps({"type": "heartbeat", "now": _now_iso()})
@@ -776,9 +810,20 @@ class Handler(BaseHTTPRequestHandler):
                     if ev is not None:
                         out.append(f"event: play_session\ndata: {json.dumps(ev)}\n\n")
                 now_seq = bus.snapshot()
+                changed = out or now_seq != dseq
                 for d in sorted(k for k in now_seq if now_seq[k] != dseq.get(k)):
                     out.append(f"event: {d}\ndata: {json.dumps(d)}\n\n")
                 dseq = now_seq
+                # Plan 069: full view on change; a domain change forces a recompute.
+                if changed or time.monotonic() >= wcheck:
+                    wcheck = time.monotonic() + WHATNOW_CHECK_S
+                    try:  # a bad source never ends the stream
+                        new_w, wview = wn.refresh(0 if changed else WHATNOW_CHECK_S)
+                    except Exception:  # noqa: BLE001
+                        new_w = wseq
+                    if new_w != wseq:
+                        wseq = new_w
+                        out.append(f"event: whatnow\ndata: {json.dumps(wview)}\n\n")
                 if not out and time.monotonic() >= quiet:
                     msg = json.dumps({"type": "heartbeat", "now": _now_iso()})
                     out.append(f"data: {msg}\n\n")

@@ -34,7 +34,12 @@
    muted. Nothing is read from the game's own boss notice.
    Dice (plan 056): opt-in (default off) one line from the GET /api/today
    `dice` block ("die 2/3 in 12m"), counted down locally from eta_utc; a
-   re-GET on each SSE `game` event. Offline keeps the last line, muted. */
+   re-GET on each SSE `game` event. Offline keeps the last line, muted.
+   What now (plan 069): default on, the top row - the server-ranked next best
+   action from GET /api/whatnow (same cadence as Today) or the full view an
+   SSE `whatnow` event carries; its due counts down locally ("Kzarka spawns -
+   in 8m"), "All clear - play" when nothing is due. Offline keeps the line,
+   muted. */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -67,6 +72,8 @@
   let boss = null;
   let bossStale = false;
   let bossSig = null;
+  let wn = null;
+  let wnStale = false;
 
   // Plan 022: a row shows only when its widget is on and it has something to say.
   function showRow(id, enabled, text) {
@@ -262,8 +269,17 @@
     showRow('ov-boss-next-row', true, n.textContent);
   }
 
+  function drawWhatNow(now) {
+    const v = document.getElementById('ov-whatnow');
+    v.textContent = wn ? C.whatNowLine(wn, now) : (wnStale ? 'offline' : '-');
+    v.title = v.textContent;
+    v.className = 'ew-ov-val ew-mname' + (wnStale ? ' ew-stale' : '');
+    showRow('ov-whatnow-row', true, v.textContent);
+  }
+
   function tick() {
     const now = Date.now();
+    if (W.whatNow) drawWhatNow(now);
     document.getElementById('ov-daily').textContent = C.fmtDuration(C.nextDailyReset(now) - now);
     document.getElementById('ov-weekly').textContent = C.fmtDuration(C.nextWeeklyReset(now) - now);
     drawToday(now);
@@ -346,6 +362,21 @@
     }).then(function () { drawBoss(Date.now()); });
   }
 
+  function setWhatNow(d) {
+    if (!d || typeof d !== 'object' || Array.isArray(d) || !Array.isArray(d.next)) return false;
+    wn = d;
+    wnStale = false;
+    return true;
+  }
+
+  function loadWhatNow() {
+    getJSON('/api/whatnow').then(function (d) {
+      if (!setWhatNow(d)) throw new Error('bad body');
+    }).catch(function () {
+      wnStale = true;
+    }).then(function () { drawWhatNow(Date.now()); });
+  }
+
   function loadGame() {
     getJSON('/api/game').then(function (d) {
       const g = C.normalizeGame(d);
@@ -376,6 +407,7 @@
     if (W.leveling) loadLeveling();
     if (W.season) loadSeason();
     if (W.worldBoss) loadBoss();
+    if (W.whatNow) loadWhatNow();
     loadGame();
   }
 
@@ -394,6 +426,13 @@
       if (W.leveling) loadLeveling();
       if (W.season) loadSeason();
     });
+    src.addEventListener('whatnow', function (ev) {
+      if (!W.whatNow) return;
+      let d = null;
+      try { d = JSON.parse(ev.data); } catch (e) { d = null; }
+      if (setWhatNow(d)) drawWhatNow(Date.now());
+      else loadWhatNow();
+    });
     src.onerror = function () {
       setServer('offline');
       todayStale = true;
@@ -411,6 +450,8 @@
       if (W.marketTicker) drawTicker(Date.now());
       bossStale = true;
       if (W.worldBoss) drawBoss(Date.now());
+      wnStale = true;
+      if (W.whatNow) drawWhatNow(Date.now());
       gameStale = true;
       drawGame();
       src.close();

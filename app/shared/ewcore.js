@@ -4157,6 +4157,59 @@
     return c;
   }
 
+  // ---- What now (plan 069) ----
+  // GET /api/whatnow {top, next, empty, empty_text, errors}: each action
+  // {text, why, due (ISO or null), source}. The server ranks; clients only
+  // count `due` down. Junk actions are dropped.
+  const WHATNOW_TABS = { boss: 'today', reset: 'today', buff: 'grind', hot: 'progress',
+    maint: 'events', coupon: 'events', dice: 'today', market: 'market', deadline: 'events',
+    ocr: 'system' };
+  const WHATNOW_EMPTY = 'All clear - play';
+
+  function whatNowAction(a) {
+    if (!plainObject(a) || !validTitle(a.text) || !Object.prototype.hasOwnProperty.call(WHATNOW_TABS, a.source)) {
+      return null;
+    }
+    const due = typeof a.due === 'string' && ISO_RE.test(a.due) ? Date.parse(a.due) : NaN;
+    return { text: a.text, why: typeof a.why === 'string' ? a.why.slice(0, 160) : '',
+      due: isNaN(due) ? null : due, source: a.source, tab: WHATNOW_TABS[a.source] };
+  }
+
+  // Top first, then up to 2 next; [] when the view is bad or empty.
+  function whatNowActions(view) {
+    if (!plainObject(view)) return [];
+    const list = [view.top].concat(Array.isArray(view.next) ? view.next.slice(0, 2) : []);
+    return list.map(whatNowAction).filter(Boolean);
+  }
+
+  // Countdown for one action: 'now' once due, '' when undated.
+  function whatNowLeft(a, now) {
+    if (!a || a.due === null || !isNum(now)) return '';
+    const s = Math.floor((a.due - now) / 1000);
+    return s <= 0 ? 'now' : 'in ' + fmtEta(s);
+  }
+
+  // One overlay line: "Kzarka spawns - in 8m", or the all-clear text.
+  function whatNowLine(view, now) {
+    if (!plainObject(view)) return '-';
+    const a = whatNowActions(view)[0];
+    if (!a) return WHATNOW_EMPTY;
+    const left = whatNowLeft(a, now);
+    return a.text + (left ? ' - ' + left : '');
+  }
+
+  // Home: the What now card (top action highlighted), null without a payload.
+  function nowWhatNow(view, now) {
+    if (!plainObject(view)) return null;
+    const acts = whatNowActions(view);
+    const rows = acts.map(function (a, i) {
+      const r = nowRow(a.text, whatNowLeft(a, now), a.why, i === 0 ? 'warn' : '');
+      r.go = { tab: a.tab };
+      return r;
+    });
+    return nowCard('whatnow', 'What now', acts.length ? acts[0].tab : 'today', rows, WHATNOW_EMPTY);
+  }
+
   function composeNow(snapshots, nowMs) {
     const s = plainObject(snapshots) ? snapshots : {};
     const at = function (k) { return plainObject(s.at) && isNum(s.at[k]) ? s.at[k] : nowMs; };
@@ -4179,6 +4232,10 @@
     if (has('summary') && plainObject(s.summary.session)) cards.push(nowSummary(s.summary));
     const ob = has('onboarding', 'steps') ? nowOnboarding(s.onboarding) : null;
     if (ob) cards.unshift(ob);  // plan 051: first-run card leads until done or dismissed
+    // Plan 069: What now on top; an all-clear card yields to a first-run card.
+    const wn = has('whatnow') ? nowWhatNow(s.whatnow, nowMs) : null;
+    if (wn && wn.rows.length) cards.unshift(wn);
+    else if (wn) cards.splice(ob ? 1 : 0, 0, wn);
     return cards;
   }
 
@@ -4250,8 +4307,9 @@
   // hands the overlay a query string. Default on (only a literal false turns
   // one off), except the WIDGETS_OPT_IN ones: default off, only a literal true
   // turns them on (plan 011 leveling, plan 013 season, plan 029 marketTicker,
-  // plan 032 worldBoss, plan 056 dice).
-  const WIDGETS = ['grindSession', 'grindBuff', 'eventsSoon', 'leveling', 'season', 'marketTicker', 'worldBoss', 'dice'];
+  // plan 032 worldBoss, plan 056 dice). Plan 069 whatNow is default on.
+  const WIDGETS = ['grindSession', 'grindBuff', 'eventsSoon', 'leveling', 'season', 'marketTicker', 'worldBoss', 'dice',
+    'whatNow'];
   const WIDGETS_OPT_IN = ['leveling', 'season', 'marketTicker', 'worldBoss', 'dice'];
 
   function optIn(k) { return WIDGETS_OPT_IN.indexOf(k) >= 0; }
@@ -6069,6 +6127,10 @@
     deadlineLine: deadlineLine,
     deadlineAlert: deadlineAlert,
     composeNow: composeNow,
+    whatNowActions: whatNowActions,
+    whatNowLeft: whatNowLeft,
+    whatNowLine: whatNowLine,
+    nowWhatNow: nowWhatNow,
     pendingStop: pendingStop,
     pendingStopText: pendingStopText,
     sessionPill: sessionPill,
