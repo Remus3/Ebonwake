@@ -138,7 +138,27 @@
     return { post: function (route, body) { return post(b, route, body); } };
   }
 
-  window.EWToast = { toast: toast, post: post, via: via, selfTest: selfTest };
+  // Plan 057: an "open" button for a source link, or null when the url is not
+  // on C.EXTERNAL_HOSTS. The click goes through the ew:open-external bridge
+  // (main re-checks); a refusal or failure becomes a toast.
+  function linkButton(url) {
+    if (!C.externalUrl(url)) return null;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ew-btn ew-bbtn';
+    b.textContent = 'open';
+    b.title = 'open in your browser: ' + url;
+    b.addEventListener('click', function () {
+      const api = window.ewApi;
+      if (!api || typeof api.openExternal !== 'function') { toast('warn', 'open: no bridge', 'open'); return; }
+      api.openExternal(url).then(function (res) {
+        if (!res || !res.ok) toast('warn', 'open failed: ' + ((res && res.error) || 'unknown error'), 'open');
+      }, function (e) { toast('warn', 'open failed: ' + String(e && e.message || e), 'open'); });
+    });
+    return b;
+  }
+
+  window.EWToast = { toast: toast, post: post, via: via, linkButton: linkButton, selfTest: selfTest };
 
   if (bridge()) {
     round();

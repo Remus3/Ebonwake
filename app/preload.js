@@ -13,6 +13,8 @@
    enabled notify rule names (a read-only launch argument). Plan 030 adds
    /api/settings and two payload-free reloads after a settings save: the
    overlay window, and the hotkeys + dashboard zoom (main re-reads the config).
+   Plan 057 adds {url} open-in-browser for allowlisted https source links
+   (main re-checks core.externalUrl; the dashboard itself never navigates).
    The overlay window has its own one-way preload (overlay/preload.js). */
 'use strict';
 
@@ -34,5 +36,6 @@ contextBridge.exposeInMainWorld('ewApi', {
   notify: function (n) { return ipcRenderer.invoke('ew:notify', n); },
   notifyPrefs: function () { return NOTIFY_ARG; },
   reloadOverlay: function () { return ipcRenderer.invoke('ew:reload-overlay'); },
-  reloadShell: function () { return ipcRenderer.invoke('ew:reload-shell'); }
+  reloadShell: function () { return ipcRenderer.invoke('ew:reload-shell'); },
+  openExternal: function (url) { return ipcRenderer.invoke('ew:open-external', { url: url }); }
 });

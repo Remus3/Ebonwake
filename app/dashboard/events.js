@@ -3,8 +3,9 @@
    GET /api/events; writes go through the dashboard preload (window.ewApi)
    because the server refuses renderer POSTs. Countdowns tick locally each
    second; the lists are only rebuilt when an item changes status (inputs keep
-   focus). Sources are plain text with a copy button - the dashboard never
-   navigates. Every node is built with DOM APIs - no HTML from data.
+   focus). Sources are plain text with a copy button and, for allowlisted
+   https hosts, an open button (plan 057: the operator's browser via the
+   ew:open-external bridge) - the dashboard itself never navigates. Every node is built with DOM APIs - no HTML from data.
    Plan 014: a Suggested coupons card lists codes the server found on the
    official news page (robots.txt-gated); each needs one click to add. */
 (function () {
@@ -311,6 +312,8 @@
       const cp = el('button', 'ew-btn ew-bbtn', 'copy');
       cp.type = 'button';
       cp.addEventListener('click', function () { copy(s.url, 'link'); });
+      const open = window.EWToast && window.EWToast.linkButton(s.url);
+      if (open) row.appendChild(open);
       row.appendChild(cp);
       box.appendChild(row);
     });

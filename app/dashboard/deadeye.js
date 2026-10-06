@@ -5,7 +5,9 @@
    executed or sent to the game. Every node is built with DOM APIs; the one
    HTML sink is the preview, fed only by C.renderMarkdown (escapes first, safe
    tag subset, no links / images / raw HTML). Unsaved drafts live per section
-   and survive polls. */
+   and survive polls. Plan 057: each draft also autosaves (debounced 2 s) to
+   localStorage; a stored draft that differs from the saved text is offered
+   back (Restore / Discard), and unload is held while a note is unsaved. */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -14,6 +16,8 @@
   const S = {
     data: null, err: null, last: null, timer: null, ui: null, busy: false,
     section: null, drafts: {}, preview: false,
+    // Plan 057: per-section autosave timers and stored drafts offered back.
+    draftTimers: {}, offers: null,
     // Plan 035 EV panel: open step id, rate table (GET once), per-step inputs and replies.
     ev: null, table: null, evIn: {}, evOut: {},
     // Plan 037 shopping list: GET body (cached prices only) and its error.
@@ -132,9 +136,85 @@
     return typeof S.drafts[sec.id] === 'string' ? S.drafts[sec.id] : savedText(sec);
   }
 
+  // ---- plan 057: draft autosave (localStorage may be denied: never fatal) ----
+
+  function readStore(key) {
+    try { return localStorage.getItem(key); } catch (e) { return null; }
+  }
+
+  function dropDraft(id) {
+    clearTimeout(S.draftTimers[id]);
+    delete S.draftTimers[id];
+    const key = C.draftKey(id);
+    if (key) { try { localStorage.removeItem(key); } catch (e) { /* store denied */ } }
+  }
+
+  function storeDraft(id) {
+    clearTimeout(S.draftTimers[id]);
+    delete S.draftTimers[id];
+    const key = C.draftKey(id);
+    const sec = sections().filter(function (x) { return x.id === id; })[0];
+    if (!key || !sec) return;
+    if (!dirty(sec)) { dropDraft(id); return; }
+    const raw = C.draftEncode(S.drafts[id], new Date().toISOString());
+    try { localStorage.setItem(key, raw); } catch (e) { /* store denied: memory draft only */ }
+  }
+
+  function scheduleDraft(id) {
+    clearTimeout(S.draftTimers[id]);
+    S.draftTimers[id] = setTimeout(function () { storeDraft(id); }, C.DEADEYE_DRAFT_MS);
+  }
+
+  function flushDrafts() {
+    Object.keys(S.draftTimers).forEach(storeDraft);
+  }
+
+  // Once, on the first good GET: stored drafts that differ from the saved text.
+  function loadOffers() {
+    if (S.offers || !S.data) return;
+    S.offers = C.draftsToRestore(sections(), readStore, S.drafts);
+  }
+
+  function offer(sec) {
+    const o = sec && S.offers ? S.offers[sec.id] : null;
+    if (!o) return null;
+    if (dirty(sec) || !C.draftPending(o, savedText(sec))) { delete S.offers[sec.id]; return null; }
+    return o;
+  }
+
+  function restoreDraft() {
+    const sec = current();
+    const o = offer(sec);
+    if (!o) return;
+    S.drafts[sec.id] = o.text;
+    delete S.offers[sec.id];
+    S.ui.editor.value = o.text;
+    drawNotes();
+  }
+
+  function discardDraft() {
+    const sec = current();
+    if (!sec || !S.offers) return;
+    delete S.offers[sec.id];
+    dropDraft(sec.id);
+    drawNoteMeta();
+  }
+
+  function drawOffer(sec) {
+    const ui = S.ui;
+    const o = offer(sec);
+    ui.restore.hidden = !o;
+    if (!o) return;
+    const at = C.fmtLocal(o.at);
+    ui.restoreText.textContent = 'Unsaved draft from ' + (at ? at.text : o.at) + ' differs from the saved note.';
+    ui.restoreText.title = at ? at.title : '';
+  }
+
   function drawNoteMeta() {
     const ui = S.ui;
     const sec = current();
+    loadOffers();
+    drawOffer(sec);
     const n = sec ? noteText(sec).replace(/\r\n/g, '\n').length : 0;
     ui.count.textContent = n + ' / ' + NOTE_MAX;
     ui.count.className = 'ew-muted ew-gnum' + (n > NOTE_MAX ? ' ew-over' : '');
@@ -200,6 +280,7 @@
     const sec = current();
     if (!sec) return;
     S.drafts[sec.id] = S.ui.editor.value;
+    scheduleDraft(sec.id);
     drawNoteMeta();
   }
 
@@ -209,7 +290,7 @@
     const text = S.drafts[sec.id];
     send({ note: { section: sec.id, text: text } }, 'saved').then(function (ok) {
       // Keep the draft only if the operator typed more while saving.
-      if (ok && S.drafts[sec.id] === text) delete S.drafts[sec.id];
+      if (ok && S.drafts[sec.id] === text) { delete S.drafts[sec.id]; dropDraft(sec.id); }
       if (ok && S.data) {
         const s = sections().filter(function (x) { return x.id === sec.id; })[0];
         if (s && s.text !== text) { s.text = text; }
@@ -673,6 +754,13 @@
     const count = el('span', 'ew-muted ew-gnum', '0 / ' + NOTE_MAX);
     [mode, saveBtn, mark, updated, count].forEach(function (x) { bar.appendChild(x); });
     c.card.appendChild(bar);
+    const restore = el('div', 'ew-drestore');
+    restore.hidden = true;
+    const restoreText = el('span', 'ew-muted', '');
+    restore.appendChild(restoreText);
+    restore.appendChild(button('ew-btn ew-bbtn', 'Restore', 'put the draft back in the editor (not saved yet)', restoreDraft));
+    restore.appendChild(button('ew-btn ew-bbtn', 'Discard', 'forget the stored draft', discardDraft));
+    c.card.appendChild(restore);
     const editor = el('textarea', 'ew-deditor');
     editor.spellcheck = false;
     editor.maxLength = NOTE_MAX;
@@ -686,7 +774,7 @@
     c.card.appendChild(preview);
     return {
       card: c.card, noteErr: err, tabs: tabs, secTabs: [], mode: mode, save: saveBtn, dirty: mark,
-      updated: updated, count: count, editor: editor, preview: preview
+      updated: updated, count: count, editor: editor, preview: preview, restore: restore, restoreText: restoreText
     };
   }
 
@@ -848,6 +936,15 @@
   }
 
   function show() { poll(false); }
+
+  // Plan 057: store every pending draft now; hold the unload while a note is
+  // unsaved (main asks Leave / Stay - the draft survives either way).
+  window.addEventListener('beforeunload', function (ev) {
+    flushDrafts();
+    if (!sections().some(dirty)) return;
+    ev.preventDefault();
+    ev.returnValue = '';
+  });
 
   window.EWDeadeye = { mount: mount, show: show };
 })();

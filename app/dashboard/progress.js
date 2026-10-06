@@ -701,6 +701,8 @@
     (v && Array.isArray(v.unlocks) ? v.unlocks : []).forEach(function (u) {
       const d = el('div', 'ew-muted', u.name + ': Lv ' + u.min_level + '+, ' + u.how);
       d.title = 'source ' + u.source + (u.verified ? ', verified ' + u.verified : ', unverified');
+      const open = window.EWToast && window.EWToast.linkButton(u.source); // plan 057
+      if (open) { d.appendChild(document.createTextNode(' ')); d.appendChild(open); }
       ui.unlocks.appendChild(d);
     });
   }

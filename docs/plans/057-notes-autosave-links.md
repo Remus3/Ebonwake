@@ -28,3 +28,31 @@ ToS check: opens the operator's browser on public pages; nothing reaches
 the game.
 
 Depends on: none.
+
+## As-built deviations
+
+1. Unload guard needs a main-process dialog.
+   Decision: `beforeunload` in `deadeye.js` flushes pending drafts and holds
+   the unload while a note is unsaved; `main.js` answers
+   `will-prevent-unload` with a Leave / Stay `dialog.showMessageBoxSync`.
+   Alternatives: renderer-only `beforeunload` (Electron cancels silently: the
+   window and tray Quit would just stop working); flush only, no guard.
+   Why: the plan's guard without a prompt traps the window. Reverses if:
+   Electron starts showing its own prompt for `beforeunload`.
+2. Restore prompt is an inline bar (Restore / Discard) in the Build notes
+   card, not `window.confirm`. Alternatives: modal confirm on load. Why: a
+   blocking modal on tab mount interrupts; the bar is per section and stays
+   until acted on. Reverses if: the operator asks for a modal.
+3. `ew:open-external` is rate-limited (6 a minute, `core.OPEN_RATE`) like
+   `ew:notify`, and opens the normalized href (`core.externalUrl`), not the
+   raw string. Also refused: any non-default port (`:443` is normalized away), a URL not starting with the
+   literal `https://`, whitespace / non-ASCII, over 2048 chars. Why: same
+   defence-in-depth as the other bridge channels. Reverses if: never needed.
+4. "Plan data `source` links" = the render sites that already surface a
+   data `source`: Progress unlocks, Pets alpha / exchange rules, Inventory
+   warehouse rule. One shared `EWToast.linkButton(url)` (toast.js, loaded
+   before every tab) builds the button, or nothing for a non-allowlisted url,
+   so bdocodex.com loot-table sources (Grind) get no button - the allowlist
+   is the plan's, unchanged. Alternatives: per-module button copies; adding
+   bdocodex.com. Why: one audited click path; host list is a plan decision.
+   Reverses if: a later plan widens `EXTERNAL_HOSTS`.

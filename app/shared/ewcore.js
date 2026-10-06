@@ -5360,7 +5360,88 @@
     };
   }
 
+  // Plan 057: the hosts a source link may open in the operator's browser
+  // (ew:open-external -> shell.openExternal). https only, no credentials, no
+  // port, exact host match; in-app navigation stays blocked.
+  const EXTERNAL_HOSTS = Object.freeze(['naeu.playblackdesert.com', 'www.naeu.playblackdesert.com',
+    'www.blackdesertfoundry.com', 'api.arsha.io', 'github.com']);
+  const EXTERNAL_URL_MAX = 2048;
+  const OPEN_RATE = { max: 6, windowMs: 60000 };
+
+  // The normalized href to open, or null when the url is not allowlisted.
+  function externalUrl(url) {
+    if (typeof url !== 'string' || url.length > EXTERNAL_URL_MAX) return null;
+    if (!/^https:\/\/[\x21-\x7e]+$/.test(url)) return null;
+    let u;
+    try { u = new URL(url); } catch (e) { return null; }
+    if (u.protocol !== 'https:' || u.username !== '' || u.password !== '' || u.port !== '') return null;
+    if (EXTERNAL_HOSTS.indexOf(u.hostname) < 0) return null;
+    return u.href;
+  }
+
+  // ew:open-external payload check (main process): exactly {url}, allowlisted.
+  function validOpenExternal(b) {
+    if (!plainObject(b)) return false;
+    const keys = Object.keys(b);
+    return keys.length === 1 && keys[0] === 'url' && externalUrl(b.url) !== null;
+  }
+
+  // Plan 057: Deadeye note drafts autosave to localStorage per section
+  // ({v: 1, text, at}); a stored draft that differs from the saved text is
+  // offered back on load.
+  const DEADEYE_DRAFT_MS = 2000;
+  const DRAFT_AT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/;
+
+  function draftKey(id) {
+    return typeof id === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(id) ? 'ew.deadeye.draft.' + id : null;
+  }
+
+  function draftEncode(text, at) {
+    return JSON.stringify({ v: 1, text: text, at: at });
+  }
+
+  function draftDecode(raw) {
+    if (typeof raw !== 'string' || !raw) return null;
+    let d;
+    try { d = JSON.parse(raw); } catch (e) { return null; }
+    if (!plainObject(d) || d.v !== 1 || typeof d.text !== 'string' || d.text.length > NOTE_MAX) return null;
+    if (typeof d.at !== 'string' || !DRAFT_AT.test(d.at)) return null;
+    return { text: d.text, at: d.at };
+  }
+
+  function draftPending(d, saved) {
+    if (!d || typeof d.text !== 'string') return false;
+    const norm = function (s) { return s.replace(/\r\n/g, '\n'); };
+    return norm(d.text) !== norm(typeof saved === 'string' ? saved : '');
+  }
+
+  // {sectionId: draft} for stored drafts worth offering. get(key) reads the
+  // store (it may throw: a denied store offers nothing); a live in-memory
+  // edit of a section always wins over its stored draft.
+  function draftsToRestore(sections, get, live) {
+    const out = {};
+    (Array.isArray(sections) ? sections : []).forEach(function (s) {
+      const key = s && draftKey(s.id);
+      if (!key || (live && typeof live[s.id] === 'string')) return;
+      let raw = null;
+      try { raw = get(key); } catch (e) { return; }
+      const d = draftDecode(raw);
+      if (draftPending(d, s.text)) out[s.id] = d;
+    });
+    return out;
+  }
+
   const api = {
+    EXTERNAL_HOSTS: EXTERNAL_HOSTS,
+    OPEN_RATE: OPEN_RATE,
+    externalUrl: externalUrl,
+    validOpenExternal: validOpenExternal,
+    DEADEYE_DRAFT_MS: DEADEYE_DRAFT_MS,
+    draftKey: draftKey,
+    draftEncode: draftEncode,
+    draftDecode: draftDecode,
+    draftPending: draftPending,
+    draftsToRestore: draftsToRestore,
     TOAST_MAX: TOAST_MAX,
     TOAST_TEXT_MAX: TOAST_TEXT_MAX,
     TOAST_MS: TOAST_MS,
