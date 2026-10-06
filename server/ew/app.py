@@ -32,7 +32,7 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import (__version__, bosses, coupons, crafting, deadeye, enhance, eventnotices, events,
+from . import (__version__, bosses, coupons, crafting, deadeye, detect, enhance, eventnotices, events,
                gamewatch, grind, imperial, inventory, itemnames, leveling, market, mounts, ocr, ocrauto, onboarding, pets,
                ports,
                playsession, progress, settings, shopping, single, spots, summary, today,
@@ -145,14 +145,18 @@ class EWServer(ThreadingHTTPServer):
                  deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
                  ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
                  coupon_client=None, coupon_spawn=None, bosses_clock=None,
-                 config_path=None, notice_client=None, notice_spawn=None):
+                 config_path=None, notice_client=None, notice_spawn=None, detector=None):
         super().__init__(addr, Handler)
+        # Plan 065: read-only BDO folder auto-detect; only main() passes one, so
+        # no test ever probes the real disk or registry.
+        self.detector = detector
+        detected = detector.paths if detector is not None else None
         self.started = _now_iso()
         self.commit = commit
         self.cfg_hash = config_hash()
         self.store = Store(store_root or RUNTIME / "store")
         # Plan 030: the only writer of config/local.json (allowlisted keys only).
-        self.settings = settings.Settings(config_path or CONFIG_PATH)
+        self.settings = settings.Settings(config_path or CONFIG_PATH, detected=detected)
         self.sse_interval = sse_interval
         self.bus = DomainBus()
         seed = config_market_watch() if market_seed is None else market_seed
@@ -263,6 +267,8 @@ class EWServer(ThreadingHTTPServer):
             cfg = {} if game_cfg is None else game_cfg
             game_watch = gamewatch.GameWatch.from_config(cfg)
         self.game = game_watch
+        if detector is not None and isinstance(getattr(self.game, "pollers", None), list):
+            detector.attach(self.game)  # detect now, again hourly while unconfigured
         # Plan 046: game exit -> play window recorded + grind.pending_stop (never a stop).
         self.summary = summary.SummaryService(self.store, self.grind,
                                               clock=grind_clock or time.time)
@@ -301,7 +307,8 @@ class EWServer(ThreadingHTTPServer):
             listeners.append(self.ocr_auto.on_game)
         # Plan 051: first-run checklist over the same config file + store.
         self.onboarding = onboarding.OnboardingService(self.store, self.settings.path,
-                                                       clock=today_clock or time.time)
+                                                       clock=today_clock or time.time,
+                                                       detected=detected)
         # Plan 053: imperial delivery planner; CP from plan 042's card, else typed.
         self.imperial = imperial.ImperialService(
             self.store, clock=today_clock or time.time,
@@ -578,6 +585,10 @@ class Handler(BaseHTTPRequestHandler):
             s = out["settings"]
             self.server.market.settings = market.settings_from(
                 {"market": {"vp": s["market.vp"], "fame_pct": s["market.fame_pct"]}})
+        # Plan 065: a "use other" folder (or blank = back to detected) applies live.
+        det = self.server.detector
+        if det is not None and any(k.startswith("bdo.") for k in out["changed"]):
+            det.apply()
         return out
 
     def _post_ocr(self, body):
@@ -785,7 +796,7 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                 deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
                 ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
                 coupon_client=None, coupon_spawn=None, bosses_clock=None,
-                config_path=None, notice_client=None, notice_spawn=None):
+                config_path=None, notice_client=None, notice_spawn=None, detector=None):
     return EWServer(("127.0.0.1", port), store_root=store_root, commit=commit,
                     sse_interval=sse_interval, market_client=market_client,
                     market_seed=market_seed, today_clock=today_clock,
@@ -796,7 +807,8 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                     ocr_cache_dir=ocr_cache_dir, leveling_clock=leveling_clock,
                     coupon_client=coupon_client, coupon_spawn=coupon_spawn,
                     bosses_clock=bosses_clock, config_path=config_path,
-                    notice_client=notice_client, notice_spawn=notice_spawn)
+                    notice_client=notice_client, notice_spawn=notice_spawn,
+                    detector=detector)
 
 
 def main(argv=None, probe=None):
@@ -808,6 +820,7 @@ def main(argv=None, probe=None):
     cfg = settings.Settings(CONFIG_PATH).view()["settings"]
     srv = make_server(commit=read_commit(), game_poll=True,
                       game_cfg=gamewatch.config_bdo(REPO_ROOT),
+                      detector=detect.Detector(config=lambda: gamewatch.config_bdo(REPO_ROOT)),
                       coupon_client=coupons.CouponClient() if cfg["coupons.check"] else None,
                       notice_client=(eventnotices.NoticeClient()
                                      if cfg["events.notice_check"] else None))

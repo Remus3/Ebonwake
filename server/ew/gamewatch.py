@@ -8,8 +8,9 @@ Read-only, nothing is ever sent to the game. Inputs (research 0001 section 4):
   its memory);
 - a directory listing of `<documents_dir>/ScreenShot` (stat only, files never
   opened; OCR is plan 009).
-Paths come only from gitignored config/local.json `bdo`; without
-`install_dir` the watcher reports `unconfigured` and never guesses a path. One
+Paths come from gitignored config/local.json `bdo`, else from plan 065's
+read-only auto-detect (server/ew/detect.py, explicit config wins); without an
+install dir the watcher reports `unconfigured`. One
 daemon thread polls every 2 s; clock and tasklist are injectable for tests.
 
 Liveness (operator QA 2026-10-05): a definite process-list answer wins over the
@@ -196,6 +197,18 @@ class GameWatch:
         cfg = cfg if isinstance(cfg, dict) else {}
         return cls(cfg.get("install_dir"), cfg.get("documents_dir"), clock=clock,
                    tasklist=tasklist)
+
+    def configure(self, install_dir=None, documents_dir=None):
+        """Plan 065: (re)point the watcher at new folders (detected or set in
+        Settings); the log tail starts over when the install dir changes."""
+        install_dir, documents_dir = _dir(install_dir), _dir(documents_dir)
+        log_dir = Path(install_dir) / "Log" if install_dir else None
+        with self._lock:
+            if log_dir != self.log_dir:
+                self._log_file, self._offset = None, 0
+                self._log_state, self._last_event = None, None
+            self.log_dir = log_dir
+            self.shot_dir = Path(documents_dir) / "ScreenShot" if documents_dir else None
 
     @property
     def configured(self):
