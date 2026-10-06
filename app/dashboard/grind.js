@@ -18,7 +18,9 @@
     loot: null, lootSpot: null, lootErr: null, lootCounts: {},
     // Plan 040: "Import from screenshot" pre-fills lootCounts; `lootLow` marks
     // rows the OCR read with a fuzzy name (shown with "?").
-    lootImport: { busy: false, msg: '' }, lootLow: {}
+    lootImport: { busy: false, msg: '' }, lootLow: {},
+    // Plan 046: GET /api/summary (last game session, today, this week).
+    summary: null, summaryErr: null
   };
 
   function el(tag, cls, text) {
@@ -70,6 +72,14 @@
     getJSON('/api/grind').then(accept, function (e) { S.err = e.message; }).then(draw)
       .then(function () { loadLoot(false); });
     loadRecs();
+    loadSummary();
+  }
+
+  function loadSummary() {
+    getJSON('/api/summary').then(function (d) {
+      S.summary = d && typeof d === 'object' && !Array.isArray(d) ? d : null;
+      S.summaryErr = S.summary ? null : 'bad summary reply';
+    }, function (e) { S.summaryErr = e.message; }).then(drawSummary);
   }
 
   // Plan 039: the loot list follows the running spot, else the picker.
@@ -150,9 +160,26 @@
     const r = C.parseGrindForm('stop', { silver: f.silver.value, trash: f.trash.value, loot: lootRows() });
     if (!r.ok) { msg(r.error); return; }
     send(r.body, 'logged').then(function (ok) {
-      if (ok) { f.silver.value = ''; f.trash.value = ''; S.lootCounts = {}; S.lootLow = {}; loadLoot(true); }
+      if (ok) { f.silver.value = ''; f.trash.value = ''; S.lootCounts = {}; S.lootLow = {}; loadLoot(true); loadSummary(); }
     });
   }
+
+  // Plan 046 "Session ended": end the session at the game-exit time, or keep it.
+  function stopAtExit() {
+    const f = S.ui.form;
+    const r = C.parseGrindForm('stop', { silver: f.silver.value, trash: f.trash.value, loot: lootRows() });
+    if (!r.ok) { msg(r.error); return; }
+    r.body.stop.at_exit = true;
+    send(r.body, 'logged at the exit time').then(function (ok) {
+      if (ok) {
+        f.silver.value = ''; f.trash.value = ''; S.lootCounts = {}; S.lootLow = {};
+        loadLoot(true);
+        loadSummary();
+      }
+    });
+  }
+
+  function keepRunning() { send({ keep: true }, 'session kept running'); }
 
   function logManual() {
     const f = S.ui.form;
@@ -272,7 +299,36 @@
     f.start.hidden = !!a;
     f.log.hidden = !!a;
     f.stop.hidden = !a;
+    const p = C.pendingStop(S.data);
+    ui.ended.box.hidden = !p;
+    ui.ended.text.textContent = p ? C.pendingStopText(p, spots(), Date.now()) : '';
     clock(Date.now());
+  }
+
+  // Plan 046: last game session, today and this week, one block each.
+  function drawSummary() {
+    const ui = S.ui;
+    if (!ui) return;
+    const body = ui.summaryBody;
+    body.textContent = '';
+    if (S.summaryErr) body.appendChild(el('div', 'ew-err', S.summaryErr));
+    const d = S.summary || {};
+    let any = false;
+    [['session', 'Last game session'], ['day', 'Today'], ['week', 'This week']].forEach(function (w) {
+      const rows = C.summaryRows(d[w[0]]);
+      if (!rows.length) return;
+      any = true;
+      body.appendChild(el('div', 'ew-muted', w[1]));
+      const box = el('div', 'ew-list');
+      rows.forEach(function (r) {
+        const row = el('div', 'ew-srow');
+        row.appendChild(el('span', 'ew-mname', r.label));
+        row.appendChild(el('span', 'ew-mprice', r.value));
+        box.appendChild(row);
+      });
+      body.appendChild(box);
+    });
+    if (!any && !S.summaryErr) body.appendChild(el('div', 'ew-muted', 'nothing logged yet this week'));
   }
 
   function drawLog() {
@@ -610,6 +666,7 @@
     if (!ui || !ui.logBody.isConnected) return;
     drawRecs();
     drawSession();
+    drawSummary();
     drawLog();
     drawSpots();
     drawBuffs(Date.now());
@@ -661,6 +718,22 @@
     head.appendChild(spotLabel);
     head.appendChild(clk);
     c.body.appendChild(head);
+    // Plan 046 "Session ended": shown while the server holds a pending stop.
+    const ended = { box: el('div', 'ew-gended') };
+    ended.box.setAttribute('role', 'alertdialog');
+    ended.box.hidden = true;
+    ended.box.appendChild(el('strong', null, 'Session ended'));
+    ended.text = el('div', 'ew-muted', '');
+    ended.box.appendChild(ended.text);
+    const eb = el('div', 'ew-btns');
+    [['Stop at exit time', stopAtExit], ['Keep running', keepRunning]].forEach(function (x) {
+      const b = el('button', 'ew-btn', x[0]);
+      b.type = 'button';
+      b.addEventListener('click', x[1]);
+      eb.appendChild(b);
+    });
+    ended.box.appendChild(eb);
+    c.body.appendChild(ended.box);
     const form = el('form', 'ew-form');
     const field = function (name, text, input) {
       const lab = el('label', null);
@@ -714,7 +787,8 @@
     form.appendChild(m);
     form.addEventListener('submit', function (ev) { ev.preventDefault(); });
     c.body.appendChild(form);
-    return { card: c.card, pill: c.pill, form: f, msg: m, clock: clk, activeSpot: spotLabel, err: err, loot: loot };
+    return { card: c.card, pill: c.pill, form: f, msg: m, clock: clk, activeSpot: spotLabel, err: err, loot: loot,
+      ended: ended };
   }
 
   // Goal toggle + what-if AP / DP / level (blank = the Progress character).
@@ -758,9 +832,12 @@
     const b = card('Buffs');
     b.pill.textContent = 'tap to arm';
     const d = card('Drop rate');
-    [s, w, l, p, b, d].forEach(function (x) { panel.appendChild(x.card); });
+    const sm = card('Summary');
+    sm.pill.textContent = 'session / day / week';
+    [s, sm, w, l, p, b, d].forEach(function (x) { panel.appendChild(x.card); });
     S.ui = {
       form: s.form, msg: s.msg, clock: s.clock, activeSpot: s.activeSpot, sessionErr: s.err, lootBody: s.loot,
+      ended: s.ended, summaryBody: sm.body,
       sessionPill: s.pill, recBody: w.body, recPill: w.pill,
       logBody: l.body, logPill: l.pill, spotBody: p.body, buffBody: b.body, buffClocks: [],
       dropBody: d.body, dropPill: d.pill

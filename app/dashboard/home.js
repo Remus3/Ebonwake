@@ -1,6 +1,7 @@
 /* EW Home / Now tab (plan 025): one glance screen. Reads the existing GETs
    (/api/today, /api/grind, /api/leveling, /api/events, /api/market/watch,
-   plan 032 /api/bosses - a read-only World bosses card) and
+   plan 032 /api/bosses - a read-only World bosses card, plan 046
+   /api/summary - the last game session's summary card) and
    lets C.composeNow order the cards; a 404 (old server) drops that payload's
    card, other errors keep the last data. Read-only except the one-click tick
    of a daily, which reuses the Today tick route through the dashboard preload.
@@ -11,7 +12,7 @@
   const C = window.EWCore;
   const POLL_MS = 60000;
   const SOURCES = { today: '/api/today', grind: '/api/grind', leveling: '/api/leveling',
-    events: '/api/events', market: '/api/market/watch', bosses: '/api/bosses' };
+    events: '/api/events', market: '/api/market/watch', bosses: '/api/bosses', summary: '/api/summary' };
   const S = { snap: { at: {} }, err: {}, last: null, timer: null, panel: null, shape: null, vals: [],
     pending: {}, msg: '' };
 
