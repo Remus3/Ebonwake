@@ -6,7 +6,8 @@ assets, browser fallback),
 /api/market/{watch,item,hot} (plan 002), /api/market/search (plan 028), /api/today (plan 003),
 /api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006; plan 014
 adds its `suggested` coupon block),
-/api/deadeye (plan 007; /api/deadeye/enhance GET plan 035; /api/deadeye/shopping GET plan 037), /api/game (plan 008), /api/leveling (plan 011),
+/api/deadeye (plan 007; /api/deadeye/enhance GET plan 035; /api/deadeye/shopping GET plan 037;
+/api/deadeye/calc GET plan 055), /api/game (plan 008), /api/leveling (plan 011),
 /api/spots (plan 012, GET only), /api/bosses (plan 031), /api/settings (plan 030), /api/pets
 (plan 043), /api/inventory (plan 045), /api/mounts (plan 044), /api/summary (plan 046),
 /api/onboarding (plan 051), /api/crafting (plan 054), and POST
@@ -223,8 +224,10 @@ class EWServer(ThreadingHTTPServer):
         # Plan 035: EV math on tracked rate rows; prices from the market cache only.
         self.enhance = enhance.EnhanceService(self.store, prices=self.market.cached_price)
         # Plan 036: stack advice reads the same effective rows (overrides included).
+        # Plan 055: crystal / Caphras calculators price from the market cache only.
         self.deadeye = deadeye.DeadeyeService(self.store, clock=deadeye_clock or time.time,
-                                              rates=self.enhance.rows)
+                                              rates=self.enhance.rows,
+                                              price=self.market.cached_price)
         # Plan 037: open plan steps x EV attempts x materials, cached prices only.
         self.shopping = shopping.ShoppingService(
             self.store, plan=lambda: self.deadeye.view()["plan"], enhance=self.enhance,
@@ -378,6 +381,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(e)})
         if path == "/api/deadeye/shopping":
             return self._send(200, self.server.shopping.view())
+        if path == "/api/deadeye/calc":
+            try:
+                return self._send(200, self.server.deadeye.calc(parse_qs(query)))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
         if path == "/api/game":
             return self._send(200, self.server.game.view())
         if path == "/api/leveling":

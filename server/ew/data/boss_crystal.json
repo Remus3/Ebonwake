@@ -1,0 +1,7 @@
+{
+ "schema": 1,
+ "notes": "Plan 055. Research 0003 C13. Jetina weekly exchange: 2 Latent Boss Auras -> 155 Concentrated Boss Crystals, weekly reset Thursday. A reform level costs 60-120 crystals (BDFoundry 2026-07-02); the per-level split is not published in the sources, so the calculator reports a min / max band unless the operator types a per-level cost.",
+ "weekly": {"crystals": 155, "auras": 2, "reset_weekday": "Thursday", "source": "blackdesertfoundry.com 2026-07-02", "verified": true},
+ "reform_cost": {"min": 60, "max": 120, "source": "blackdesertfoundry.com 2026-07-02", "verified": true},
+ "max_levels": 20
+}
