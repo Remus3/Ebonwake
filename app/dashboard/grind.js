@@ -15,7 +15,10 @@
     recs: null, recsErr: null, goal: 'xp', whatIf: { ap: '', dp: '', level: '' },
     // Plan 039: GET /api/grind/loot for the running (else selected) spot;
     // counts typed per item name survive redraws until a log succeeds.
-    loot: null, lootSpot: null, lootErr: null, lootCounts: {}
+    loot: null, lootSpot: null, lootErr: null, lootCounts: {},
+    // Plan 040: "Import from screenshot" pre-fills lootCounts; `lootLow` marks
+    // rows the OCR read with a fuzzy name (shown with "?").
+    lootImport: { busy: false, msg: '' }, lootLow: {}
   };
 
   function el(tag, cls, text) {
@@ -80,7 +83,7 @@
     if (!S.ui) return;
     const spot = lootSpot();
     if (!force && spot === S.lootSpot) return;
-    if (spot !== S.lootSpot) S.lootCounts = {};
+    if (spot !== S.lootSpot) { S.lootCounts = {}; S.lootLow = {}; S.lootImport.msg = ''; }
     S.lootSpot = spot;
     if (!spot) { S.loot = null; S.lootErr = null; drawLoot(); return; }
     getJSON('/api/grind/loot?spot=' + encodeURIComponent(spot)).then(function (d) {
@@ -147,7 +150,7 @@
     const r = C.parseGrindForm('stop', { silver: f.silver.value, trash: f.trash.value, loot: lootRows() });
     if (!r.ok) { msg(r.error); return; }
     send(r.body, 'logged').then(function (ok) {
-      if (ok) { f.silver.value = ''; f.trash.value = ''; S.lootCounts = {}; loadLoot(true); }
+      if (ok) { f.silver.value = ''; f.trash.value = ''; S.lootCounts = {}; S.lootLow = {}; loadLoot(true); }
     });
   }
 
@@ -156,8 +159,42 @@
     const r = C.parseGrindForm('log', { spot: f.spot.value, minutes: f.minutes.value, silver: f.silver.value, trash: f.trash.value, loot: lootRows() });
     if (!r.ok) { msg(r.error); return; }
     send(r.body, 'logged').then(function (ok) {
-      if (ok) { f.minutes.value = ''; f.silver.value = ''; f.trash.value = ''; S.lootCounts = {}; loadLoot(true); }
+      if (ok) { f.minutes.value = ''; f.silver.value = ''; f.trash.value = ''; S.lootCounts = {}; S.lootLow = {}; loadLoot(true); }
     });
+  }
+
+  // Plan 040: OCR the newest screenshot (plan 008 list) against this spot's
+  // loot names and pre-fill the counts. Nothing is logged: the operator checks
+  // the rows and presses Stop + log / Log as usual.
+  function importShot() {
+    const im = S.lootImport;
+    const b = bridge();
+    const spot = S.lootSpot;
+    if (im.busy || !spot) return;
+    if (!b) { im.msg = 'import needs the Ebonwake app window'; drawLoot(); return; }
+    im.busy = true;
+    im.msg = 'reading the newest screenshot...';
+    drawLoot();
+    getJSON('/api/game').then(function (d) {
+      const g = C.normalizeGame(d);
+      const shot = g && g.screenshots.length ? g.screenshots[0].name : null;
+      if (!shot) throw new Error('no screenshot yet - take one of the loot window in game');
+      const body = { loot: { shot: shot, spot: spot } };
+      if (!C.validOcrBody(body)) throw new Error('not a readable screenshot name');
+      return window.EWToast.via(b).post('/api/ocr', body).then(function (res) {
+        if (!res || !res.ok) throw new Error((res && res.error) || 'unknown error');
+        const r = C.normalizeLootOcr(res.data);
+        if (!r) throw new Error('bad reply from server');
+        if (spot !== S.lootSpot) return;
+        const names = (S.loot ? S.loot.items : []).map(function (it) { return it && it.name; });
+        const imp = C.lootImportCounts(r.rows, names);
+        Object.keys(imp.counts).forEach(function (n) { S.lootCounts[n] = imp.counts[n]; });
+        S.lootLow = {};
+        imp.low.forEach(function (n) { S.lootLow[n] = true; });
+        im.msg = C.lootImportText(shot, imp, r.unmatched);
+      });
+    }).catch(function (e) { im.msg = 'import failed: ' + (e && e.message || e); })
+      .then(function () { im.busy = false; drawLoot(); });
   }
 
   function addLootItem(lf) {
@@ -285,17 +322,30 @@
     body.appendChild(el('div', 'ew-muted', 'loot (counts value the session)'));
     if (S.lootErr) body.appendChild(el('div', 'ew-err', S.lootErr));
     const items = S.loot ? S.loot.items : [];
+    if (items.length) {
+      const imp = el('div', 'ew-grow');
+      const ib = el('button', 'ew-btn', 'Import from screenshot');
+      ib.type = 'button';
+      ib.title = 'OCR the newest screenshot (take one of the loot window first); counts are pre-filled, nothing is logged';
+      ib.disabled = S.lootImport.busy;
+      ib.addEventListener('click', importShot);
+      imp.appendChild(ib);
+      imp.appendChild(el('span', 'ew-muted', S.lootImport.msg));
+      body.appendChild(imp);
+    }
     items.forEach(function (it) {
       if (!it || typeof it.name !== 'string') return;
       const r = el('div', 'ew-grow');
-      r.appendChild(el('span', 'ew-mname', it.name));
+      const nm = el('span', 'ew-mname', it.name + (S.lootLow[it.name] ? ' ?' : ''));
+      if (S.lootLow[it.name]) nm.title = 'read from a screenshot with a fuzzy name match - check the count';
+      r.appendChild(nm);
       const n = el('input');
       n.type = 'text';
       n.inputMode = 'numeric';
       n.maxLength = 8;
       n.placeholder = 'count';
       n.value = S.lootCounts[it.name] || '';
-      n.addEventListener('input', function () { S.lootCounts[it.name] = n.value; });
+      n.addEventListener('input', function () { S.lootCounts[it.name] = n.value; delete S.lootLow[it.name]; });
       r.appendChild(n);
       const h = el('span', 'ew-muted', C.lootHintText(it.hint));
       const hint = it.hint || {};
