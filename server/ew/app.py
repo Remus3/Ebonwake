@@ -33,9 +33,9 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import (__version__, bosses, context, coupons, crafting, deadeye, detect, enhance, eventnotices,
-               events, gamewatch, grind, imperial, inventory, maint, itemnames, leveling, market, mounts, ocr,
-               ocrauto, onboarding, pets,
+from . import (__version__, autotick, bosses, context, coupons, crafting, deadeye, detect, enhance,
+               eventnotices, events, gamewatch, grind, imperial, inventory, maint, itemnames, leveling, market,
+               mounts, ocr, ocrauto, onboarding, pets,
                ports,
                playsession, progress, settings, shopping, single, spots, summary, today,
                weekly, xpbooks)
@@ -319,6 +319,16 @@ class EWServer(ThreadingHTTPServer):
             play=self.play.view)
         if isinstance(listeners, list):
             listeners.append(self.ocr_auto.on_game)
+        # Plan 068: login / logged-minute rows tick themselves (undoable); a shot
+        # near a boss spawn while logged in suggests that boss's loot tick.
+        self.autotick = autotick.AutoTick(
+            self.store, self.today, self.dice, self.game, table=self.bosses.table,
+            settings=lambda: self.settings.view()["settings"], clock=today_clock or time.time,
+            on_change=lambda: self.bus.bump("today"))
+        if isinstance(listeners, list):
+            listeners.append(self.autotick.on_game)
+        if isinstance(pollers, list):
+            pollers.append(self.autotick.on_poll)
         # Plan 051: first-run checklist over the same config file + store.
         self.onboarding = onboarding.OnboardingService(self.store, self.settings.path,
                                                        clock=today_clock or time.time,
@@ -346,9 +356,17 @@ class EWServer(ThreadingHTTPServer):
         return dict(ch, level=self.progress._level(ch))
 
     def today_view(self, body=None):
-        """GET /api/today: plan 003 checklist + plan 033 `weekly_plan` + plan 056 `dice`."""
-        return dict(self.today.view() if body is None else body,
+        """GET /api/today: plan 003 checklist + plan 033 `weekly_plan` + plan 056 `dice`
+        + plan 068 `ready` on ready_minutes rows."""
+        if body is None:
+            self.autotick.evaluate()
+            body = self.today.view()
+        return dict(self.autotick.decorate(body),
                     weekly_plan=self.weekly.view(), dice=self.dice.status())
+
+    def bosses_view(self, body=None):
+        """GET /api/bosses: plan 031 table + loot ticks + plan 068 `suggested`."""
+        return self.autotick.boss_view(self.bosses.view() if body is None else body)
 
     def server_close(self):
         self.ocr_auto.stop()
@@ -477,7 +495,7 @@ class Handler(BaseHTTPRequestHandler):
             self.server.notices.view(refresh=False)  # plan 064: import cached Hot Time reads
             return self._send(200, self.server.leveling.view())
         if path == "/api/bosses":
-            return self._send(200, self.server.bosses.view())
+            return self._send(200, self.server.bosses_view())
         if path == "/api/overlay/context":
             return self._send(200, self.server.context.view())
         if path == "/api/spots":
@@ -635,7 +653,7 @@ class Handler(BaseHTTPRequestHandler):
         if len(body) != 1 or not (ops & set(body)):
             raise ValueError("body must be one of {tick|untick: {boss, day}}")
         (op, arg), = body.items()
-        return getattr(self.server.bosses, op)(arg)
+        return self.server.bosses_view(getattr(self.server.bosses, op)(arg))
 
     def _post_pets(self, body):
         ops = {"add": "add", "edit": "edit", "remove": "remove", "feed": "feed",

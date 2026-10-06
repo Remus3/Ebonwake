@@ -1015,7 +1015,9 @@
     const copy = Object.assign({}, data);
     copy.items = data.items.map(function (it) {
       if (!it || it.id !== id) return it;
-      return Object.assign({}, it, { ticked_at: iso, done: iso !== null });
+      const next = { ticked_at: iso, done: iso !== null };
+      if ('by' in it) next.by = null; // plan 068: an operator toggle is never auto
+      return Object.assign({}, it, next);
     });
     return copy;
   }
@@ -3666,6 +3668,13 @@
     return Array.isArray(l) && l.indexOf(name) >= 0;
   }
 
+  // Plan 068: a screenshot near this spawn while logged in -> "probably done -
+  // tick?" (one click). A suggestion only; never shown once looted.
+  function bossSuggested(view, day, name) {
+    const s = plainObject(view) && plainObject(view.suggested) ? view.suggested[day] : null;
+    return Array.isArray(s) && s.indexOf(name) >= 0 && !bossLooted(view, day, name);
+  }
+
   // One spawn -> {key, day, at_ms, left_s, left, names: [{name, label, looted}],
   // text, done}; null for junk. Greyed (looted) = ticked on the spawn's PT day,
   // or Garmoth at its weekly cap; done = every name greyed.
@@ -4504,6 +4513,27 @@
     return v.earned + '/' + v.max + ' earned - roll, then tick';
   }
 
+  // Plan 068: Today row marks. `auto` = the open period's tick was inferred
+  // (login / logged minutes; the checkbox or "undo" unticks it and blocks
+  // re-ticking until the next reset). `ready` = a ready_minutes row reached
+  // its minutes (the dice roll itself stays an operator tick).
+  function todayAutoMark(it) {
+    return plainObject(it) && it.done === true && it.by === 'auto';
+  }
+
+  function todayReady(it) {
+    return plainObject(it) && it.ready === true && it.done !== true;
+  }
+
+  function todayAutoTitle(it) {
+    if (!plainObject(it) || typeof it.auto !== 'string') return '';
+    if (it.auto === 'login') return 'auto-ticks on the first login after reset';
+    const m = /^(logged|ready)_minutes:(\d+)$/.exec(it.auto);
+    if (!m) return '';
+    return (m[1] === 'logged' ? 'auto-ticks after ' : 'shown ready after ') + m[2] +
+      ' logged-in minutes since reset';
+  }
+
   // ---- Settings (plan 030) ----
   // Form model for the Settings tab. The server (server/ew/settings.py) is the
   // authority; these mirror its allowlist so the bridge refuses anything else.
@@ -4566,6 +4596,10 @@
     { id: 'game', title: 'Game folders', fields: [
       { key: 'bdo.install_dir', label: 'BDO install folder (blank = auto-detect)', type: 'dir' },
       { key: 'bdo.documents_dir', label: 'BDO Documents folder (blank = auto-detect)', type: 'dir' }
+    ] },
+    // Plan 068: auto-tick inferable Today rows + boss-shot suggestions.
+    { id: 'checklist', title: 'Checklist', fields: [
+      { key: 'checklist.auto', label: 'Auto-tick login / play-time rows, suggest boss loot from shots', type: 'bool' }
     ] }
   ];
   const DIR_MAX = 1024;
@@ -5966,6 +6000,7 @@
     fmtBossRow: fmtBossRow,
     bossRows: bossRows,
     bossTicks: bossTicks,
+    bossSuggested: bossSuggested,
     bossGarmothText: bossGarmothText,
     validBossesBody: validBossesBody,
     notifyLedger: notifyLedger,
@@ -6174,6 +6209,9 @@
     normalizeDice: normalizeDice,
     diceLine: diceLine,
     diceSuggest: diceSuggest,
+    todayAutoMark: todayAutoMark,
+    todayReady: todayReady,
+    todayAutoTitle: todayAutoTitle,
     ovServerRowHidden: ovServerRowHidden,
     validPetsBody: validPetsBody,
     parsePetForm: parsePetForm,

@@ -50,6 +50,13 @@ MAX_SOURCE = 200
 MAX_GRANTS = 10
 DICE_PRESET = "Black Spirit's Adventure dice"
 DICE_FALLBACK = {"every": "day", "at": "05:00"}, [0, 30, 60]
+# Plan 068: optional auto rule per row (data, not code). `login` ticks on the
+# first logged_in seen after the row's reset; `logged_minutes:N` ticks once the
+# plan 056 dice clock counts N logged-in minutes since the reset;
+# `ready_minutes:N` only marks the row ready (the dice roll stays a tick).
+AUTO_RE = re.compile(r"^(login|(logged_minutes|ready_minutes):([1-9]\d{0,3}))$")
+AUTO_MAX_MIN = 1440
+SEED_AUTO = {"attendance-reward": "login", "black-spirits-adventure-dice": "ready_minutes:60"}
 
 
 # -- reset clocks (same rule as app/shared/ewcore.js) --------------------------
@@ -239,11 +246,29 @@ def _presets():
         return []
 
 
+def parse_auto(rule):
+    """Plan 068 row rule -> (kind, minutes|None); raises ValueError."""
+    m = AUTO_RE.match(rule) if isinstance(rule, str) else None
+    if m is None or (m.group(3) and int(m.group(3)) > AUTO_MAX_MIN):
+        raise ValueError("auto must be login, logged_minutes:N or ready_minutes:N"
+                         f" (N 1..{AUTO_MAX_MIN})")
+    return (m.group(1), None) if m.group(2) is None else (m.group(2), int(m.group(3)))
+
+
+def _check_auto(kind, auto):
+    if auto is None:
+        return None
+    parse_auto(auto)
+    if kind == "event":
+        raise ValueError("event items take no auto rule")
+    return auto
+
+
 def validate_new(entry):
-    """`{title, kind, until?, reset?}` -> normalised dict; raises ValueError."""
+    """`{title, kind, until?, reset?, auto?}` -> normalised dict; raises ValueError."""
     if not isinstance(entry, dict):
-        raise ValueError("add must be an object {title, kind, until?, reset?}")
-    extra = set(entry) - {"title", "kind", "until", "reset"}
+        raise ValueError("add must be an object {title, kind, until?, reset?, auto?}")
+    extra = set(entry) - {"title", "kind", "until", "reset", "auto"}
     if extra:
         raise ValueError(f"unknown field(s): {', '.join(sorted(extra))}")
     title = entry.get("title")
@@ -261,6 +286,9 @@ def validate_new(entry):
     rule = _check_reset(kind, entry.get("reset"))
     if rule is not None:
         out["reset"] = rule
+    auto = _check_auto(kind, entry.get("auto"))
+    if auto is not None:
+        out["auto"] = auto
     return out
 
 
@@ -286,12 +314,25 @@ def _clean_item(it):
         rule = None  # a corrupt rule degrades to the kind default
     if rule is not None:
         out["reset"] = rule
+    try:
+        auto = _check_auto(kind, it.get("auto"))
+    except ValueError:
+        auto = None  # a corrupt auto rule degrades to none
+    if auto is not None:
+        out["auto"] = auto
     return out
 
 
+def _aux_map(raw, ids, ok):
+    return ({k: v for k, v in raw.items() if k in ids and ok(v)}
+            if isinstance(raw, dict) else {})
+
+
 class TodayService:
-    """Store domain `today`: {"items": [{id, title, kind, until, order}],
-    "ticks": {"<id>": "<iso>"}, "updated": "<iso>"}."""
+    """Store domain `today`: {"items": [{id, title, kind, until, order, reset?,
+    auto?}], "ticks": {"<id>": "<iso>"}, "by": {"<id>": "auto"} (plan 068: who
+    made the current tick), "blocked": {"<id>": "<iso>"} (plan 068: an untick of
+    an auto row blocks auto ticks until the row's next reset), "updated"}."""
 
     def __init__(self, store, clock=time.time):
         self.store = store
@@ -306,7 +347,25 @@ class TodayService:
                     seen.add(iid)
                     items.append({"id": iid, "title": title, "kind": kind, "until": None,
                                   "order": n})
+                    if iid in SEED_AUTO:
+                        items[-1]["auto"] = SEED_AUTO[iid]
                 store.put("today", {"items": items, "ticks": {}, "updated": _iso(self._now())})
+            else:
+                self._seed_auto(doc)
+
+    def _seed_auto(self, doc):
+        """Plan 068: a store seeded before the rule field gets the seed rules once
+        (a row that already has an `auto` key, even null, is left alone)."""
+        raw = doc.get("items")
+        if not isinstance(raw, list):
+            return
+        changed = False
+        for it in raw:
+            if isinstance(it, dict) and it.get("id") in SEED_AUTO and "auto" not in it:
+                it["auto"] = SEED_AUTO[it["id"]]
+                changed = True
+        if changed:
+            self.store.put("today", doc)
 
     def _now(self):
         return _dt.datetime.fromtimestamp(self.clock(), _dt.timezone.utc)
@@ -335,12 +394,16 @@ class TodayService:
                 uniq.append(it)
         ticks = doc.get("ticks")
         ticks = {k: v for k, v in ticks.items() if k in seen} if isinstance(ticks, dict) else {}
-        return uniq, ticks
+        aux = {"by": _aux_map(doc.get("by"), seen, lambda v: v == "auto"),
+               "blocked": _aux_map(doc.get("blocked"), seen,
+                                   lambda v: _parse_iso(v) is not None)}
+        return uniq, ticks, aux
 
-    def _save(self, items, ticks):
+    def _save(self, items, ticks, aux):
         for n, it in enumerate(items):
             it["order"] = n
-        self.store.put("today", {"items": items, "ticks": ticks, "updated": _iso(self._now())})
+        self.store.put("today", {"items": items, "ticks": ticks, "by": aux["by"],
+                                 "blocked": aux["blocked"], "updated": _iso(self._now())})
 
     @staticmethod
     def _find(items, iid):
@@ -356,7 +419,7 @@ class TodayService:
         """GET /api/today body. Expired events (today's UTC date > until) excluded."""
         now = self._now()
         today_iso = now.date().isoformat()
-        items, ticks = self._load()
+        items, ticks, aux = self._load()
         out = []
         for it in items:
             if it["until"] is not None and today_iso > it["until"]:
@@ -369,6 +432,11 @@ class TodayService:
                    "ticked_at": _iso(when) if when is not None else None}
             if "reset" in it:  # plan 021: own rule + own countdown
                 row.update(reset=it["reset"], next_reset=_iso(next_reset(rule, now)))
+            if "auto" in it:  # plan 068: rule, who ticked, undo block
+                blk = _parse_iso(aux["blocked"].get(it["id"]))
+                row.update(auto=it["auto"],
+                           by="auto" if done and aux["by"].get(it["id"]) == "auto" else None,
+                           auto_blocked=blk is not None and blk >= last_reset(rule, now))
             out.append(row)
         return {"now": _iso(now), "daily_reset": _iso(next_daily_reset(now)),
                 "weekly_reset": _iso(next_weekly_reset(now)), "items": out,
@@ -383,37 +451,67 @@ class TodayService:
 
     def tick(self, iid):
         with self._lock:
-            items, ticks = self._load()
+            items, ticks, aux = self._load()
             self._find(items, iid)
             ticks[iid] = _iso(self._now())
-            self._save(items, ticks)
+            aux["by"].pop(iid, None)  # an operator tick
+            self._save(items, ticks, aux)
         return self.view()
 
     def untick(self, iid):
         with self._lock:
-            items, ticks = self._load()
-            self._find(items, iid)
+            items, ticks, aux = self._load()
+            it = items[self._find(items, iid)]
             ticks.pop(iid, None)
-            self._save(items, ticks)
+            aux["by"].pop(iid, None)
+            if "auto" in it:  # plan 068: the undo holds until the row's next reset
+                aux["blocked"][iid] = _iso(self._now())
+            self._save(items, ticks, aux)
         return self.view()
+
+    def auto_tick(self, iid, at):
+        """Plan 068: tick `iid` at epoch `at` as `by: auto` when it has a ticking
+        rule, is open for the period in force at `at` and no undo blocks it.
+        Returns True when it ticked. Never raises on an unknown id."""
+        when = _dt.datetime.fromtimestamp(at, _dt.timezone.utc)
+        with self._lock:
+            items, ticks, aux = self._load()
+            it = next((i for i in items if i["id"] == iid), None)
+            if it is None or "auto" not in it or parse_auto(it["auto"])[0] == "ready_minutes":
+                return False
+            reset = last_reset(_rule(it), when)
+            done = _parse_iso(ticks.get(iid))
+            blk = _parse_iso(aux["blocked"].get(iid))
+            if (done is not None and done >= reset) or (blk is not None and blk >= reset):
+                return False
+            ticks[iid], aux["by"][iid] = _iso(when), "auto"
+            self._save(items, ticks, aux)
+        return True
+
+    def auto_rows(self):
+        """Plan 068: [(id, rule, reset rule)] for every row with an auto rule."""
+        items, _, _ = self._load()
+        return [(it["id"], it["auto"], _rule(it)) for it in items if "auto" in it]
 
     def add(self, entry):
         e = validate_new(entry)
         with self._lock:
-            items, ticks = self._load()
+            items, ticks, aux = self._load()
             if len(items) >= MAX_ITEMS:
                 raise ValueError(f"at most {MAX_ITEMS} items")
             e["id"] = self._unique(slug(e["title"]), {i["id"] for i in items})
             items.append(dict(e, order=len(items)))
-            self._save(items, ticks)
+            self._save(items, ticks, aux)
         return self.view()
 
     def remove(self, iid):
         with self._lock:
-            items, ticks = self._load()
+            items, ticks, aux = self._load()
             del items[self._find(items, iid)]
             ticks.pop(iid, None)
-            self._save(items, ticks)
+            aux["by"].pop(iid, None)
+            aux["blocked"].pop(iid, None)
+            self._save(items, ticks, aux)
         return self.view()
 
     def move(self, arg):
@@ -424,8 +522,8 @@ class TodayService:
         if not isinstance(to, int) or isinstance(to, bool) or to < 0:
             raise ValueError("to must be a non-negative int")
         with self._lock:
-            items, ticks = self._load()
+            items, ticks, aux = self._load()
             it = items.pop(self._find(items, arg["id"]))
             items.insert(min(to, len(items)), it)
-            self._save(items, ticks)
+            self._save(items, ticks, aux)
         return self.view()
