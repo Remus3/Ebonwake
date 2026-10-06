@@ -8,7 +8,7 @@
   "boss_soon": {"widgets": ["worldBoss", "grindSession", "grindBuff"]},
   "reset_soon": {"widgets": ["dice", "eventsSoon", "grindSession"]},
   "hot_time": {"widgets": ["leveling", "grindBuff", "grindSession"]},
-  "idle": {"widgets": ["dice", "eventsSoon", "marketTicker", "season"]},
-  "in_game": {"widgets": ["grindSession", "grindBuff", "leveling", "eventsSoon"]}
+  "idle": {"widgets": ["whatNow", "dice", "eventsSoon", "marketTicker", "season"]},
+  "in_game": {"widgets": ["whatNow", "grindSession", "grindBuff", "leveling", "eventsSoon"]}
  }
 }
