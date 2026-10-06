@@ -60,5 +60,25 @@
     "despawn_min": 30,
     "short_despawn": {"Quint": 15, "Muraka": 15},
     "garmoth_loot_per_week": 3
+  },
+  "drift": {
+    "note": "Plan 072: once-a-day robots-gated read of a public NA table, diffed against slots above; a difference is a banner only, never an edit of this file. tz = the zone the public table's times are written in (PT or UTC). Alias keys are lower-case public names.",
+    "url": "https://mmotimer.com/bdo/?server=na",
+    "robots": "https://mmotimer.com/robots.txt",
+    "table_id": "mainTbl",
+    "tz": "PT",
+    "aliases": {
+      "golden pig": "Golden Pig King",
+      "gold pig king": "Golden Pig King",
+      "golden pig king": "Golden Pig King",
+      "ancient kutum": "Kutum",
+      "kzarka, lord of corruption": "Kzarka",
+      "nouver, the desert dragon": "Nouver",
+      "karanda, harpy queen": "Karanda",
+      "offin tett": "Offin",
+      "garmoth, heart of the dragon": "Garmoth",
+      "vell, ruler of the sea": "Vell",
+      "black shadow (field boss)": "Black Shadow"
+    }
   }
 }

@@ -115,7 +115,7 @@
       const stale = ageS !== null && isNum(s.ttl_s) && ageS > s.ttl_s;
       let cls = 'ok';
       if (/^(error|bad|failed|blocked)$/.test(status || '')) cls = 'bad';
-      else if (stale || status === 'stale') cls = 'warn';
+      else if (stale || status === 'stale' || status === 'differs') cls = 'warn'; // plan 072
       else if (at === null) cls = 'unknown';
       return { name: name, age: ageS === null ? 'never' : fmtAge(ageS) + ' ago',
         status: status || '-', stale: stale, cls: cls };
@@ -3739,6 +3739,20 @@
     return g ? BOSS_GARMOTH + ' ' + g.looted + '/' + g.cap + ' this week' : '';
   }
 
+  // Plan 072: GET /api/bosses `drift` (or /api/state sources.bossdrift, which
+  // carries `status` and no diff) -> {text, lines} only while the public table
+  // differs from EW's; ok / unknown / malformed = null (no banner).
+  const BOSS_DRIFT_MAX_LINES = 8;
+  function bossDriftBanner(drift) {
+    if (!plainObject(drift)) return null;
+    const state = typeof drift.state === 'string' ? drift.state : drift.status;
+    if (state !== 'differs' || typeof drift.banner !== 'string' || !drift.banner) return null;
+    const lines = (Array.isArray(drift.diff) ? drift.diff : []).filter(function (d) {
+      return plainObject(d) && typeof d.text === 'string' && d.text;
+    }).map(function (d) { return d.text; }).slice(0, BOSS_DRIFT_MAX_LINES);
+    return { text: drift.banner, lines: lines };
+  }
+
   // POST /api/bosses body: exactly {tick|untick: {boss, day}}.
   function validBossesBody(body) {
     if (!plainObject(body)) return false;
@@ -6083,6 +6097,8 @@
     bossTicks: bossTicks,
     bossSuggested: bossSuggested,
     bossGarmothText: bossGarmothText,
+    bossDriftBanner: bossDriftBanner,
+    BOSS_DRIFT_MAX_LINES: BOSS_DRIFT_MAX_LINES,
     validBossesBody: validBossesBody,
     notifyLedger: notifyLedger,
     validNotify: validNotify,

@@ -195,6 +195,9 @@
         const p = el('span', 'ew-pill ' + r.cls, r.name + ' ' + r.age + ' - ' + r.status + (r.stale ? ' (stale)' : ''));
         fr.appendChild(p);
       });
+      // Plan 072: boss schedule drift banner (details on the Bosses card).
+      const drift = C.bossDriftBanner(H.sources && H.sources.bossdrift);
+      if (drift) fr.appendChild(el('div', 'ew-drift', drift.text + ' (see World bosses)'));
     }
   }
 
