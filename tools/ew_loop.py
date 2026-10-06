@@ -93,7 +93,8 @@ DONE_STATES = ("merged", "no-change", "failed")
 # lane-dirty: the kit refused the claim on a dirty lane worktree; it waits
 # until that worktree is clean and unheld, then retries (recover_lane_dirty);
 # gave-up: MAX_ATTEMPTS refused / lost dispatches, error kept.
-ATTENTION_STATES = ("merge-conflict", "failed-dirty", "lane-dirty", "gave-up")
+ATTENTION_STATES = ("merge-conflict", "merge-refused", "failed-dirty", "lane-dirty",
+                    "gave-up")
 # an item in these states holds its unmerged work in rec["worktree"]
 HOLD_STATES = ("ran", "committed")
 IN_FLIGHT = ("dispatched",) + HOLD_STATES
@@ -101,7 +102,7 @@ IN_FLIGHT = ("dispatched",) + HOLD_STATES
 # checkout (a re-claimed lane worktree can never orphan it) until it merges
 KEEP_REF = "refs/ew/keep/"
 # a kept record in these states still waits on its commit reaching main
-RESOLVABLE = ("merge-conflict", "refused", "lost", "paused", "no-change")
+RESOLVABLE = ("merge-conflict", "merge-refused", "refused", "lost", "paused", "no-change")
 # one conflict line `<<<<<<< x` / `>>>>>>> x` left in a resolved file
 MARKER_RX = re.compile(r"^(<{7}|>{7})(\s|$)", re.M)
 DIRTY_WT_RX = re.compile(r"lane worktree (.+?) is dirty")
@@ -1307,14 +1308,21 @@ class Tick:
                     flipped_row = True
             except OSError:
                 pass
+        state = "merge-conflict"
         if why is None:
             msg = (f"merge {lane}: {rec['label']}\n\nrefute-rounds: "
                    f"{rec.get('rounds', 0)}/{MAX_ROUNDS}\n")
-            if g(["commit", "-q", "-F", "-"], main, input=msg).returncode != 0:
-                why = "merge commit refused"
+            c = g(["commit", "-q", "-F", "-"], main, input=msg)
+            if c.returncode != 0:
+                # main's own hook (leak sweep) refused clean merged content: a
+                # resolve run would merge cleanly, change nothing and be refused
+                # again, so it is parked for a session with the hook output
+                why, state = "merge commit refused", "merge-refused"
+                out = ((c.stderr or "") + (c.stdout or "")).strip()
+                rec["error"] = ascii_text(f"main merge commit refused: {out[-260:]}", 300)
         if why:
             g(["merge", "--abort"], main)
-            rec["state"] = "merge-conflict"
+            rec["state"] = state
             self.keep(rec)
             self.step(f"{rec['id']}: {why}, aborted")
         else:
