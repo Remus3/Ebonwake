@@ -8,9 +8,10 @@ assets, browser fallback),
 adds its `suggested` coupon block),
 /api/deadeye (plan 007; /api/deadeye/enhance GET plan 035; /api/deadeye/shopping GET plan 037), /api/game (plan 008), /api/leveling (plan 011),
 /api/spots (plan 012, GET only), /api/bosses (plan 031), /api/settings (plan 030), /api/pets
-(plan 043), and POST
+(plan 043), /api/mounts (plan 044), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
-/api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings + /api/pets behind one
+/api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings + /api/pets + /api/mounts
+behind one
 shared guard.
 """
 
@@ -29,7 +30,7 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 from . import (__version__, bosses, coupons, deadeye, enhance, events, gamewatch, grind, itemnames,
-               leveling, market, ocr, pets, ports, progress, settings, shopping, single, spots,
+               leveling, market, mounts, ocr, pets, ports, progress, settings, shopping, single, spots,
                today, weekly)
 from .store import Store
 
@@ -190,6 +191,8 @@ class EWServer(ThreadingHTTPServer):
         self.bosses = bosses.BossService(self.store, clock=bosses_clock or time.time)
         # Plan 043: operator-typed pet roster over the tracked pets.json rules.
         self.pets = pets.PetService(self.store)
+        # Plan 044: operator-typed mounts + sourced T10 breed rules.
+        self.mounts = mounts.MountsService(self.store)
         # Plan 035: EV math on tracked rate rows; prices from the market cache only.
         self.enhance = enhance.EnhanceService(self.store, prices=self.market.cached_price)
         # Plan 036: stack advice reads the same effective rows (overrides included).
@@ -356,6 +359,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, self.server.pets.exchange(q["exchange"][0]))
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
+        if path == "/api/mounts":
+            return self._send(200, self.server.mounts.view())
         if path == "/events":
             return self._sse()
         if path == "/":  # plan 020: redirect so relative asset paths resolve
@@ -467,12 +472,20 @@ class Handler(BaseHTTPRequestHandler):
         (op, arg), = body.items()
         return getattr(self.server.pets, ops[op])(arg)
 
+    def _post_mounts(self, body):
+        ops = {"add", "edit", "delete", "materials", "fern_rate", "failures"}
+        if len(body) != 1 or not (ops & set(body)):
+            raise ValueError("body must be one of "
+                             "{add|edit|delete|materials|fern_rate|failures: ...}")
+        (op, arg), = body.items()
+        return getattr(self.server.mounts, op)(arg)
+
     POST_ROUTES = {"/api/market/watch": _post_market_watch, "/api/today": _post_today,
                    "/api/progress": _post_progress, "/api/grind": _post_grind,
                    "/api/events": _post_events, "/api/deadeye": _post_deadeye,
                    "/api/ocr": _post_ocr, "/api/leveling": _post_leveling,
                    "/api/bosses": _post_bosses, "/api/settings": _post_settings,
-                   "/api/pets": _post_pets}
+                   "/api/pets": _post_pets, "/api/mounts": _post_mounts}
 
     def do_POST(self):  # noqa: N802
         """Shared guard for every POST route: loopback Host + application/json +
