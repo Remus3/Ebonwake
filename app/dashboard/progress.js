@@ -14,7 +14,8 @@
   const C = window.EWCore;
   const POLL_MS = 60000;
   const KIND_LABEL = { quest: 'quest', season: 'season', gear: 'gear' };
-  const S = { data: null, err: null, last: null, timer: null, ui: null, pending: {}, dirty: false, editing: null };
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const S = { data: null, err: null, last: null, timer: null, ui: null, pending: {}, dirty: false, editing: null, hist: null };
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -73,6 +74,9 @@
     clearTimeout(S.timer);
     S.timer = setTimeout(function () { poll(true); }, POLL_MS);
     getJSON('/api/progress').then(accept, function (e) { S.err = e.message; }).then(function () { draw(); });
+    // Plan 041: profile trend sparklines; a failure just leaves them empty.
+    getJSON(C.PROFILE_HISTORY_PATH).then(function (h) { S.hist = h; }, function () { S.hist = null; })
+      .then(function () { draw(); });
   }
 
   function msg(where, text) { if (S.ui) S.ui[where].textContent = text; }
@@ -250,6 +254,30 @@
       dl.appendChild(el('span', 'ew-mname', r[1]));
     });
     body.appendChild(dl);
+    drawTrends(body);
+  }
+
+  // Plan 041: level / GS / energy / CP over the last days of hourly snapshots.
+  function drawTrends(body) {
+    const rows = C.historyRows(S.hist).filter(function (r) { return r.points.length; });
+    if (!rows.length) return;
+    const box = el('div', 'ew-trends');
+    rows.forEach(function (r) {
+      const row = el('div', 'ew-trend');
+      row.appendChild(el('span', 'ew-muted', r.label));
+      const svg = document.createElementNS(SVGNS, 'svg');
+      svg.setAttribute('class', 'ew-spark ew-spark-mini');
+      svg.setAttribute('viewBox', '0 0 120 20');
+      svg.setAttribute('preserveAspectRatio', 'none');
+      const path = document.createElementNS(SVGNS, 'path');
+      path.setAttribute('d', C.sparkPath(r.points, 120, 20));
+      path.setAttribute('vector-effect', 'non-scaling-stroke');
+      svg.appendChild(path);
+      row.appendChild(svg);
+      row.appendChild(el('span', 'ew-mname ew-gnum', r.text));
+      box.appendChild(row);
+    });
+    body.appendChild(box);
   }
 
   function trackCard(t) {

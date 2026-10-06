@@ -49,6 +49,7 @@
   },
   "profile": {
     "family": "",
-    "base_url": "https://api.cutepap.us/community/v1"
+    "base_url": "https://api.cutepap.us/community/v1",
+    "auto_level": true
   }
 }

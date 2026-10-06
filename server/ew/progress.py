@@ -21,6 +21,7 @@ from pathlib import Path
 from . import brackets
 from .httpcache import CachedClient, Pending, UpstreamError, freshness
 from .levels import LEVEL_RANGE
+from .store import atomic_write_text
 from .today import slug
 
 DEFAULT_BASE = "https://api.cutepap.us/community/v1"
@@ -36,6 +37,16 @@ MAX_TRACKS = 30
 MAX_STEPS = 60
 GS_RANGE = (0, 999)
 GS_KEYS = ("ap", "aap", "dp")
+# Plan 041 profile history: snapshot key <- BDO-REST-API field (level and
+# specLevels are per character only).
+SNAP_RAW = (("gs", "gs"), ("energy", "energy"), ("contribution", "contributionPoints"),
+            ("combat_fame", "combatFame"), ("life_fame", "lifeFame"))
+SERIES_FIELDS = ("level",) + tuple(k for k, _ in SNAP_RAW)
+STAT_MAX = 10 ** 9
+MAX_SPECS = 12
+HISTORY_DAYS = 90
+HISTORY_MAX_ROWS = 20000
+HISTORY_DEFAULT_DAYS = 30
 _DEFAULT_CACHE = Path(__file__).resolve().parents[2] / "ops" / "runtime" / "cache" / "profile"
 
 OBJ_KINDS = ("level", "gear", "quest", "other")
@@ -161,6 +172,9 @@ class ProfileClient(CachedClient):
         # Cache file name never spells the family name.
         h = hashlib.sha256(f"{REGION}:{family.lower()}".encode("utf-8")).hexdigest()[:16]
         self.key = f"profile_{h}"
+        # Plan 041: called with profile_snapshots() after each successful
+        # download (never on a cache hit, so never an extra request).
+        self.on_snapshot = None
 
     def url(self):
         q = {"query": self.family, "searchType": "familyName", "region": REGION}
@@ -188,6 +202,11 @@ class ProfileClient(CachedClient):
         if pick is None:
             raise UpstreamError("profile: family not found")
         guild = pick.get("guild")
+        if self.on_snapshot is not None:
+            try:
+                self.on_snapshot(profile_snapshots(pick))
+            except Exception:  # noqa: BLE001 - history never breaks the profile card
+                pass
         # profileTarget is an opaque account-level id: never cached or served.
         return {"family": pick["familyName"],
                 "region": pick.get("region") if isinstance(pick.get("region"), str) else REGION,
@@ -207,6 +226,124 @@ class ProfileClient(CachedClient):
 
     def is_pending(self):
         return self.pending(self.key)
+
+
+def _num(v):
+    """A non-negative int stat, or None (privacy-hidden, junk or absurd)."""
+    return v if _is_int(v) and 0 <= v <= STAT_MAX else None
+
+
+def _spec_levels(raw):
+    if not isinstance(raw, dict) or not raw:
+        return None
+    out = {}
+    for k, v in list(raw.items())[:MAX_SPECS]:
+        if isinstance(k, str) and _ascii(k, MAX_NAME) and \
+                ((isinstance(v, str) and _ascii(v, MAX_NAME)) or _num(v) is not None):
+            out[k] = v
+    return out or None
+
+
+def profile_snapshots(pick):
+    """One adventurer search hit -> [{name, main, level?, gs?, energy?,
+    contribution?, combat_fame?, life_fame?, spec_levels?}] per character.
+    A stat is read from the character, else from the family (the openapi puts
+    some on the profile); hidden or malformed stats are absent, never zero.
+    `main` falls back to the first character when none is flagged."""
+    chars = [ch for ch in (pick.get("characters") if isinstance(pick.get("characters"), list)
+                           else []) if isinstance(ch, dict) and isinstance(ch.get("name"), str)]
+    flagged = any(ch.get("main") is True for ch in chars)
+    out = []
+    for n, ch in enumerate(chars):
+        snap = {"name": ch["name"][:MAX_NAME],
+                "main": ch.get("main") is True if flagged else n == 0}
+        lvl = ch.get("level")
+        if _is_int(lvl) and LEVEL_RANGE[0] <= lvl <= LEVEL_RANGE[1]:
+            snap["level"] = lvl
+        for key, raw in SNAP_RAW:
+            v = _num(ch.get(raw))
+            v = _num(pick.get(raw)) if v is None and raw not in ch else v
+            if v is not None:
+                snap[key] = v
+        specs = _spec_levels(ch.get("specLevels"))
+        if specs is not None:
+            snap["spec_levels"] = specs
+        out.append(snap)
+    return out
+
+
+def _main_level(snaps):
+    main = next((s for s in snaps if s.get("main")), None)
+    return main.get("level") if main else None
+
+
+class ProfileHistory:
+    """Plan 041: rolling `profile_history.jsonl`, one line per character per
+    successful profile refresh ({at, name, main, level?, ...}). Rewritten
+    whole via tmp + replace (atomic append), rows older than HISTORY_DAYS and
+    beyond HISTORY_MAX_ROWS dropped; a corrupt line is skipped."""
+
+    def __init__(self, path, clock=time.time):
+        self.path = Path(path)
+        self.clock = clock
+        self._lock = threading.Lock()
+
+    def _now(self):
+        return _dt.datetime.fromtimestamp(self.clock(), _dt.timezone.utc)
+
+    def rows(self):
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except OSError:
+            return []
+        out = []
+        for line in text.splitlines():
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(r, dict) and _parse_iso(r.get("at")) and isinstance(r.get("name"), str):
+                out.append(r)
+        return out
+
+    def _cutoff(self, days):
+        return self._now() - _dt.timedelta(days=days)
+
+    def append(self, snaps):
+        at = _iso_now(self.clock)
+        cut = self._cutoff(HISTORY_DAYS)
+        with self._lock:
+            rows = [r for r in self.rows() if _dt.datetime.fromisoformat(r["at"]) >= cut]
+            rows += [dict(s, at=at) for s in snaps]
+            rows = rows[-HISTORY_MAX_ROWS:]
+            atomic_write_text(self.path, "".join(json.dumps(r, sort_keys=True) + "\n"
+                                                 for r in rows))
+
+    def main_level(self):
+        """Main character level of the newest refresh, or None."""
+        rows = self.rows()
+        if not rows:
+            return None
+        last = rows[-1]["at"]
+        return _main_level([r for r in rows if r["at"] == last])
+
+    def series(self, fields, days, character=None):
+        """{days, character, series: {field: {points: [{at, v}], first, last,
+        delta}}}; character defaults to the main of the newest refresh."""
+        cut = self._cutoff(days)
+        rows = [r for r in self.rows() if _dt.datetime.fromisoformat(r["at"]) >= cut]
+        if character is None:
+            main = next((r for r in reversed(rows) if r.get("main") is True), None)
+            character = main["name"] if main else None
+        rows = [r for r in rows if r["name"] == character]
+        out = {}
+        for f in fields:
+            pts = [{"at": r["at"], "v": r[f]} for r in rows if _num(r.get(f)) is not None]
+            first = pts[0]["v"] if pts else None
+            last = pts[-1]["v"] if pts else None
+            out[f] = {"points": pts, "first": first, "last": last,
+                      "delta": None if first is None else last - first}
+        return {"days": days, "character": character, "series": out}
 
 
 def _profile_status(res, pending=False):
@@ -565,13 +702,20 @@ class ProgressService:
     the newest started XP epoch (re-verify flag) or None."""
 
     def __init__(self, store, profile_client=None, clock=time.time, spawn=None, level=None,
-                 epoch=None, bracket_tables=None):
+                 epoch=None, bracket_tables=None, history=None, on_level=None,
+                 auto_level=True):
         self.store = store
         self.profile = profile_client
         self.clock = clock
         self.spawn = spawn  # background refresh runner (None = daemon thread)
         self.level = level
         self.epoch = epoch
+        # Plan 041: profile history + auto level marker (profile.auto_level).
+        self.history = history
+        self.on_level = on_level
+        self.auto_level = auto_level is not False
+        if history is not None and hasattr(profile_client, "on_snapshot"):
+            profile_client.on_snapshot = self.record_profile
         self.bracket_error = None
         if bracket_tables is None:
             try:
@@ -718,6 +862,38 @@ class ProgressService:
         except Exception:  # a broken feed never breaks the Progress tab
             epoch = None
         return brackets.summary(character["gs"], tables, epoch=epoch)
+
+    def record_profile(self, snaps):
+        """Plan 041 (ProfileClient.on_snapshot): append one refresh to the
+        history; when the main character's level rose since the previous
+        refresh, hand it to `on_level` (plan 011 marker). A failing marker
+        never loses the snapshot."""
+        if self.history is None:
+            return
+        prev = self.history.main_level()
+        self.history.append(snaps)
+        lvl = _main_level(snaps)
+        if self.auto_level and self.on_level is not None and _is_int(lvl) and _is_int(prev) \
+                and lvl > prev:
+            self.on_level(lvl)
+
+    def history_view(self, query):
+        """GET /api/progress/history?field=a,b&days=N&character=X (parse_qs dict)."""
+        fields = [f for v in query.get("field", []) for f in v.split(",") if f]
+        if not fields or any(f not in SERIES_FIELDS for f in fields):
+            raise ValueError(f"field must be one or more of {', '.join(SERIES_FIELDS)}")
+        days = query.get("days", [str(HISTORY_DEFAULT_DAYS)])[0]
+        if not re.fullmatch(r"\d{1,3}", days) or not 1 <= int(days) <= HISTORY_DAYS:
+            raise ValueError(f"days must be an int 1..{HISTORY_DAYS}")
+        character = query.get("character", [None])[0]
+        if character is not None:
+            character = _check_text(character, "character", MAX_NAME)
+        fields = list(dict.fromkeys(fields))
+        if self.history is None:
+            return {"days": int(days), "character": None,
+                    "series": {f: {"points": [], "first": None, "last": None, "delta": None}
+                               for f in fields}}
+        return self.history.series(fields, int(days), character)
 
     def source(self):
         """`/api/state` sources.profile: {updated, ttl_s, status}; never fetches."""

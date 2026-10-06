@@ -73,3 +73,65 @@ cadence (test counts fetches); gates green; verifier PASS within 3 rounds.
 ToS check: keyless public BDO-REST-API GET at the existing cadence.
 
 Depends on: none.
+
+## As-built deviations (lane build, 2026-10-05; self-adjudicated)
+
+1. Snapshot rows carry `name` and `main` beside the stats.
+   Alternatives: one file per character; main only. Why: "per character"
+   needs an id in one rolling file; `main` picks the default sparkline and
+   the auto-marker character (flagged main, else the first character, as
+   `profileRows` does). Reverses if: characters get stable ids upstream.
+2. Stats are read from the character, else from the family hit
+   (`gs`, `energy`, `contributionPoints`, `combatFame`, `lifeFame`); `level`
+   and `specLevels` are per character only. A key present on the character
+   but hidden (null) never falls back. `mastery` is not stored (not in the
+   plan's snapshot list). Alternatives: guess one placement. Why: the
+   openapi placement was not re-readable from the lane (no web grant) and
+   both shapes cost zero extra requests. Reverses if: a recorded response
+   shows one fixed placement.
+3. The fixture `tests/fixtures/profile/adventurer_search.json` is synthetic
+   in the openapi shape (fake family), not a recorded response. Why: a lane
+   never calls upstream and a recording would carry a real family name
+   (leak floor). Reverses if: never (a recording would be anonymised to the
+   same thing).
+4. Auto marker rule: written only when the main level of this refresh is
+   above the main level of the previous refresh (first refresh, or a
+   privacy-hidden level on either side, writes none), and only when it is
+   above the level plan 011 already knows (`LevelingService.profile_marker`
+   returns False otherwise), so no duplicate markers. Alternatives: mark on
+   first sight. Why: plan says "rises"; a stale profile must never pull the
+   level down or spam samples. Reverses if: the operator wants first-sight
+   markers.
+5. `GET /api/progress/history` takes `field` as a comma list (one request
+   for the four card sparklines), `days` 1..90 (default 30) and optional
+   `character`; body `{days, character, series: {field: {points: [{at, v}],
+   first, last, delta}}}`. Bad field / days / character -> 400. Why: one
+   request per poll instead of four. Reverses if: never needed.
+6. Rotation also caps the file at 20000 rows (`HISTORY_MAX_ROWS`) besides
+   the 90 days, so a many-character family cannot grow it unbounded. The
+   file lives at `ops/runtime/profile_history.jsonl`, or beside an injected
+   test store. `store.atomic_write_text` factored out of
+   `atomic_write_json` for the tmp + replace write.
+7. Dashboard Leveling card prints `Lv N P%` (single space, exact pct via
+   `fmtLevelLine(d, true)`); the overlay keeps the 1-decimal floor. Why: one
+   formatter, no `null%`. Reverses if: never.
+8. `profile.auto_level` is a hand-edited `config/local.json` key (documented
+   in `config/local.example.json`), not a plan 030 Settings form field.
+   Why: Settings allowlist growth is its own UI change; default on needs no
+   edit. Reverses if: the operator asks for a toggle in Settings.
+9. Snapshots are taken inside `ProfileClient._download` via an
+   `on_snapshot` hook (after a successful parse, before the cache write);
+   a hook failure never fails the refresh. Why: that is the only point that
+   sees the raw hit without an extra request.
+10. When a marker raises the level above the last typed level, `view()`
+    returns `eta_next_s: null` (rate still from typed samples). Plan 2c says
+    ETA from the last typed sample, but that ETA is to a level already passed
+    and would mislead; the next-level ETA needs the XP percent of the new
+    level, which only a typed sample gives. Deadline ETAs follow (null pct
+    -> no ETA, state `unknown`, or `done` once the level is reached). With
+    the marker at or below the typed level, everything is the typed view.
+    Reverses if: an XP percent source appears outside typed samples.
+11. `profile_marker` never replaces a typed sample stamped in the same
+    second (returns False and that marker is skipped; the operator's typed
+    entry is the fresher fact). Why: "typed samples are untouched" (refute
+    round 1). Reverses if: never.

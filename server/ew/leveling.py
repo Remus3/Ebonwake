@@ -38,6 +38,7 @@ MAX_DEADLINES = 20  # operator-set deadline rows (plan 024)
 DEADLINE_TIGHT_H = 72
 HOT_ID_RE = re.compile(r"^h[0-9]{1,9}$")
 HHMM_RE = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
+MARKER_SOURCE = "profile"  # plan 041: server-written level marker, pct unknown
 _UTC = _dt.timezone.utc
 
 
@@ -251,17 +252,41 @@ def _check_milestones(v):
 
 # -- stored-entry cleaning (corrupt docs degrade, never raise) -----------------
 
+def _is_marker(s):
+    """Plan 041 profile level marker: pct unknown, written by the server only."""
+    return s["pct"] is None
+
+
 def _clean_sample(s):
+    """Typed {ts, level, pct}, or a plan 041 marker {ts, level, pct: None,
+    source: "profile"} (the only entry that may carry a null pct)."""
     if not isinstance(s, dict):
         return None
     when = _parse_iso(s.get("ts"))
-    if when is None or not _ok_int(s.get("level"), *LEVEL_RANGE) or not _ok_pct(s.get("pct")):
+    marker = s.get("pct") is None and s.get("source") == MARKER_SOURCE
+    if when is None or not _ok_int(s.get("level"), *LEVEL_RANGE) \
+            or not (marker or _ok_pct(s.get("pct"))):
         return None
     try:
         ts = _iso(when)
     except (OverflowError, ValueError):
         return None
+    if marker:
+        return {"ts": ts, "level": s["level"], "pct": None, "source": MARKER_SOURCE}
     return {"ts": ts, "level": s["level"], "pct": _norm_pct(s["pct"])}
+
+
+def _level_now(samples):
+    """(level, pct, level_source) from cleaned samples, oldest first: pct from
+    the last typed sample; level = max(last typed, last marker); a higher
+    marker level means the XP percent of that level is unknown (pct None)."""
+    typed = next((s for s in reversed(samples) if not _is_marker(s)), None)
+    mark = next((s for s in reversed(samples) if _is_marker(s)), None)
+    if typed is not None and (mark is None or mark["level"] <= typed["level"]):
+        return typed["level"], typed["pct"], "typed"
+    if mark is not None:
+        return mark["level"], None, "profile"
+    return None, None, None
 
 
 def _clean_window(w):
@@ -316,7 +341,8 @@ def _clean_rows(raw, clean, most):
 
 
 class LevelingService:
-    """Store domain `leveling`: {"samples": [{ts, level, pct}] (oldest first),
+    """Store domain `leveling`: {"samples": [{ts, level, pct}] (oldest first;
+    plan 041 adds server-written markers {ts, level, pct: null, source: "profile"}),
     "hot_windows": [{id, days, start, end, label, pct}], "milestones": [int],
     "epochs_added": [{id, starts_utc, label, source, verified}],
     "epochs_deleted": [id], "next_id": int, "updated": "<iso>"}. `buffs`
@@ -436,9 +462,7 @@ class LevelingService:
         now = self._now()
         doc = self._load()
         samples = doc["samples"]
-        last = samples[-1] if samples else None
-        level = last["level"] if last else None
-        pct = last["pct"] if last else None
+        level, pct, level_source = _level_now(samples)
         epochs = self.epochs(doc)
         epoch = levels.active_epoch(epochs, now)
         upcoming = levels.next_epoch(epochs, now)
@@ -450,7 +474,7 @@ class LevelingService:
                  + [{"name": b.get("name"), "pct": b["xp_pct"]} for b in buffs])
         nxt_ms = next_milestone(level, doc["milestones"])
         tracked = {e["id"] for e in self.tracked_epochs}
-        return {"now": _iso(now), "level": level, "pct": pct,
+        return {"now": _iso(now), "level": level, "pct": pct, "level_source": level_source,
                 "rate_pct_h": None if rate is None else round(rate, 3),
                 "eta_next_s": eta_next_s(pct, rate),
                 "next_milestone": nxt_ms,
@@ -477,9 +501,30 @@ class LevelingService:
                             for s in reversed(samples[-VIEW_SAMPLES:])]}
 
     def current_level(self):
-        """Level of the newest sample, or None (plan 013 season auto-tick)."""
-        samples = self._load()["samples"]
-        return samples[-1]["level"] if samples else None
+        """Current level (newest typed sample, raised by a newer-higher plan 041
+        profile marker), or None (plan 013 season auto-tick)."""
+        return _level_now(self._load()["samples"])[0]
+
+    def profile_marker(self, level):
+        """Plan 041: the main character's profile level rose. Adds a marker
+        {ts, level, pct: None, source: "profile"} when `level` is above the
+        current level; True when one was written. Server-side only (never a
+        POST op); ts is approximate (the profile cache is up to 1 h old)."""
+        if not _ok_int(level, *LEVEL_RANGE):
+            return False
+        with self._lock:
+            doc = self._load()
+            known = _level_now(doc["samples"])[0]
+            if known is not None and level <= known:
+                return False
+            ts = _iso(self._now())
+            if any(s["ts"] == ts and not _is_marker(s) for s in doc["samples"]):
+                return False  # a typed sample this second is never replaced
+            doc["samples"] = [s for s in doc["samples"] if s["ts"] != ts]
+            doc["samples"].append({"ts": ts, "level": level, "pct": None,
+                                   "source": MARKER_SOURCE})
+            self._save(doc)
+        return True
 
     def source(self):
         """`/api/state` sources.leveling: {updated, status: "ok"}."""

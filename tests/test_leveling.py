@@ -749,3 +749,113 @@ def test_route_deadline_ops_and_events(tmp_path, clock):
     finally:
         s.shutdown()
         s.server_close()
+
+
+# --- plan 041: profile level markers ------------------------------------------
+
+def _m(minutes, level):
+    return {"ts": (T0 + dt.timedelta(minutes=minutes)).isoformat(), "level": level,
+            "pct": None, "source": "profile"}
+
+
+def test_clean_sample_keeps_profile_marker():
+    m = leveling._clean_sample(_m(0, 61))
+    assert m == {"ts": T0.isoformat(), "level": 61, "pct": None, "source": "profile"}
+
+
+@pytest.mark.parametrize("bad", [
+    {"pct": None}, {"pct": None, "source": "typed"}, {"pct": None, "source": "Profile"},
+    {"pct": None, "source": None}, {"pct": "x", "source": "profile"}])
+def test_clean_sample_drops_other_null_pct(bad):
+    s = dict({"ts": T0.isoformat(), "level": 61}, **bad)
+    assert leveling._clean_sample(s) is None
+
+
+def test_clean_sample_typed_shape_unchanged():
+    s = dict(_s(0, 52, 10), source="profile", extra=1)
+    assert leveling._clean_sample(s) == {"ts": T0.isoformat(), "level": 52, "pct": 10}
+
+
+def test_marker_between_typed_leaves_rate_and_eta(store, clock):
+    plain = [_s(0, 60, 10), _s(60, 60, 14), _s(120, 60, 20)]
+    with_m = [plain[0], _m(30, 61), plain[1], _m(90, 62), plain[2]]
+    assert leveling.rate_pct_h(with_m) == leveling.rate_pct_h(plain)
+    assert leveling._points(with_m) == leveling._points(plain)
+    clock.advance(3 * 3600)
+    store.put("leveling", {"samples": plain, "milestones": [70]})
+    a = leveling.LevelingService(store, clock=clock).view()
+    store.put("leveling", {"samples": [plain[0], _m(30, 60), plain[1], plain[2]],
+                           "milestones": [70]})
+    b = leveling.LevelingService(store, clock=clock).view()
+    for k in ("level", "pct", "rate_pct_h", "eta_next_s"):
+        assert a[k] == b[k], k
+    assert b["level_source"] == "typed" and len(b["samples"]) == 4
+
+
+def test_view_higher_marker_level_wins_pct_null(store, clock):
+    store.put("leveling", {"samples": [_s(0, 60, 10), _s(60, 60, 14), _m(90, 61)],
+                           "milestones": [61, 70]})
+    clock.advance(2 * 3600)
+    svc = leveling.LevelingService(store, clock=clock)
+    v = svc.view()
+    assert v["level"] == 61 and v["pct"] is None and v["level_source"] == "profile"
+    assert v["rate_pct_h"] == pytest.approx(4.0)  # from the typed samples
+    assert v["eta_next_s"] is None  # pct of the new level unknown
+    assert v["next_milestone"] == 70
+    assert v["samples"][0]["source"] == "profile" and "source" not in v["samples"][1]
+    assert svc.current_level() == 61
+
+
+def test_view_lower_marker_level_keeps_typed(store, clock):
+    store.put("leveling", {"samples": [_m(0, 59), _s(60, 60, 14)], "milestones": [70]})
+    v = leveling.LevelingService(store, clock=clock).view()
+    assert v["level"] == 60 and v["pct"] == 14 and v["level_source"] == "typed"
+
+
+def test_view_marker_only_and_empty(store, clock):
+    svc = leveling.LevelingService(store, clock=clock)
+    v = svc.view()
+    assert v["level"] is None and v["level_source"] is None
+    store.put("leveling", dict(store.get("leveling"), samples=[_m(0, 61)]))
+    v = svc.view()
+    assert v["level"] == 61 and v["pct"] is None and v["level_source"] == "profile"
+    assert v["rate_pct_h"] is None and v["eta_next_s"] is None
+
+
+def test_profile_marker_written_by_server_only(svc, clock):
+    svc.sample({"level": 60, "pct": 50})
+    clock.advance(60)
+    assert svc.profile_marker(60) is False  # nothing new
+    assert svc.profile_marker(61) is True
+    v = svc.view()
+    assert v["level"] == 61 and v["level_source"] == "profile"
+    assert v["samples"][0] == {"ts": (T0 + dt.timedelta(seconds=60)).isoformat(),
+                               "level": 61, "pct": None, "source": "profile",
+                               "pre_patch": False}
+    clock.advance(60)
+    assert svc.profile_marker(61) is False  # already known
+    for bad in (0, 76, "61", None, True):
+        assert svc.profile_marker(bad) is False
+    with pytest.raises(ValueError):
+        svc.sample({"level": 62, "pct": None})
+
+
+def test_profile_marker_never_replaces_typed_same_second(svc, clock):
+    svc.sample({"level": 60, "pct": 50})
+    assert svc.profile_marker(61) is False
+    v = svc.view()
+    assert v["samples"] == [{"ts": T0.isoformat(), "level": 60, "pct": 50, "pre_patch": False}]
+
+
+def test_sample_del_deletes_marker(svc, clock):
+    svc.profile_marker(61)
+    ts = svc.view()["samples"][0]["ts"]
+    v = svc.sample_del(ts)
+    assert v["samples"] == [] and v["level"] is None
+
+
+def test_typed_sample_after_marker_wins(svc, clock):
+    svc.profile_marker(61)
+    clock.advance(60)
+    v = svc.sample({"level": 61, "pct": 2.5})
+    assert v["level"] == 61 and v["pct"] == 2.5 and v["level_source"] == "typed"

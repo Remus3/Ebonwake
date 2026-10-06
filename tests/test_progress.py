@@ -9,6 +9,7 @@ import http.client
 import json
 import re
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -858,3 +859,245 @@ def test_route_post_track_seed(psrv):
     assert _req(psrv, "POST", "/api/progress", {"track_seed": "nope"})[0] == 400
     doc = _req(psrv, "GET", "/api/progress")[1]
     assert next(x for x in doc["seeds"] if x["id"] == "graduation_readiness")["added"] is True
+
+
+# --- plan 041: profile history snapshots + auto level marker -----------------
+
+PROFILE_FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "profile"
+                              / "adventurer_search.json").read_text(encoding="utf-8"))
+
+
+def _hist(tmp_path, clk):
+    return progress.ProfileHistory(tmp_path / "rt" / "profile_history.jsonl", clock=clk)
+
+
+def _hsvc(tmp_path, body=None, clk=None, auto_level=True):
+    clk = clk or Clock()
+    c, f = _pc(tmp_path, PROFILE_FIXTURE if body is None else body, clock=clk)
+    marks = []
+    s = progress.ProgressService(Store(tmp_path / "store"), c, clock=clk, spawn=_sync,
+                                 history=_hist(tmp_path, clk), on_level=marks.append,
+                                 auto_level=auto_level)
+    return s, c, f, clk, marks
+
+
+def _bump(f, level):
+    f.body = json.loads(json.dumps(PROFILE_FIXTURE))
+    f.body[0]["characters"][0]["level"] = level
+
+
+def test_snapshots_from_fixture_privacy_gaps_absent():
+    snaps = progress.profile_snapshots(PROFILE_FIXTURE[0])
+    main, alt = snaps
+    assert main == {"name": "Shooty", "main": True, "level": 62, "gs": 640, "energy": 401,
+                    "contribution": 312, "combat_fame": 1820, "life_fame": 2210,
+                    "spec_levels": {"gathering": "Artisan 2", "fishing": "Skilled 9",
+                                    "trading": "Beginner 1"}}
+    # hidden level and no gs / spec levels: absent, never zero
+    assert "level" not in alt and "gs" not in alt and "spec_levels" not in alt
+    assert alt["energy"] == 401 and alt["main"] is False
+    assert "OPAQUE" not in json.dumps(snaps) and "mastery" not in json.dumps(snaps)
+
+
+@pytest.mark.parametrize("bad", [None, True, -1, "lots", 1.5, 10 ** 12])
+def test_snapshot_bad_values_absent(bad):
+    hit = dict(PROFILE_FIXTURE[0], energy=bad, contributionPoints=bad,
+               characters=[{"name": "Shooty", "class": "Deadeye", "main": True, "level": bad,
+                            "gs": bad, "specLevels": bad}])
+    (s,) = progress.profile_snapshots(hit)
+    assert set(s) == {"name", "main", "combat_fame", "life_fame"}
+
+
+def test_snapshot_written_once_per_refresh(tmp_path):
+    s, c, f, clk, _ = _hsvc(tmp_path)
+    s.view()
+    s.view()
+    s.view(refresh=False)
+    assert len(f.calls) == 1 and len(s.history.rows()) == 2  # two characters, one refresh
+    clk.t += 1800
+    s.view()
+    assert len(f.calls) == 1 and len(s.history.rows()) == 2
+    clk.t += 1801
+    s.view()
+    assert len(f.calls) == 2 and len(s.history.rows()) == 4
+    rows = s.history.rows()
+    assert rows[0]["at"] < rows[2]["at"] and {r["name"] for r in rows} == {"Shooty", "Alt"}
+
+
+def test_failed_refresh_writes_no_snapshot(tmp_path):
+    s, c, f, clk, _ = _hsvc(tmp_path)
+    s.view()
+    clk.t += 3601
+    f.body = OSError("down")
+    s.view()
+    assert len(f.calls) == 2 and len(s.history.rows()) == 2
+
+
+def test_history_rotation_keeps_90_days(tmp_path):
+    clk = Clock()
+    h = _hist(tmp_path, clk)
+    h.append([{"name": "Shooty", "main": True, "level": 60}])
+    clk.t += 89 * 86400
+    h.append([{"name": "Shooty", "main": True, "level": 61}])
+    assert len(h.rows()) == 2
+    clk.t += 2 * 86400
+    h.append([{"name": "Shooty", "main": True, "level": 62}])
+    assert [r["level"] for r in h.rows()] == [61, 62]
+    assert not list((tmp_path / "rt").glob("*.tmp"))
+
+
+def test_history_row_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(progress, "HISTORY_MAX_ROWS", 3)
+    clk = Clock()
+    h = _hist(tmp_path, clk)
+    for lv in range(1, 6):
+        clk.t += 60
+        h.append([{"name": "Shooty", "main": True, "level": lv}])
+    assert [r["level"] for r in h.rows()] == [3, 4, 5]
+
+
+def test_history_corrupt_lines_skipped(tmp_path):
+    clk = Clock()
+    h = _hist(tmp_path, clk)
+    h.append([{"name": "Shooty", "main": True, "level": 60}])
+    with open(h.path, "a", encoding="utf-8") as fh:
+        fh.write('not json\n[1]\n{"at": "nope", "name": "x"}\n')
+    assert len(h.rows()) == 1
+    clk.t += 60
+    h.append([{"name": "Shooty", "main": True, "level": 61}])
+    assert [r["level"] for r in h.rows()] == [60, 61]
+
+
+def test_series_main_by_default_with_gaps(tmp_path):
+    clk = Clock()
+    h = _hist(tmp_path, clk)
+    h.append([{"name": "Shooty", "main": True, "level": 60, "gs": 600},
+              {"name": "Alt", "main": False, "level": 20}])
+    clk.t += 3600
+    h.append([{"name": "Shooty", "main": True, "level": 61}])  # gs hidden this hour
+    clk.t += 3600
+    h.append([{"name": "Shooty", "main": True, "level": 61, "gs": 612}])
+    out = h.series(["level", "gs"], 30)
+    assert out["character"] == "Shooty" and out["days"] == 30
+    assert [p["v"] for p in out["series"]["level"]["points"]] == [60, 61, 61]
+    gs = out["series"]["gs"]
+    assert [p["v"] for p in gs["points"]] == [600, 612] and gs["delta"] == 12
+    alt = h.series(["level"], 30, character="Alt")
+    assert [p["v"] for p in alt["series"]["level"]["points"]] == [20]
+    assert h.series(["level"], 1)["series"]["level"]["points"][0]["v"] == 60
+    clk.t += 2 * 86400
+    assert h.series(["level"], 1)["series"]["level"] == {"points": [], "first": None,
+                                                         "last": None, "delta": None}
+
+
+def test_series_empty_history(tmp_path):
+    out = _hist(tmp_path, Clock()).series(["energy"], 7)
+    assert out["character"] is None and out["series"]["energy"]["points"] == []
+
+
+def test_auto_marker_on_main_level_rise_only(tmp_path):
+    s, c, f, clk, marks = _hsvc(tmp_path)
+    s.view()
+    assert marks == []  # first snapshot: no rise known
+    clk.t += 3601
+    s.view()
+    assert marks == []  # same level
+    clk.t += 3601
+    _bump(f, 63)
+    f.body[0]["characters"][1]["level"] = 90  # an alt never marks
+    s.view()
+    assert marks == [63]
+    clk.t += 3601
+    f.body[0]["characters"][0].pop("level")  # privacy hides it: no marker
+    s.view()
+    clk.t += 3601
+    f.body[0]["characters"][0]["level"] = 63  # back, same level as the last known one
+    s.view()
+    assert marks == [63]
+
+
+def test_auto_marker_disabled(tmp_path):
+    s, c, f, clk, marks = _hsvc(tmp_path, auto_level=False)
+    s.view()
+    clk.t += 3601
+    _bump(f, 63)
+    s.view()
+    assert marks == [] and len(s.history.rows()) == 4
+
+
+def test_marker_callback_failure_never_breaks_refresh(tmp_path):
+    clk = Clock()
+    c, f = _pc(tmp_path, PROFILE_FIXTURE, clock=clk)
+
+    def boom(level):
+        raise RuntimeError("x")
+
+    s = progress.ProgressService(Store(tmp_path / "store"), c, clock=clk, spawn=_sync,
+                                 history=_hist(tmp_path, clk), on_level=boom)
+    s.view()
+    clk.t += 3601
+    _bump(f, 63)
+    assert s.view()["profile"]["status"] == "ok"
+    assert s.view()["profile"]["data"]["characters"][0]["level"] == 63
+
+
+def test_history_query_validation(tmp_path):
+    s, *_ = _hsvc(tmp_path)
+    assert s.history_view({"field": ["level,gs"]})["days"] == 30
+    for bad in ({}, {"field": ["mastery"]}, {"field": ["level"], "days": ["0"]},
+                {"field": ["level"], "days": ["91"]}, {"field": ["level"], "days": ["x"]},
+                {"field": ["level"], "character": ["x" * 41]}):
+        with pytest.raises(ValueError):
+            s.history_view(bad)
+    assert progress.ProgressService(Store(tmp_path / "s2"), None).history_view(
+        {"field": ["level"]})["series"]["level"]["points"] == []
+
+
+@pytest.fixture()
+def hsrv(tmp_path):
+    clk = Clock()
+    pc = progress.ProfileClient(FAMILY, fetch=FakeFetch(PROFILE_FIXTURE), clock=clk,
+                                cache_dir=tmp_path / "pcache")
+    s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
+                          sse_interval=0.05, market_seed=[], leveling_clock=clk,
+                          market_client=market.ArshaClient(fetch=_no_network,
+                                                           cache_dir=tmp_path / "cache"),
+                          profile_client=pc)
+    s.progress.spawn = _sync
+    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t.start()
+    yield s, clk, pc
+    s.shutdown()
+    s.server_close()
+
+
+def test_route_history_and_marker_end_to_end(hsrv, tmp_path):
+    s, clk, pc = hsrv
+    assert s.progress.history.path == tmp_path / "profile_history.jsonl"
+    _req(s, "GET", "/api/progress")
+    st, doc = _req(s, "GET", "/api/progress/history?field=level,gs,energy,contribution&days=7")
+    assert st == 200 and doc["character"] == "Shooty"
+    assert {k: v["last"] for k, v in doc["series"].items()} == {
+        "level": 62, "gs": 640, "energy": 401, "contribution": 312}
+    assert _req(s, "GET", "/api/progress/history?field=bogus")[0] == 400
+    assert _req(s, "GET", "/api/progress/history")[0] == 400
+    clk.t += 3601
+    _bump(pc.fetch, 63)
+    _req(s, "GET", "/api/progress")
+    assert len(pc.fetch.calls) == 2  # no request beyond the hourly cadence
+    lv = _req(s, "GET", "/api/leveling")[1]
+    assert lv["level"] == 63 and lv["pct"] is None and lv["level_source"] == "profile"
+    assert lv["samples"][0]["source"] == "profile"
+
+
+def test_route_auto_level_off_by_config(tmp_path):
+    pc = progress.ProfileClient(FAMILY, fetch=FakeFetch(PROFILE_FIXTURE), clock=Clock(),
+                                cache_dir=tmp_path / "pcache")
+    s = ewapp.make_server(port=0, store_root=tmp_path / "store", market_seed=[],
+                          market_client=market.ArshaClient(fetch=_no_network,
+                                                           cache_dir=tmp_path / "cache"),
+                          profile_client=pc, profile_cfg={"auto_level": False})
+    try:
+        assert s.progress.auto_level is False
+    finally:
+        s.server_close()

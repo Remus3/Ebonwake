@@ -197,3 +197,51 @@ test('overlay: GET-only leveling widget behind its opt-in', () => {
   const html = read('overlay/index.html');
   assert.match(html, /id="ov-leveling-row" hidden/);
 });
+
+// ---- plan 041: profile level markers ----
+
+test('fmtLevelLine never prints null; profile marker shows (profile)', () => {
+  assert.strictEqual(C.fmtLevelLine({ level: 52, pct: 37.512, level_source: 'typed' }), 'Lv 52 37.5%');
+  assert.strictEqual(C.fmtLevelLine({ level: 52, pct: 37.512 }, true), 'Lv 52 37.512%');
+  assert.strictEqual(C.fmtLevelLine({ level: 61, pct: null, level_source: 'profile' }), 'Lv 61 (profile)');
+  assert.strictEqual(C.fmtLevelLine({ level: 61, pct: null }), 'Lv 61');
+  assert.strictEqual(C.fmtLevelLine({ level: null, pct: null }), 'no XP sample yet');
+  assert.strictEqual(C.fmtLevelLine(null), 'no XP sample yet');
+  for (const d of [{ level: 61, pct: null, level_source: 'profile' }, { level: 61, pct: null }, { level: 61 }, {}, null]) {
+    assert.doesNotMatch(C.fmtLevelLine(d) + C.fmtLevelLine(d, true), /null|undefined|NaN/);
+  }
+});
+
+test('normalizeLeveling passes level_source; pct null with profile', () => {
+  const d = C.normalizeLeveling(Object.assign({}, BODY, { level: 61, pct: null, level_source: 'profile' }));
+  assert.strictEqual(d.level, 61);
+  assert.strictEqual(d.pct, null);
+  assert.strictEqual(d.level_source, 'profile');
+  assert.strictEqual(C.normalizeLeveling(BODY).level_source, null);
+  assert.strictEqual(C.normalizeLeveling(Object.assign({}, BODY, { level_source: 'x' })).level_source, null);
+});
+
+test('levelingLine: profile marker body keeps rate / ETA / HOT from typed samples', () => {
+  const at = 1000000;
+  const body = Object.assign({}, BODY, { level: 61, pct: null, level_source: 'profile', eta_next_s: null });
+  const line = C.levelingLine(body, at, at);
+  assert.ok(line.startsWith('Lv 61 (profile)'), line);
+  assert.match(line, /4\.1 %\/h/);
+  assert.match(line, /HOT 1h03m/);
+  assert.notStrictEqual(line, 'no XP sample yet');
+  assert.doesNotMatch(line, /null/);
+  assert.strictEqual(C.levelingLine(Object.assign({}, body, { level: null }), at, at), 'no XP sample yet');
+});
+
+test('validLevelingBody rejects a null-pct sample (dashboard cannot forge a marker)', () => {
+  assert.strictEqual(C.validLevelingBody({ sample: { level: 60, pct: null } }), false);
+  assert.strictEqual(C.validLevelingBody({ sample: { level: 60, pct: null, source: 'profile' } }), false);
+  assert.strictEqual(C.validLevelingBody({ sample_del: '2026-10-05T12:00:00+00:00' }), true);
+});
+
+test('leveling.js renders the level through fmtLevelLine and marks profile samples', () => {
+  const src = read('dashboard/leveling.js');
+  assert.match(src, /C\.fmtLevelLine\(/);
+  assert.doesNotMatch(src, /'Lv ' \+ d\.level \+ '  ' \+ d\.pct/);
+  assert.match(src, /\(profile\)/);
+});
