@@ -310,6 +310,14 @@ class MarketService:
         res = self.client.peek(self.client._key("sublist", item_id, sid), TTL["sublist"])
         return price_of(res["data"]) if res else None
 
+    def cached_prices(self, item_id, sid=0):
+        """{base, last} from the sublist cache, stale or not (None when absent);
+        never fetches (plan 053 imperial payout vs input cost)."""
+        res = self.client.peek(self.client._key("sublist", item_id, sid), TTL["sublist"])
+        sub = res["data"] if res and isinstance(res["data"], dict) else {}
+        return {k: (v if _is_int(v) and v > 0 else None)
+                for k, v in (("base", sub.get("basePrice")), ("last", sub.get("lastSoldPrice")))}
+
     def cached_quote(self, item_id, sid=0):
         """{price, preorder} from the sublist cache, stale or not; never fetches
         (plan 037 shopping list)."""
