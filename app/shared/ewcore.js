@@ -597,6 +597,17 @@
     return { days: days, start: a.hhmm, end: b.hhmm, title: 'UTC ' + fmtDays(w.days) + ' ' + w.start + '-' + w.end };
   }
 
+  // Plan 064 auto window {start, end (ISO UTC), bonus, pct} -> 'MM-DD HH:MM -
+  // MM-DD HH:MM <bonus>' in the zone, or '' when a time is unreadable.
+  function hotAutoText(w, opts) {
+    if (!plainObject(w)) return '';
+    const a = fmtLocal(w.start, opts);
+    const b = fmtLocal(w.end, opts);
+    if (!a || !b) return '';
+    const bonus = typeof w.bonus === 'string' ? w.bonus : (isNum(w.pct) ? '+' + w.pct + '%' : '');
+    return (a.text.slice(5) + ' - ' + b.text.slice(5) + ' ' + bonus).trim();
+  }
+
   // Entry zones for time inputs: [value, label]. 'pt' is the "paste PT" helper
   // for patch-note times.
   const ZONES = [['local', 'local'], ['pt', 'PT'], ['utc', 'UTC']];
@@ -2100,7 +2111,7 @@
     const v = body[k];
     if (k === 'delete') return validRef(v, EVENT_ID_RE);
     if (k === 'purge_expired') return v === true;
-    if (k === 'dismiss_notice') return validNoticeNo(v);
+    if (k === 'dismiss_notice' || k === 'undo_notice') return validNoticeNo(v);
     if (k === 'done') return exact(v, ['id', 'done']) && validRef(v.id, EVENT_ID_RE) && typeof v.done === 'boolean';
     if (k === 'add') {
       if (!plainObject(v) || !onlyKeys(v, ['kind', 'title', 'code', 'rewards', 'starts', 'ends', 'url'])) return false;
@@ -2256,6 +2267,43 @@
       return t.text.slice(0, 10) + ' ' + c.ends_edge + ' maint. (~' + t.text.slice(11) + ' local, verify)';
     }
     return t.text;
+  }
+
+  // ---- plan 064: auto-added notices (undo) + the Steam backup hint ----
+  // `suggested_events.auto`: [{group_no, title, url, events, hot, at}] newest
+  // first; undo removes what the notice added and dismisses it for good.
+  function noticeAutoRows(suggested) {
+    const s = plainObject(suggested) ? suggested : {};
+    const seen = {};
+    const out = [];
+    (Array.isArray(s.auto) ? s.auto : []).forEach(function (a) {
+      if (!plainObject(a) || !validNoticeNo(a.group_no) || seen[a.group_no]) return;
+      if (!validTitle(a.title) || !validUrl(a.url)) return;
+      seen[a.group_no] = true;
+      const ev = Number.isInteger(a.events) && a.events >= 0 ? a.events : 0;
+      const hot = Number.isInteger(a.hot) && a.hot >= 0 ? a.hot : 0;
+      const what = [];
+      if (ev) what.push(ev + (ev === 1 ? ' entry' : ' entries'));
+      if (hot) what.push(hot + ' Hot Time window' + (hot === 1 ? '' : 's'));
+      out.push({ group_no: a.group_no, title: a.title, url: a.url, events: ev, hot: hot,
+        text: 'auto-added ' + (what.join(' + ') || 'nothing') });
+    });
+    return out;
+  }
+
+  function noticeUndoBody(a) {
+    return plainObject(a) && validNoticeNo(a.group_no) ? { undo_notice: a.group_no } : null;
+  }
+
+  // Official host down for a day: Steam store news titles as a hint, or null.
+  function noticeSteamHint(suggested) {
+    const h = plainObject(suggested) && plainObject(suggested.steam_hint) ? suggested.steam_hint : null;
+    if (!h) return null;
+    const titles = (Array.isArray(h.titles) ? h.titles : []).filter(function (t) {
+      return typeof t === 'string' && t.length > 0 && t.length <= 80;
+    }).slice(0, 10);
+    return { text: 'official news unreachable for a day - check official notices',
+      titles: titles, url: validUrl(h.url) ? h.url : null };
   }
 
   const NOTICE_STATUS = {
@@ -3226,6 +3274,11 @@
       milestones_seed: d.milestones_seed === true,
       hot_windows: (Array.isArray(d.hot_windows) ? d.hot_windows : []).filter(function (w) {
         return plainObject(w) && typeof w.id === 'string';
+      }),
+      // Plan 064: dated windows auto-added from official Hot Time notices.
+      hot_auto: (Array.isArray(d.hot_auto) ? d.hot_auto : []).filter(function (w) {
+        return plainObject(w) && typeof w.id === 'string' && utcMsOf(w.start) !== null &&
+          utcMsOf(w.end) !== null && isNum(w.pct);
       }),
       // Plan 018 XP epochs: the rate only counts samples since `epoch`.
       epoch: epochBrief(d.epoch),
@@ -4280,7 +4333,9 @@
     // Plan 059: event-notice suggestions + the weekly maintenance start (UTC).
     { id: 'events', title: 'Events', fields: [
       { key: 'events.notice_check', label: 'Event notice suggestions', type: 'bool' },
-      { key: 'events.maintenance_start_utc', label: 'Maintenance start, HH:MM UTC (blank = default)', type: 'hhmm' }
+      { key: 'events.maintenance_start_utc', label: 'Maintenance start, HH:MM UTC (blank = default)', type: 'hhmm' },
+      // Plan 064: full-window notice reads are added (with undo), not suggested.
+      { key: 'notices.auto_add', label: 'Auto-add official notices (undo on the Events tab)', type: 'bool' }
     ] },
     { id: 'market', title: 'Market', fields: [
       { key: 'market.vp', label: 'Value Pack active', type: 'bool' },
@@ -5772,6 +5827,10 @@
     noticeRows: noticeRows,
     noticeAddBody: noticeAddBody,
     noticeDismissBody: noticeDismissBody,
+    noticeAutoRows: noticeAutoRows,
+    noticeUndoBody: noticeUndoBody,
+    noticeSteamHint: noticeSteamHint,
+    hotAutoText: hotAutoText,
     noticeEndText: noticeEndText,
     noticeStatus: noticeStatus,
     DEADEYE_LEVELS: DEADEYE_LEVELS,

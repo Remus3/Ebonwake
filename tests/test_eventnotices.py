@@ -47,6 +47,7 @@ class Net:
         self.robots = robots
         self.page = (FIX / "list.html").read_bytes() if page is None else page
         self.details = {}
+        self.boards = {}
         self.calls = []
 
     def __call__(self, url, timeout):
@@ -55,6 +56,8 @@ class Net:
             body = self.robots
         elif url == eventnotices.LIST_URL:
             body = self.page
+        elif url in eventnotices.LIST_URLS.values():  # plan 064 boards: empty here
+            body = self.boards.get(url, b"<html><body></body></html>")
         elif url.startswith(eventnotices.DETAIL_URL):
             n = int(url.split("groupContentNo=")[1].split("&")[0])
             body = self.details.get(n, _detail(n))
@@ -233,7 +236,8 @@ def test_first_run_budget_list_plus_five_details(tmp_path):
     svc.view(refresh=True)
     assert net.calls[:2] == [coupons.ROBOTS_URL, eventnotices.LIST_URL]
     assert len(net.detail_calls()) == eventnotices.MAX_DETAILS
-    assert len([u for u in net.calls if u != coupons.ROBOTS_URL]) <= 6
+    # plan 064: one list GET per board + the shared Detail budget
+    assert len([u for u in net.calls if u != coupons.ROBOTS_URL]) <= 3 + 5
 
 
 def test_details_cached_then_the_rest_fetched(tmp_path):
@@ -417,6 +421,8 @@ def _no_network(url, timeout):
 def srv(tmp_path):
     clock = Clock()
     net = Net()
+    # plan 059 suggest-only paths; plan 064 auto-add has its own tests
+    (tmp_path / "local.json").write_text('{"notices": {"auto_add": false}}')
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
                           sse_interval=0.05, market_seed=[], profile_cfg={},
                           market_client=market.ArshaClient(fetch=_no_network,
@@ -463,7 +469,8 @@ def test_add_and_dismiss_via_post(srv):
 
 
 def test_maintenance_setting_read_live(srv, tmp_path):
-    (tmp_path / "local.json").write_text('{"events": {"maintenance_start_utc": "08:30"}}')
+    (tmp_path / "local.json").write_text('{"events": {"maintenance_start_utc": "08:30"}, '
+                                         '"notices": {"auto_add": false}}')
     _req(srv, "GET", "/api/events")
     srv.test_clock.t += 6 * 3600
     st, body = _req(srv, "GET", "/api/events")

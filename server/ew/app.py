@@ -216,12 +216,18 @@ class EWServer(ThreadingHTTPServer):
                                            deadlines=self.leveling.deadline_rows)
         # Coupon suggestions (plan 014): off unless a client is passed; only main()
         # passes the live one, so no test ever reaches the network.
-        self.coupons = coupons.CouponService(coupon_client, self.events, spawn=coupon_spawn)
-        # Plan 059: official event-notice windows, suggest-only, gated like plan 014;
+        # Plan 064: codes read from official notices join the suggestions.
+        self.coupons = coupons.CouponService(coupon_client, self.events, spawn=coupon_spawn,
+                                             extra=lambda: self.notices.coupon_extra())
+        # Plan 059: official event-notice windows, gated like plan 014;
         # maintenance-relative ends follow the events.maintenance_start_utc setting.
+        # Plan 064: + Notices / Updates boards; full windows auto-added (with
+        # undo) while notices.auto_add is on, Hot Time into plan 011's card.
         self.notices = eventnotices.NoticeService(
             notice_client, self.events, self.store, spawn=notice_spawn,
-            maint_start=lambda: self.settings.view()["settings"]["events.maintenance_start_utc"])
+            maint_start=lambda: self.settings.view()["settings"]["events.maintenance_start_utc"],
+            leveling=self.leveling,
+            auto_add=lambda: self.settings.view()["settings"]["notices.auto_add"])
         # Plan 031: NA world boss table + operator loot ticks.
         self.bosses = bosses.BossService(self.store, clock=bosses_clock or time.time)
         # Plan 043: operator-typed pet roster over the tracked pets.json rules.
@@ -405,9 +411,11 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
         if path == "/api/events":
-            return self._send(200, dict(self.server.events.view(),
-                                        suggested=self.server.coupons.view(refresh=True),
-                                        suggested_events=self.server.notices.view(refresh=True)))
+            # plan 064: the notice read (and its auto-add) first, so items include it
+            sug_ev = self.server.notices.view(refresh=True)
+            sug = self.server.coupons.view(refresh=True)
+            return self._send(200, dict(self.server.events.view(), suggested=sug,
+                                        suggested_events=sug_ev))
         if path == "/api/deadeye":
             return self._send(200, self.server.deadeye.view())
         if path == "/api/deadeye/enhance":
@@ -425,6 +433,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/game":
             return self._send(200, self.server.game.view())
         if path == "/api/leveling":
+            self.server.notices.view(refresh=False)  # plan 064: import cached Hot Time reads
             return self._send(200, self.server.leveling.view())
         if path == "/api/bosses":
             return self._send(200, self.server.bosses.view())
@@ -510,18 +519,21 @@ class Handler(BaseHTTPRequestHandler):
         return out
 
     def _post_events(self, body):
-        ops = {"add", "edit", "done", "delete", "purge_expired", "dismiss_notice"}
+        ops = {"add", "edit", "done", "delete", "purge_expired", "dismiss_notice",
+               "undo_notice"}
         if len(body) != 1 or not (ops & set(body)):
-            raise ValueError("body must be one of "
-                             "{add|edit|done|delete|purge_expired|dismiss_notice: ...}")
+            raise ValueError("body must be one of {add|edit|done|delete|purge_expired|"
+                             "dismiss_notice|undo_notice: ...}")
         (op, arg), = body.items()
-        if op == "dismiss_notice":  # plan 059
-            self.server.notices.dismiss(arg)
+        if op in ("dismiss_notice", "undo_notice"):  # plan 059 / plan 064
+            getattr(self.server.notices, "dismiss" if op == "dismiss_notice" else "undo")(arg)
+            sug_ev = self.server.notices.view(refresh=False)
             out = self.server.events.view()
         else:
             out = getattr(self.server.events, op)(arg)
+            sug_ev = self.server.notices.view(refresh=False)
         out["suggested"] = self.server.coupons.view(refresh=False)  # a POST never fetches
-        out["suggested_events"] = self.server.notices.view(refresh=False)
+        out["suggested_events"] = sug_ev
         return out
 
     def _post_deadeye(self, body):

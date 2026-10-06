@@ -6,6 +6,10 @@ no DST rule applies) and is unverified until the operator confirms it; the
 plan 030 setting `events.maintenance_start_utc` overrides the start. `resolve`
 is pure: "before" = the slot start on that date, "after" = start + duration,
 on whatever weekday the date falls (a holiday maintenance is still that date).
+
+Plan 064: an official maintenance notice for a date (store domain
+`maint_notices`, written by `eventnotices`) beats the slot for that date:
+"before" = its UTC start, "after" = its UTC end.
 """
 
 import datetime as _dt
@@ -72,10 +76,45 @@ def _as_date(d):
     raise ValueError("date must be a date or YYYY-MM-DD")
 
 
-def resolve(date, edge, slot_=None):
-    """UTC datetime of the maintenance `edge` ("before" | "after") on `date`."""
+def _utc(s):
+    try:
+        t = _dt.datetime.fromisoformat(s) if isinstance(s, str) else None
+    except ValueError:
+        return None
+    return t if t is not None and t.utcoffset() == _dt.timedelta(0) else None
+
+
+def clean_notices(doc):
+    """Store domain `maint_notices` {"notices": [{date, start_utc, end_utc,
+    source}]} -> {date: {start_utc, end_utc, source}}; bad rows are dropped.
+    The window must start on its date (UTC) and last 1 min .. MAX_DURATION_MIN."""
+    raw = doc.get("notices") if isinstance(doc, dict) else None
+    out = {}
+    for n in raw if isinstance(raw, list) else []:
+        if not isinstance(n, dict) or not isinstance(n.get("date"), str):
+            continue
+        try:
+            d = _dt.date.fromisoformat(n["date"])
+        except ValueError:
+            continue
+        s, e = _utc(n.get("start_utc")), _utc(n.get("end_utc"))
+        src = n.get("source")
+        if s is None or e is None or s.date() != d or not isinstance(src, str):
+            continue
+        if not 0 < (e - s).total_seconds() <= MAX_DURATION_MIN * 60:
+            continue
+        out[n["date"]] = {"start_utc": n["start_utc"], "end_utc": n["end_utc"], "source": src}
+    return out
+
+
+def resolve(date, edge, slot_=None, notices=None):
+    """UTC datetime of the maintenance `edge` ("before" | "after") on `date`;
+    a notice for that date (`notices`: clean_notices output) wins over the slot."""
     if edge not in EDGES:
         raise ValueError("edge must be before or after")
+    n = (notices or {}).get(_as_date(date).isoformat())
+    if n is not None:
+        return _utc(n["start_utc"] if edge == "before" else n["end_utc"])
     s = _clean(slot_) if slot_ is not None else DEFAULT
     hh, mm = (int(x) for x in s["start_utc"].split(":"))
     start = _dt.datetime.combine(_as_date(date), _dt.time(hh, mm), _dt.timezone.utc)

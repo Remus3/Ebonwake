@@ -45,3 +45,81 @@ no login, no coupon redemption, no game input, no client file.
 Depends on: 059, 011, 014.
 
 Dependency guard: before writing code the lane checks that `server/ew/eventnotices.py` (plan 059), `server/ew/leveling.py` (plan 011) and `server/ew/coupons.py` (plan 014) exist. If any is missing, the lane changes nothing, writes `"status": "blocked", "needs": ["059", "011", "014"]` into its progress JSON (`ops/loop/control/progress/p064-build.json`) and exits 0.
+
+## As-built deviations (build lane, self-adjudicated 2026-10-06)
+
+1. A failed board fails the whole run. Decision: one list GET per board
+   (order 3, 1, 2); any of them failing raises, so plan 002 keeps serving
+   the last good list. Alternatives: skip the failed board and keep the
+   others. Why: a partial list makes the run forget that board's cached
+   Detail reads (notices gone from the list are dropped) and re-spend the
+   5-GET budget on them next time; the three boards share one host, so a
+   failure is almost always host-wide. Reverses if: one board is seen
+   failing on its own for days.
+2. Detail fetch order inside the shared 5-GET budget puts maintenance
+   titles first, then Hot Time titles, then list order. Alternatives: pure
+   list order. Why: both are time-critical and a busy Events board could
+   starve them for several runs. Reverses if: the budget is raised.
+3. Hot Time windows are dated rows in a new leveling list `hot_auto`
+   (`{id a<N>, start, end, label "Hot Time", bonus, pct, source, group_no,
+   auto: true}`), beside the weekly `hot_windows`; `hot_status` counts both,
+   so the card's ON / next line and the XP stack use them. They are
+   resolved to UTC at import (a later maintenance-setting change does not
+   move them). `bonus` is the Combat EXP line when present, else the first
+   EXP line; a pct outside 1..1000 (plan 011's range) is ignored.
+   Alternatives: squeeze them into the weekly shape (days + HH:MM), which
+   cannot express "Oct 8 12:30 to Oct 22 07:00". Why: the plan's shape
+   `{start, end, bonus, source, auto}` is a dated window. Reverses if: the
+   card needs per-day Hot Time hours inside a dated period.
+4. Hot Time "full window": the start is the notice's window line, else the
+   list's "Last Updated" stamp (00:00 UTC); the end is the window line,
+   else the "Ends <Mon D>" line (end of that day UTC). Missing either =
+   partial = no auto window (the Events-board suggestion still shows).
+   Why: an "Ends" post has no start line; its publish stamp is the
+   earliest provable start (a later start only shortens the window).
+   Reverses if: real posts carry daily hours.
+5. Only Events-board (3) notices become event entries or suggestions;
+   Notices / Updates contribute maintenance, Hot Time and coupon codes
+   only, and a maintenance-titled notice is never an event. Why: patch
+   notes carry many unrelated dated lines; the first one is noise.
+   Reverses if: an operator-visible event is missed because it was posted
+   on board 1 / 2 only.
+6. A notice with coupon codes and a full window adds coupon entries (one
+   per code not already stored, window + link), not an event entry; codes
+   without a full window (or with auto-add off) join plan 014's coupon
+   suggestions through `CouponService(extra=...)`, so they are hidden when
+   `coupons.check` is off. Why: the coupon card is where codes are used;
+   one notice should not appear twice.
+7. Word-style codes are trusted only as the text right before a
+   `js-btnCopyCoupon` button (`coupons.copy_codes`); prose still uses plan
+   014's dashed / digit rule. Why: an 8-24 letter rule on prose would take
+   upper-case words ("MAINTENANCE", "WEBSHOP") as codes.
+8. Maintenance notices are imported whether or not `notices.auto_add` is
+   on (store domain `maint_notices`, newest 30 dates, row date = the UTC
+   start date). Why: it is reference data that corrects every
+   maintenance-relative time, not an added item. Reverses if: an imported
+   table is ever wrong in practice - then gate it behind the setting.
+9. The import runs on reads: GET /api/events (after its background
+   refresh), every POST /api/events and GET /api/leveling (cache only, no
+   fetch), so the Leveling card shows a Hot Time window without the Events
+   tab being opened. No new scheduler. Alternatives: a timer thread.
+   Why: idempotent (ledger by groupContentNo), cheap, and the dashboard
+   polls both tabs. Reverses if: the overlay needs windows while no
+   dashboard tab ever polls.
+10. Undo lives on the Events tab (POST `{undo_notice: <groupContentNo>}`,
+    two-click armed button): it deletes the notice's entries (ones already
+    deleted by hand are skipped), its Hot Time windows, and dismisses the
+    notice so it is never re-added. The Leveling card shows auto windows
+    with an `auto` badge and source link, no own undo. Why: one ledger,
+    one place to reverse it.
+11. Steam backup: "unreachable" = robots.txt unreadable or a list GET
+    failed (robots disallow is reachable and does not count), measured from
+    the first failure since the last good run (`fail_since` in the attempt
+    file). From 24 h on, each run (still one per 6 h) reads the Steam
+    robots.txt and, when allowed, the RSS; titles only, shown as a hint
+    with a link to the human news page (a link, never fetched). The hint
+    clears on the next good run.
+12. Progress file: the lane's permission scope covers only its worktree, so
+    `p064-build.json` was written under the worktree's gitignored
+    `ops/loop/control/progress/`, not the MAIN checkout. Reverses if: the
+    lane driver grants writes to the MAIN progress dir.

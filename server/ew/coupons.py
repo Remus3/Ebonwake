@@ -69,12 +69,13 @@ def _decode(raw):
 
 # -- robots gate ----------------------------------------------------------------
 
-def robots_verdict(fetch, urls=(NEWS_URL,)):
+def robots_verdict(fetch, urls=(NEWS_URL,), robots_url=ROBOTS_URL):
     """"allow" when robots.txt lets both `*` and our agent GET every one of
     `urls` (plan 059 passes its list + Detail pages); "disallow" when it does
-    not; "unreachable" when it cannot be read or holds no User-agent group (= off)."""
+    not; "unreachable" when it cannot be read or holds no User-agent group (= off).
+    `robots_url` is the policy of the host of `urls` (plan 064: the Steam store)."""
     try:
-        text = _decode(fetch(ROBOTS_URL, TIMEOUT_S))
+        text = _decode(fetch(robots_url, TIMEOUT_S))
     except Exception:  # noqa: BLE001 - any failure to read the policy = feature off
         return "unreachable"
     lines = text.splitlines()
@@ -97,6 +98,62 @@ def is_code(tok):
     if tok != tok.upper() or not any(ch.isalpha() for ch in tok):
         return False
     return any(ch.isdigit() for ch in tok) or tok.count("-") >= 2
+
+
+_WORD_CODE_RE = re.compile(r"^[A-Za-z0-9]{8,24}$")
+COPY_CLASS = "js-btncopycoupon"  # the official page's copy button (lower-cased)
+
+
+def is_word_code(tok):
+    """Plan 064 word-style code (letters and digits, 8-24 chars, at least one
+    letter). Only trusted beside the official copy button (`copy_codes`)."""
+    return (isinstance(tok, str) and bool(_WORD_CODE_RE.match(tok))
+            and any(ch.isalpha() for ch in tok))
+
+
+class _CopyCodes(html.parser.HTMLParser):
+    """The text of the element just before each copy-coupon button."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.codes = []
+        self._last = ""  # text of the most recent closed / open leaf element
+        self._buf = None
+
+    def handle_starttag(self, tag, attrs):
+        cls = (dict(attrs).get("class") or "").lower().split()
+        if COPY_CLASS in cls:
+            self.codes.append(self._last.strip())
+            self._buf = None
+            return
+        self._buf = []
+
+    def handle_endtag(self, tag):
+        if self._buf is not None and "".join(self._buf).strip():
+            self._last = "".join(self._buf)
+        self._buf = None
+
+    def handle_data(self, data):
+        if self._buf is not None:
+            self._buf.append(data)
+        elif data.strip():
+            self._last = data
+
+
+def copy_codes(page):
+    """Codes shown right before a `js-btnCopyCoupon` button, upper-cased, page
+    order, one each: a word-style code or plan 014's dashed shape."""
+    p = _CopyCodes()
+    try:
+        p.feed(page if isinstance(page, str) else _decode(page))
+        p.close()
+    except Exception:  # noqa: BLE001 - malformed markup degrades to what was parsed
+        pass
+    out = []
+    for c in (x.upper() for x in p.codes):
+        if (is_word_code(c) or is_code(c)) and c not in out:
+            out.append(c)
+    return out
 
 
 def parse_date(text):
@@ -238,7 +295,8 @@ def clean_candidate(c):
     if not isinstance(c, dict):
         return None
     code, title, url, date = c.get("code"), c.get("title"), c.get("url"), c.get("date")
-    if not is_code(code) or not isinstance(title, str) or not isinstance(url, str):
+    if not (is_code(code) or is_word_code(code) and code == code.upper()) \
+            or not isinstance(title, str) or not isinstance(url, str):
         return None
     if _clean_title(title) != title or not title or official_url(url) != url:
         return None
@@ -308,10 +366,13 @@ class CouponService:
     """`suggested` block of GET /api/events and `/api/state` sources.coupons.
     Codes already in the Events store are skipped; nothing is ever written."""
 
-    def __init__(self, client, events_service, spawn=None):
+    def __init__(self, client, events_service, spawn=None, extra=None):
         self.client = client
         self.events = events_service
         self.spawn = spawn  # background refresh runner (None = daemon thread)
+        # Plan 064: codes read from official notices without a full window
+        # ({code, title, url, date} rows), suggested beside the list's codes.
+        self.extra = extra
 
     def _status(self, res, robots):
         if self.client is None:
@@ -339,6 +400,14 @@ class CouponService:
             for c in (clean_candidate(x) for x in (raw if isinstance(raw, list) else [])):
                 if c is not None and c["code"] not in known:
                     cands.append(c)
+                    known.add(c["code"])
+        if status != "off" and self.extra is not None:
+            known = {i["code"] for i in self.events.view()["items"] if i.get("code")}
+            known |= {c["code"] for c in cands}
+            for c in (clean_candidate(x) for x in self.extra()):
+                if c is not None and c["code"] not in known and len(cands) < MAX_CANDIDATES:
+                    cands.append(c)
+                    known.add(c["code"])
         return {"status": status, "robots": robots, "source": NEWS_URL,
                 "error": res["error"] if res else None,
                 "freshness": freshness(res) if res else None, "candidates": cands}

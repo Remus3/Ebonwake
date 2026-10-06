@@ -37,6 +37,8 @@ MAX_EPOCHS = 20  # operator-added epochs
 MAX_DEADLINES = 20  # operator-set deadline rows (plan 024)
 DEADLINE_TIGHT_H = 72
 HOT_ID_RE = re.compile(r"^h[0-9]{1,9}$")
+AUTO_ID_RE = re.compile(r"^a[0-9]{1,9}$")  # plan 064 auto (notice) windows
+AUTO_KEEP_S = 7 * 86400  # an auto window ended this long ago is pruned on the next add
 HHMM_RE = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 MARKER_SOURCE = "profile"  # plan 041: server-written level marker, pct unknown
 _UTC = _dt.timezone.utc
@@ -162,13 +164,23 @@ def _minutes(hhmm):
     return int(m.group(1)) * 60 + int(m.group(2))
 
 
-def hot_status(windows, now):
+def hot_status(windows, now, dated=()):
     """{active: [{id, label, pct, ends_in_s}], next: {id, label, pct,
     starts_in_s}|None} at `now`, all in UTC. Start inclusive, end exclusive;
-    an end at or before the start wraps past midnight into the next day."""
+    an end at or before the start wraps past midnight into the next day.
+    `dated` (plan 064) are one-off {id, start, end (ISO UTC), label, pct}."""
     now = now.astimezone(_UTC)
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     active, nxt = [], None
+    for w in dated:
+        st, en = _parse_iso(w["start"]), _parse_iso(w["end"])
+        base = {"id": w["id"], "label": w["label"], "pct": w["pct"]}
+        if st <= now < en:
+            active.append(dict(base, ends_in_s=int((en - now).total_seconds())))
+        elif st > now:
+            secs = int((st - now).total_seconds())
+            if nxt is None or secs < nxt["starts_in_s"]:
+                nxt = dict(base, starts_in_s=secs)
     for w in windows:
         start = _minutes(w["start"])
         dur = (_minutes(w["end"]) - start) % 1440
@@ -302,6 +314,28 @@ def _clean_window(w):
         return None
 
 
+def _clean_auto(w):
+    """Plan 064 auto window {id, start, end, label, bonus, pct, source,
+    group_no, auto: True}, written by the notice import only."""
+    if not isinstance(w, dict) or not isinstance(w.get("id"), str) \
+            or not AUTO_ID_RE.match(w["id"]):
+        return None
+    st, en = _parse_iso(w.get("start")), _parse_iso(w.get("end"))
+    src, bonus, gno = w.get("source"), w.get("bonus"), w.get("group_no")
+    if st is None or en is None or st >= en or not _ok_int(gno, 1, 10 ** 9 - 1):
+        return None
+    if not (isinstance(src, str) and src.startswith("https://") and len(src) <= 300):
+        return None
+    if not (isinstance(bonus, str) and 0 < len(bonus) <= MAX_LABEL):
+        return None
+    try:
+        label, pct = _check_label(w.get("label")), _check_xp(w.get("pct"), "pct")
+    except ValueError:
+        return None
+    return {"id": w["id"], "start": _iso(st), "end": _iso(en), "label": label, "bonus": bonus,
+            "pct": pct, "source": src, "group_no": gno, "auto": True}
+
+
 def _epoch_brief(e, now):
     """View row of one epoch: no kill caps, plus seconds until (or since, < 0) it starts."""
     if e is None:
@@ -344,6 +378,7 @@ class LevelingService:
     """Store domain `leveling`: {"samples": [{ts, level, pct}] (oldest first;
     plan 041 adds server-written markers {ts, level, pct: null, source: "profile"}),
     "hot_windows": [{id, days, start, end, label, pct}], "milestones": [int],
+    "hot_auto": [plan 064 dated notice windows, see _clean_auto],
     "epochs_added": [{id, starts_utc, label, source, verified}],
     "epochs_deleted": [id], "next_id": int, "updated": "<iso>"}. `buffs`
     returns the grind view's buff list (plan 005) for the XP stack; `seq` bumps
@@ -407,13 +442,15 @@ class LevelingService:
             if c is not None and c["id"] not in seen:
                 seen.add(c["id"])
                 windows.append(c)
+        auto = _clean_rows(doc.get("hot_auto"), _clean_auto, MAX_HOT)
         raw = doc.get("milestones")
         ms = sorted({m for m in (raw if isinstance(raw, list) else [])
                      if _ok_int(m, *LEVEL_RANGE)})[:MAX_MILESTONES]
         nxt = doc.get("next_id")
-        top = max((int(w["id"][1:]) for w in windows), default=0) + 1
+        top = max((int(w["id"][1:]) for w in windows + auto), default=0) + 1
         nxt = max(nxt, top) if _ok_int(nxt, 1, 10 ** 9 - 1) else top
-        return {"samples": samples, "hot_windows": windows, "milestones": ms, "next_id": nxt,
+        return {"samples": samples, "hot_windows": windows, "hot_auto": auto,
+                "milestones": ms, "next_id": nxt,
                 "epochs_added": _clean_rows(doc.get("epochs_added"), _clean_epoch, MAX_EPOCHS),
                 "epochs_deleted": _clean_ids(doc.get("epochs_deleted")),
                 "deadlines_added": _clean_rows(doc.get("deadlines_added"), _clean_deadline,
@@ -472,7 +509,7 @@ class LevelingService:
         upcoming = levels.next_epoch(epochs, now)
         since = _parse_iso(epoch["starts_utc"]) if epoch else None
         rate = rate_pct_h(samples, since)
-        hot = hot_status(doc["hot_windows"], now)
+        hot = hot_status(doc["hot_windows"], now, doc["hot_auto"])
         buffs = _live_xp_buffs(self.buffs() if self.buffs is not None else [])
         parts = ([{"name": a["label"], "pct": a["pct"]} for a in hot["active"]]
                  + [{"name": b.get("name"), "pct": b["xp_pct"]} for b in buffs])
@@ -491,6 +528,9 @@ class LevelingService:
                                      if m in MILESTONE_LABELS},
                 "milestones_seed": doc["milestones"] == SEED_MILESTONES,
                 "hot_windows": doc["hot_windows"],
+                # plan 064: notice windows not over yet, soonest end first
+                "hot_auto": sorted((w for w in doc["hot_auto"] if _parse_iso(w["end"]) > now),
+                                   key=lambda w: (w["end"], w["id"])),
                 "epoch": _epoch_brief(epoch, now),
                 "epoch_next": _epoch_brief(upcoming, now),
                 "epochs": [dict(_epoch_brief(e, now), tracked=e["id"] in tracked)
@@ -605,6 +645,41 @@ class LevelingService:
             doc["hot_windows"] = keep
             self._save(doc)
         return self.view()
+
+    def hot_auto_add(self, row):
+        """Plan 064, server side only (never a POST op): {start, end, label,
+        bonus, pct, source, group_no} from an official notice -> the new window
+        id, or None when that notice already has a window or the row is bad.
+        Auto windows ended over AUTO_KEEP_S ago are pruned here."""
+        with self._lock:
+            doc = self._load()
+            if any(w["group_no"] == (row or {}).get("group_no") for w in doc["hot_auto"]):
+                return None
+            wid = f"a{doc['next_id']}"
+            c = _clean_auto(dict(row or {}, id=wid, auto=True))
+            if c is None:
+                return None
+            cut = self._now() - _dt.timedelta(seconds=AUTO_KEEP_S)
+            doc["hot_auto"] = [w for w in doc["hot_auto"] if _parse_iso(w["end"]) > cut]
+            if len(doc["hot_auto"]) >= MAX_HOT:
+                return None
+            doc["next_id"] += 1
+            doc["hot_auto"].append(c)
+            self._save(doc)
+        return wid
+
+    def hot_auto_del(self, ids):
+        """Undo of plan 064 auto windows by id; unknown ids are ignored. Returns
+        the number removed."""
+        ids = {i for i in (ids or []) if isinstance(i, str) and AUTO_ID_RE.match(i)}
+        with self._lock:
+            doc = self._load()
+            keep = [w for w in doc["hot_auto"] if w["id"] not in ids]
+            n = len(doc["hot_auto"]) - len(keep)
+            if n:
+                doc["hot_auto"] = keep
+                self._save(doc)
+        return n
 
     def epoch_add(self, arg):
         """{id, starts_utc, label, source, verified}: a new XP epoch, or a
