@@ -14,7 +14,9 @@
    Imperial delivery card (imperial.js, window.EWImperial). Plan 033: a "This
    week" card lists GET /api/today weekly_plan (eligible first, locked rows
    with their level / AP / DP gap) and counts clears with POST
-   {weekly_tick|weekly_untick: id}. Every node is built
+   {weekly_tick|weekly_untick: id}. Plan 068: an inferred tick shows an "auto"
+   pill + undo (the normal untick, which blocks re-ticking until the reset); a
+   ready_minutes row shows "ready". Every node is built
    with DOM APIs - no HTML from data. */
 (function () {
   'use strict';
@@ -228,9 +230,30 @@
       if (extra) box.appendChild(extra);
       extra = box;
     }
+    if (C.todayAutoMark(it) || C.todayReady(it)) extra = autoBox(it, extra);
     const n = row(it, extra);
     if (live) n.ewLive = live;
     return n;
+  }
+
+  // Plan 068: "auto" pill + undo on an inferred tick; "ready" pill on a
+  // ready_minutes row. Undo = untick, which blocks re-ticking until the reset.
+  function autoBox(it, extra) {
+    const box = el('span', null, '');
+    const auto = C.todayAutoMark(it);
+    const pill = el('span', 'ew-pill ' + (auto ? 'unknown' : 'ok'), auto ? 'auto' : 'ready');
+    pill.title = C.todayAutoTitle(it) || (auto ? 'auto-ticked' : 'ready');
+    box.appendChild(pill);
+    if (auto) {
+      const undo = el('button', 'ew-tx', 'undo');
+      undo.type = 'button';
+      undo.title = 'untick; not auto-ticked again until the next reset';
+      undo.disabled = it.id in S.pending;
+      undo.addEventListener('click', function () { toggle(it); });
+      box.appendChild(undo);
+    }
+    if (extra) box.appendChild(extra);
+    return box;
   }
 
   function drawList(ui, group, kind) {

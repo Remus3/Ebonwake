@@ -146,6 +146,8 @@ SPEC.update({
     # Plan 067: widgets chosen by context; per-widget pin / block on top.
     "overlay.auto": (_is_bool, True),
     "overlay.idle_min": (lambda v: _is_int(v) and 5 <= v <= 240, 20),
+    # Plan 068: auto-tick inferable Today rows + boss-shot suggestions.
+    "checklist.auto": (_is_bool, True),
 })
 for _w in WIDGETS:
     SPEC[f"overlay.mode.{_w}"] = (_one_of(OVERLAY_MODES), "auto")
