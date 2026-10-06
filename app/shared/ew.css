@@ -406,6 +406,30 @@ html.ew-overlay, html.ew-overlay body { background: transparent; height: auto; o
 .ew-toast.bad { border-left-color: var(--fk-status-bad); }
 .ew-terr { grid-column: 1 / -1; font-size: 12px; margin: 0 0 2px 22px; }
 
+/* Plan 050: command palette (Ctrl+K, dashboard only). */
+.ew-pal-back {
+  position: fixed; inset: 0; z-index: 60; display: flex; justify-content: center; align-items: flex-start;
+  padding-top: 12vh; background: rgba(0, 0, 0, .35);
+}
+.ew-pal-back[hidden] { display: none; }
+.ew-pal {
+  width: min(560px, 92vw); background: var(--fk-surface-2); color: var(--fk-text);
+  border: 1px solid var(--fk-border); border-radius: var(--ew-radius); box-shadow: 0 4px 16px rgba(0, 0, 0, .45);
+  padding: 8px; display: flex; flex-direction: column; gap: 6px;
+}
+.ew-pal-input {
+  font: inherit; font-size: 14px; color: var(--fk-text); background: var(--fk-surface);
+  border: 1px solid var(--fk-border); border-radius: var(--ew-radius); padding: 6px 8px;
+}
+.ew-pal-list { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow-y: auto; }
+.ew-pal-row {
+  display: flex; justify-content: space-between; gap: 12px; padding: 4px 8px; font-size: 13px;
+  border-radius: var(--ew-radius); cursor: pointer;
+}
+.ew-pal-row.sel { background: var(--fk-surface); box-shadow: inset 2px 0 0 var(--fk-accent); }
+.ew-pal-msg { font-size: 12px; min-height: 1em; }
+.ew-hit { outline: 2px solid var(--fk-accent); outline-offset: 1px; }
+
 /* Settings tab (plan 030) */
 .ew-sgroup { display: flex; flex-direction: column; gap: 4px; }
 .ew-srow { display: flex; align-items: center; gap: 8px; font-size: 13px; }

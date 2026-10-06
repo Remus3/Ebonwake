@@ -279,6 +279,9 @@
     if (++ticks % 5 === 0) { paintPill(); paintSystem(); paintBadges(); } // ages + the 90 s cut-off
   }
 
+  // Plan 050: the command palette's `go` and search jumps.
+  window.EWDash = { select: function (id) { if (tabIds().indexOf(id) >= 0) select(id); } };
+
   const rb = document.getElementById('server-restart');
   if (rb) rb.addEventListener('click', restart);
   document.addEventListener('keydown', onKey);

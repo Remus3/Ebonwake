@@ -54,7 +54,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 047 | Density and accessibility rework: content-sized cards, focus-visible, keyboard tabs, tab badges | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 048 | Quick-entry parsers (1.2b, 30d, 90m) + local time everywhere | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 049 | Shared SSE event bus in the dashboard, hidden-tab poll pause, keyed row updates | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
-| 050 | Command palette (Ctrl+K) with typed commands and cross-tab search | [ ] open |
+| 050 | Command palette (Ctrl+K) with typed commands and cross-tab search | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 051 | First-run checklist: profile family, log path, ScreenShot folder, overlay corner, watch items, dailies | [ ] open |
 | 052 | Enhancement-mats price bands (p20/p50/p80) with cached-history fallback and below-p20 alert | [ ] open |
 | 053 | Imperial delivery planner: CP/2 boxes per type, 250 % box value, reset countdown | [ ] open |
