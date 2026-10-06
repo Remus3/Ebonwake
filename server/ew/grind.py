@@ -25,6 +25,7 @@ MAX_SPOTS = 100
 MAX_BUFFS = 50
 XP_PCT_RANGE = (0, 1000)  # optional buff XP bonus, counted by the leveling XP stack (plan 011)
 MAX_SESSIONS = 2000  # stored; GET shows the newest VIEW_SESSIONS
+AUTO_SPOT = "unspecified"  # plan 062: auto session spot before any session is logged
 VIEW_SESSIONS = 200
 ID_RE = re.compile(r"^[a-z0-9-]{1,40}$")
 SID_RE = re.compile(r"^s[0-9]{1,9}$")
@@ -489,6 +490,8 @@ class GrindService:
             self._spot_names = {}
         self.prices = prices
         self.tax = tax
+        # Plan 062: `play() -> {state, id, start, spot}|None`, set by the app.
+        self.play = None
         # `epoch` returns the newest started XP epoch or None (plan 018): until
         # one has started the presets offer the pre-patch value and no hint shows.
         self.epoch = epoch
@@ -537,7 +540,9 @@ class GrindService:
         active = None
         if (isinstance(act, dict) and act.get("spot") in {s["id"] for s in spots}
                 and _parse_iso(act.get("started"))):
-            active = {"spot": act["spot"], "started": act["started"]}
+            # Plan 062: `auto` marks a session opened by the play-session hook.
+            active = {"spot": act["spot"], "started": act["started"],
+                      "auto": act.get("auto") is True}
         nxt = doc.get("next_sid")
         top = max((int(s["id"][1:]) for s in sessions), default=0) + 1
         nxt = max(nxt, top) if _ok_int(nxt, 1, 10 ** 9 - 1) else top
@@ -911,7 +916,18 @@ class GrindService:
                         minutes=min(MAX_MINUTES, max(1, int(secs // 60))))
         return {"now": _iso(now), "active": active, "sessions": sessions, "spots": spots,
                 "buffs": buffs, "xp_presets": presets, "xp_presets_error": self.presets_error,
-                "drops": drops, "agris_roi": roi, "pending_stop": pend}
+                "drops": drops, "agris_roi": roi, "pending_stop": pend,
+                "session": {"auto": active is not None and active["auto"],
+                            "play": self._play()}}
+
+    def _play(self):
+        """Plan 062 `session.play` from the play-session hook, or None."""
+        if self.play is None:
+            return None
+        try:
+            return self.play()
+        except Exception:  # noqa: BLE001 - the play pill is an extra, never fatal
+            return None
 
     def _patched(self):
         """True once an XP epoch has started (refute r1 minor 1); without an
@@ -997,15 +1013,16 @@ class GrindService:
 
     def mark_pending_stop(self, at):
         """Game exited at `at` (ISO) with a session open: flag it, never stop it.
-        Returns False (no write) without an active session, when one is already
-        pending, or when `at` is before the session started."""
+        Returns False (no write) without an active session, for an auto session
+        (plan 062 closes it itself), when one is already pending, or when `at`
+        is before the session started."""
         when = _iso_or_none(at)
         if when is None:
             raise ValueError("pending stop needs an ISO time")
         with self._lock:
             doc = self._load()
             act = doc["active"]
-            if (act is None or doc["pending_stop"] is not None
+            if (act is None or act["auto"] or doc["pending_stop"] is not None
                     or _parse_iso(when) < _parse_iso(act["started"])):
                 return False
             doc["pending_stop"] = {"at": when, "started": act["started"]}
@@ -1019,6 +1036,52 @@ class GrindService:
             doc = self._load()
             if doc["pending_stop"] is None:
                 return False
+            doc["pending_stop"] = None
+            self._save(doc)
+        return True
+
+    # -- plan 062: auto play-session binding ---------------------------------
+
+    def auto_start(self, at):
+        """Open an `auto` session at `at` (ISO) on the last used spot, else
+        "unspecified" (added on demand). Returns the active {spot, started,
+        auto} or None (no write) when a session is already running."""
+        when = _iso_or_none(at)
+        if when is None:
+            raise ValueError("auto start needs an ISO time")
+        with self._lock:
+            doc = self._load()
+            if doc["active"] is not None:
+                return None
+            ids = {s["id"] for s in doc["spots"]}
+            spot = doc["sessions"][-1]["spot"] if doc["sessions"] else None
+            if spot not in ids:
+                spot = AUTO_SPOT
+                if spot not in ids:
+                    if len(doc["spots"]) >= MAX_SPOTS:
+                        return None
+                    doc["spots"].append({"id": AUTO_SPOT, "name": AUTO_SPOT})
+            doc["active"] = {"spot": spot, "started": when, "auto": True}
+            doc["pending_stop"] = None
+            self._save(doc)
+            return dict(doc["active"])
+
+    def auto_stop(self, started, at):
+        """Close the auto session that started at `started` at `at` (ISO), logged
+        with 0 silver (a loot import may value it later). Returns False (no
+        write) when that auto session is no longer the active one."""
+        end = _parse_iso(at)
+        if end is None:
+            raise ValueError("auto stop needs an ISO time")
+        with self._lock:
+            doc = self._load()
+            act = doc["active"]
+            if act is None or not act["auto"] or act["started"] != started:
+                return False
+            secs = (end - _parse_iso(act["started"])).total_seconds()
+            minutes = min(MAX_MINUTES, max(1, int(secs // 60)))
+            self._add_session(doc, act["spot"], act["started"], minutes, 0, 0)
+            doc["active"] = None
             doc["pending_stop"] = None
             self._save(doc)
         return True

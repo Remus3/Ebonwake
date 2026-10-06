@@ -180,6 +180,13 @@ class SummaryService:
             return
         self.grind.mark_pending_stop(_iso(when))
 
+    def record_play(self, since, until):
+        """Plan 062: an auto play session closed; its window (UTC datetimes) is
+        the last game session the summary shows."""
+        with self._lock:
+            self.store.put("summary", {"last_game": {"since": _iso(since), "until": _iso(until)},
+                                       "updated": _iso(self._now())})
+
     def last_game(self):
         lg = self.store.get("summary").get("last_game")
         if not isinstance(lg, dict):

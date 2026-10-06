@@ -3806,6 +3806,15 @@
       fmtDuration(p.minutes * 60000) + ') or keep it running?';
   }
 
+  // Plan 062: Grind tab session pill from GET /api/grind {active, session:
+  // {auto}}: an auto session (opened by login, closed by exit) reads 'auto'.
+  function sessionPill(grind) {
+    if (!plainObject(grind)) return { text: '-', cls: 'unknown' };
+    if (!plainObject(grind.active)) return { text: 'idle', cls: 'unknown' };
+    const auto = plainObject(grind.session) ? grind.session.auto === true : grind.active.auto === true;
+    return auto ? { text: 'auto', cls: 'ok' } : { text: 'running', cls: 'ok' };
+  }
+
   function sumList(v) { return Array.isArray(v) ? v : []; }
 
   // Rows [{label, value}] for one summary window; [] for a bad or empty one.
@@ -4276,6 +4285,11 @@
     { id: 'market', title: 'Market', fields: [
       { key: 'market.vp', label: 'Value Pack active', type: 'bool' },
       { key: 'market.fame_pct', label: 'Family fame bonus (0-1.5 %)', type: 'number', min: 0, max: 1.5, step: 0.05 }
+    ] },
+    // Plan 062: login opens / exit closes the grind log after the grace.
+    { id: 'play', title: 'Play session', fields: [
+      { key: 'play.auto_session', label: 'Auto grind session (login opens, exit closes)', type: 'bool' },
+      { key: 'play.grace_s', label: 'Exit grace, seconds (60-600)', type: 'number', min: 60, max: 600, step: 1, int: true }
     ] }
   ];
   const SETTINGS_FIELDS = {};
@@ -4288,7 +4302,7 @@
       case 'bool': return typeof v === 'boolean';
       case 'anchor': return validAnchor(v) && (typeof v === 'string' || (Math.abs(v.x) <= 100000 && Math.abs(v.y) <= 100000));
       case 'display': return v === null || (Number.isInteger(v) && v >= 0 && v <= 16);
-      case 'number': return isNum(v) && v >= f.min && v <= f.max;
+      case 'number': return isNum(v) && v >= f.min && v <= f.max && (!f.int || Number.isInteger(v));
       case 'hotkey': return validAccelerator(v) && v.length <= 64;
       case 'family': return v === '' || (typeof v === 'string' && FAMILY_RE.test(v));
       case 'enum': return typeof v === 'string' && f.options.indexOf(v) >= 0;
@@ -5820,6 +5834,7 @@
     composeNow: composeNow,
     pendingStop: pendingStop,
     pendingStopText: pendingStopText,
+    sessionPill: sessionPill,
     summaryRows: summaryRows,
     nowSummary: nowSummary,
     validOnboardingBody: validOnboardingBody,

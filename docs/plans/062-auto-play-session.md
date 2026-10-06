@@ -40,3 +40,39 @@ input, no memory read, no client file edit.
 Depends on: 008, 046.
 
 Dependency guard: before writing code the lane checks that `server/ew/gamewatch.py` (plan 008) and `server/ew/summary.py` (plan 046) exist. If any is missing, the lane changes nothing, writes `"status": "blocked", "needs": ["008", "046"]` into its progress JSON (`ops/loop/control/progress/p062-build.json`) and exits 0.
+
+## As-built deviations
+
+1. Grace timer: GameWatch gains `pollers` (`fn(state, at)` after every poll)
+   and `PlaySession.tick` closes past the grace. Alternatives: a PlaySession
+   thread; lazy close on read. Why: listeners fire on change only and the 2 s
+   poll thread already exists; no second thread. Reverses if: GameWatch grows
+   a timer API.
+2. Settings keys are `play.auto_session` / `play.grace_s` (plan 030 keys are
+   dotted; the node parity test requires it), shown in a new "Play session"
+   Settings group; the client `number` field gains `int: true` so 120.5 is
+   refused before the server 400. Reverses if: the operator renames them.
+3. GET `/api/grind` gains `session: {auto, play}` (`play` = {state: open, id,
+   start, spot} or null) and `active.auto`. Why: the pill needs only `auto`;
+   `play` lets a later card show the play window without a new route.
+   Reverses if: a dedicated `/api/play` route is planned.
+4. An auto-closed grind session is logged with 0 silver / 0 trash; a plan 040 /
+   063 loot import (or delete + relog) values it. Alternatives: leave it open
+   for typed silver (that is the retired prompt). Reverses if: a silver source
+   other than the operator appears.
+5. A manual Stop also closes the play session (its window goes to the summary)
+   and suppresses auto-open only while the game is up; suppression clears when
+   the game is next seen `not_running` (the "next login"). A Stop with the game
+   already down does not suppress. Why: otherwise a Stop during the grace
+   would block the next real login. Reverses if: the operator wants Stop to
+   suppress for the whole day.
+6. `running` (launcher / character select) neither opens a session nor arms
+   the grace; only `not_running` / `disconnected` arm it. The close time is the
+   moment the game left `logged_in` (else the last minute-refreshed `seen`).
+   Reverses if: plan 008 learns a distinct character-select state.
+7. A manual grind session already running at login is left alone: the play
+   session opens unbound, closes without stopping it, and the plan 046
+   pending-stop prompt still fires for it. Reverses if: the operator wants
+   manual sessions auto-closed too.
+
+refute-rounds: 0/3 (build lane; the verifier runs at merge).
