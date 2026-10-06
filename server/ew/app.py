@@ -8,7 +8,8 @@ assets, browser fallback),
 adds its `suggested` coupon block),
 /api/deadeye (plan 007; /api/deadeye/enhance GET plan 035; /api/deadeye/shopping GET plan 037;
 /api/deadeye/calc GET plan 055), /api/game (plan 008), /api/leveling (plan 011),
-/api/spots (plan 012, GET only), /api/bosses (plan 031), /api/settings (plan 030), /api/pets
+/api/spots (plan 012, GET only), /api/bosses (plan 031; plan 072 adds its `drift`
+block), /api/settings (plan 030), /api/pets
 (plan 043), /api/inventory (plan 045), /api/mounts (plan 044), /api/summary (plan 046),
 /api/onboarding (plan 051), /api/crafting (plan 054), /api/imperial (plan 053),
 /api/overlay/context (plan 067; SSE `overlay_context` on change),
@@ -34,9 +35,9 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import (__version__, autotick, autowatch, bosses, context, coupons, crafting, deadeye, detect,
-               enhance, eventnotices, events, gamewatch, grind, imperial, inventory, itemnames, leveling,
-               maint, market, mounts, ocr, ocrauto, onboarding, pets,
+from . import (__version__, autotick, autowatch, bossdrift, bosses, context, coupons, crafting, deadeye,
+               detect, enhance, eventnotices, events, gamewatch, grind, imperial, inventory, itemnames,
+               leveling, maint, market, mounts, ocr, ocrauto, onboarding, pets,
                ports,
                playsession, progress, settings, shopping, single, spots, summary, today,
                weekly, whatnow, xpbooks)
@@ -152,7 +153,7 @@ class EWServer(ThreadingHTTPServer):
                  ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
                  coupon_client=None, coupon_spawn=None, bosses_clock=None,
                  config_path=None, notice_client=None, notice_spawn=None, detector=None,
-                 context_clock=None):
+                 context_clock=None, drift_client=None, drift_spawn=None):
         super().__init__(addr, Handler)
         # Plan 065: read-only BDO folder auto-detect; only main() passes one, so
         # no test ever probes the real disk or registry.
@@ -241,6 +242,9 @@ class EWServer(ThreadingHTTPServer):
             auto_add=lambda: self.settings.view()["settings"]["notices.auto_add"])
         # Plan 031: NA world boss table + operator loot ticks.
         self.bosses = bosses.BossService(self.store, clock=bosses_clock or time.time)
+        # Plan 072: daily robots-gated diff against a public NA table; off
+        # unless a client is passed (only main() passes the live one).
+        self.drift = bossdrift.DriftService(drift_client, self.bosses.table, spawn=drift_spawn)
         # Plan 043: operator-typed pet roster over the tracked pets.json rules.
         self.pets = pets.PetService(self.store)
         # Plan 045: operator-typed weight / storage planner; VP from plan 005's
@@ -400,9 +404,11 @@ class EWServer(ThreadingHTTPServer):
         return dict(self.autotick.decorate(body),
                     weekly_plan=self.weekly.view(), dice=self.dice.status())
 
-    def bosses_view(self, body=None):
-        """GET /api/bosses: plan 031 table + loot ticks + plan 068 `suggested`."""
-        return self.autotick.boss_view(self.bosses.view() if body is None else body)
+    def bosses_view(self, body=None, refresh=False):
+        """GET /api/bosses: plan 031 table + loot ticks + plan 068 `suggested` +
+        plan 072 `drift` (only GET starts its once-a-day refresh)."""
+        out = self.autotick.boss_view(self.bosses.view() if body is None else body)
+        return dict(out, drift=self.drift.view(refresh=refresh))
 
     def server_close(self):
         self.ocr_auto.stop()
@@ -418,7 +424,7 @@ class EWServer(ThreadingHTTPServer):
                 "sources": {"market": self.market.source(), "today": self.today.source(),
                             "profile": self.progress.source(), "grind": self.grind.source(),
                             "events": self.events.source(), "coupons": self.coupons.source(),
-                            "deadeye": self.deadeye.source(),
+                            "deadeye": self.deadeye.source(), "bossdrift": self.drift.source(),
                             "game": self.game.source(), "leveling": self.leveling.source()},
                 "now": _now_iso()}
 
@@ -531,7 +537,7 @@ class Handler(BaseHTTPRequestHandler):
             self.server.notices.view(refresh=False)  # plan 064: import cached Hot Time reads
             return self._send(200, self.server.leveling.view())
         if path == "/api/bosses":
-            return self._send(200, self.server.bosses_view())
+            return self._send(200, self.server.bosses_view(refresh=True))
         if path == "/api/overlay/context":
             return self._send(200, self.server.context.view())
         if path == "/api/spots":
@@ -889,7 +895,7 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                 ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
                 coupon_client=None, coupon_spawn=None, bosses_clock=None,
                 config_path=None, notice_client=None, notice_spawn=None, detector=None,
-                context_clock=None):
+                context_clock=None, drift_client=None, drift_spawn=None):
     return EWServer(("127.0.0.1", port), store_root=store_root, commit=commit,
                     sse_interval=sse_interval, market_client=market_client,
                     market_seed=market_seed, today_clock=today_clock,
@@ -901,7 +907,18 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                     coupon_client=coupon_client, coupon_spawn=coupon_spawn,
                     bosses_clock=bosses_clock, config_path=config_path,
                     notice_client=notice_client, notice_spawn=notice_spawn,
-                    detector=detector, context_clock=context_clock)
+                    detector=detector, context_clock=context_clock,
+                    drift_client=drift_client, drift_spawn=drift_spawn)
+
+
+def _drift_client():
+    """Plan 072: the live drift client when the data file carries a valid
+    `drift` block; otherwise the check stays off (state unknown)."""
+    try:
+        cfg = bossdrift.config(bosses.load_table())
+    except ValueError:
+        return None
+    return bossdrift.DriftClient(cfg) if cfg is not None else None
 
 
 def main(argv=None, probe=None):
@@ -916,7 +933,8 @@ def main(argv=None, probe=None):
                       detector=detect.Detector(config=lambda: gamewatch.config_bdo(REPO_ROOT)),
                       coupon_client=coupons.CouponClient() if cfg["coupons.check"] else None,
                       notice_client=(eventnotices.NoticeClient()
-                                     if cfg["events.notice_check"] else None))
+                                     if cfg["events.notice_check"] else None),
+                      drift_client=_drift_client())
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
