@@ -2930,6 +2930,10 @@
   // Plan 018 XP epochs: server levels.validate_epoch (printable ASCII source).
   const EPOCH_ID_RE = /^[a-z0-9-]{1,40}$/;
   const EPOCH_SOURCE_MAX = 200;
+  // Plan 060 Combat Secret Books: server xpbooks.SIZES / MAX_N.
+  const BOOK_SIZES = ['small', 'medium', 'large', 'xl'];
+  const BOOK_SHORT = { small: 'S', medium: 'M', large: 'L', xl: 'XL' };
+  const BOOK_N_MAX = 99;
 
   function validAscii(t, max, allowEmpty) {
     return typeof t === 'string' && (allowEmpty === true || t.trim().length > 0) && t.length <= max &&
@@ -2969,6 +2973,17 @@
         typeof v.starts_utc === 'string' && ISO_TS.test(v.starts_utc) && validAscii(v.label, HOT_LABEL_MAX) &&
         validAscii(v.source, EPOCH_SOURCE_MAX) && typeof v.verified === 'boolean';
     }
+    if (k === 'book_add') {
+      const keys = Object.keys(plainObject(v) ? v : {});
+      return plainObject(v) && BOOK_SIZES.indexOf(v.size) >= 0 && Number.isInteger(v.n) && v.n !== 0 &&
+        v.n >= -BOOK_N_MAX && v.n <= BOOK_N_MAX && keys.every(function (x) { return ['size', 'n', 'activity'].indexOf(x) >= 0; }) &&
+        (!('activity' in v) || validRef(v.activity, EPOCH_ID_RE));
+    }
+    if (k === 'book_use') {
+      return exact(v, ['size', 'pct_before', 'pct_after']) && BOOK_SIZES.indexOf(v.size) >= 0 &&
+        validXpPct(v.pct_before) && validXpPct(v.pct_after) && v.pct_before !== v.pct_after;
+    }
+    if (k === 'book_del') return Number.isInteger(v) && v >= 0;
     if (k === 'hot_add') {
       return exact(v, ['days', 'start', 'end', 'label', 'pct']) && validDays(v.days) &&
         typeof v.start === 'string' && HHMM_RE.test(v.start) && typeof v.end === 'string' &&
@@ -3141,6 +3156,8 @@
       kill_xp_cap: typeof d.kill_xp_cap === 'string' ? d.kill_xp_cap : null,
       // Plan 024 level-gated deadlines, already decorated with state by the server.
       deadlines: (Array.isArray(d.deadlines) ? d.deadlines : []).map(deadlineBrief).filter(function (x) { return x !== null; }),
+      // Plan 060 Combat Secret Book ledger (null on a pre-060 server).
+      books: normalizeBooks(d.books),
       samples: (Array.isArray(d.samples) ? d.samples : []).filter(plainObject)
     };
   }
@@ -3201,6 +3218,102 @@
     const late = rows.filter(function (b) { return b.state === 'late'; });
     const b = (late.length ? late : rows)[0];
     return { text: b.label + ' Lv ' + b.needs_level + ' ' + deadlinePill(b).text, cls: deadlinePill(b).cls };
+  }
+
+  // ---- plan 060: Combat Secret Book ledger ----
+  function normalizeBooks(b) {
+    if (!plainObject(b) || typeof b.available !== 'boolean') return null;
+    const dl = b.deadline;
+    if (!b.available) {
+      return { available: false, min_level: inRange(b.min_level, LEVEL) ? b.min_level : 60,
+        error: typeof b.error === 'string' ? b.error : null,
+        deadline: plainObject(dl) && typeof dl.label === 'string' && inRange(dl.needs_level, LEVEL) &&
+          typeof dl.enrol_by_utc === 'string' ? { label: dl.label, needs_level: dl.needs_level, enrol_by_utc: dl.enrol_by_utc } : null };
+    }
+    const owned = {};
+    const per = {};
+    const pb = plainObject(b.per_book) ? b.per_book : {};
+    const ow = plainObject(b.owned) ? b.owned : {};
+    const tn = plainObject(b.to_next) ? b.to_next : null;
+    const toNext = tn ? {} : null;
+    BOOK_SIZES.forEach(function (s) {
+      owned[s] = Number.isInteger(ow[s]) && ow[s] >= 0 ? ow[s] : 0;
+      const p = pb[s];
+      per[s] = plainObject(p) && isNum(p.pct) ? { pct: p.pct, observed: p.observed === true,
+        uses: Number.isInteger(p.uses) ? p.uses : 0, flag: typeof p.flag === 'string' ? p.flag : null } : null;
+      if (toNext) toNext[s] = Number.isInteger(tn[s]) && tn[s] >= 0 ? tn[s] : null;
+    });
+    const named = function (x) { return plainObject(x) && typeof x.name === 'string'; };
+    return {
+      available: true, error: null, owned: owned, per_book: per, flagged: b.flagged === true,
+      owned_pct: isNum(b.owned_pct) ? b.owned_pct : 0, to_next: toNext,
+      pct_week: isNum(b.pct_week) ? b.pct_week : 0,
+      eta_next_with_books_s: isNum(b.eta_next_with_books_s) ? b.eta_next_with_books_s : null,
+      sizes: (Array.isArray(b.sizes) ? b.sizes : []).filter(function (x) { return named(x) && BOOK_SIZES.indexOf(x.id) >= 0; }),
+      activities: (Array.isArray(b.activities) ? b.activities : []).filter(function (x) {
+        return named(x) && typeof x.activity === 'string' && EPOCH_ID_RE.test(x.activity);
+      }),
+      used: (Array.isArray(b.used) ? b.used : []).filter(function (u) {
+        return plainObject(u) && Number.isInteger(u.index) && BOOK_SIZES.indexOf(u.size) >= 0 && isNum(u.gain);
+      })
+    };
+  }
+
+  function fmtBookPct(v) {
+    return isNum(v) ? String(Math.round(v * 100) / 100) : '0';
+  }
+
+  // "Books: +22.5 % owned, +1 %/week expected (Lv 66 values, verify)"; below
+  // Lv 60 "books from Lv 60" (+ the Lv 60 deadline, e.g. Olvia Academy by Nov 5).
+  function booksLine(b) {
+    const n = normalizeBooks(b);
+    if (!n) return '';
+    if (!n.available) {
+      if (n.error) return 'book table: ' + n.error;
+      const dl = n.deadline;
+      return 'books from Lv ' + n.min_level + (dl ? ' - ' + dl.label + ' Lv ' + dl.needs_level + ' by ' + fmtMonthDay(dl.enrol_by_utc) : '');
+    }
+    const flags = BOOK_SIZES.map(function (s) { return n.per_book[s] && n.per_book[s].flag; }).filter(function (f) { return f; });
+    return 'Books: +' + fmtBookPct(n.owned_pct) + ' % owned, +' + fmtBookPct(n.pct_week) + ' %/week expected' +
+      (flags.length ? ' (' + flags[0].replace(/ value, verify$/, ' values, verify') + ')' : '');
+  }
+
+  // "to next: 8 L / 4 XL / 60 M / 300 S" (largest size first), '' without a pct.
+  function booksToNextText(b) {
+    const n = normalizeBooks(b);
+    if (!n || !n.available || !n.to_next) return '';
+    const parts = BOOK_SIZES.slice().reverse().filter(function (s) { return n.to_next[s] !== null; })
+      .map(function (s) { return n.to_next[s] + ' ' + BOOK_SHORT[s]; });
+    return parts.length ? 'to next: ' + parts.join(' / ') : '';
+  }
+
+  // Book forms -> {book_add} / {book_use} body or an error. add: size, n
+  // ("3", "-1" corrects), optional activity id; use: size + XP % before / after.
+  function parseBookForm(form) {
+    const f = form || {};
+    const size = typeof f.size === 'string' ? f.size : '';
+    if (BOOK_SIZES.indexOf(size) < 0) return { ok: false, error: 'pick a book size' };
+    if (f.op === 'use') {
+      const pct = function (v) {
+        const t = (v === undefined || v === null ? '' : String(v)).trim().replace(/%$/, '').trim().replace(',', '.');
+        return PCT_RE.test(t) ? Number(t) : NaN;
+      };
+      const a = pct(f.before);
+      const z = pct(f.after);
+      if (!validXpPct(a) || !validXpPct(z)) return { ok: false, error: 'XP % before / after: 0-100, up to 3 decimals' };
+      if (a === z) return { ok: false, error: 'XP % after must differ from before' };
+      return { ok: true, body: { book_use: { size: size, pct_before: a, pct_after: z } } };
+    }
+    const t = (f.n === undefined || f.n === null ? '' : String(f.n)).trim();
+    const n = /^[+-]?\d{1,2}$/.test(t) ? Number(t) : NaN;
+    if (!Number.isInteger(n) || n === 0) return { ok: false, error: 'count: a whole number -' + BOOK_N_MAX + '..' + BOOK_N_MAX + ', not 0' };
+    const body = { size: size, n: n };
+    const act = typeof f.activity === 'string' ? f.activity.trim() : '';
+    if (act) {
+      if (!EPOCH_ID_RE.test(act)) return { ok: false, error: 'bad activity' };
+      body.activity = act;
+    }
+    return { ok: true, body: { book_add: body } };
   }
 
   // Live hot status `since` the fetch: {active, next, stack, due}. due = a
@@ -5594,6 +5707,11 @@
     fmtDays: fmtDays,
     DAY_NAMES: DAY_NAMES,
     normalizeLeveling: normalizeLeveling,
+    normalizeBooks: normalizeBooks,
+    booksLine: booksLine,
+    booksToNextText: booksToNextText,
+    parseBookForm: parseBookForm,
+    BOOK_SIZES: BOOK_SIZES,
     hotLive: hotLive,
     levelingLine: levelingLine,
     fmtLevelLine: fmtLevelLine,

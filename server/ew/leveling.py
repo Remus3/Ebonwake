@@ -351,12 +351,16 @@ class LevelingService:
     `data/xp_epochs.json` rows (`epochs`, injected for tests) merged with the
     operator's added / deleted ones; a bad tracked file degrades to none.
     Plan 024 deadlines work the same way: tracked `data/deadlines.json` rows
-    (`deadlines`, injected for tests) + "deadlines_added" / "deadlines_deleted"."""
+    (`deadlines`, injected for tests) + "deadlines_added" / "deadlines_deleted".
+    Plan 060: `books` is the Combat Secret Book ledger (xpbooks.XpBooksService,
+    its own store domain); without one the view's `books` is None."""
 
-    def __init__(self, store, clock=time.time, buffs=None, epochs=None, deadlines=None):
+    def __init__(self, store, clock=time.time, buffs=None, epochs=None, deadlines=None,
+                 books=None):
         self.store = store
         self.clock = clock
         self.buffs = buffs
+        self.books = books
         self.seq = 0
         self.epoch_error = None
         self.deadline_error = None
@@ -474,6 +478,8 @@ class LevelingService:
                  + [{"name": b.get("name"), "pct": b["xp_pct"]} for b in buffs])
         nxt_ms = next_milestone(level, doc["milestones"])
         tracked = {e["id"] for e in self.tracked_epochs}
+        deadlines = self._deadline_rows(doc, now, level, pct, rate)
+        books = None if self.books is None else self.books.view(level, pct, rate, deadlines)
         return {"now": _iso(now), "level": level, "pct": pct, "level_source": level_source,
                 "rate_pct_h": None if rate is None else round(rate, 3),
                 "eta_next_s": eta_next_s(pct, rate),
@@ -490,7 +496,8 @@ class LevelingService:
                 "epochs": [dict(_epoch_brief(e, now), tracked=e["id"] in tracked)
                            for e in epochs],
                 "epoch_error": self.epoch_error,
-                "deadlines": self._deadline_rows(doc, now, level, pct, rate),
+                "deadlines": deadlines,
+                "books": books,
                 "deadline_error": self.deadline_error,
                 # the newest STARTED epoch that carries caps: a later operator
                 # epoch (no caps) does not hide them (refute r1 minor 2)
@@ -653,6 +660,31 @@ class LevelingService:
             if did in {d["id"] for d in self.tracked_deadlines}:
                 doc["deadlines_deleted"] = sorted(set(doc["deadlines_deleted"]) | {did})
             self._save(doc)
+        return self.view()
+
+    # Plan 060: Combat Secret Book ledger ops (validated by xpbooks).
+
+    def _books(self):
+        if self.books is None:
+            raise ValueError("book ledger unavailable")
+        return self.books
+
+    def book_add(self, arg):
+        """{size, n[, activity]}."""
+        self._books().add(arg)
+        self.seq += 1
+        return self.view()
+
+    def book_use(self, arg):
+        """{size, pct_before, pct_after} at the current typed level."""
+        level, pct, _ = _level_now(self._load()["samples"])
+        self._books().use(arg, level if pct is not None else None)
+        self.seq += 1
+        return self.view()
+
+    def book_del(self, idx):
+        self._books().delete(idx)
+        self.seq += 1
         return self.view()
 
     def set_milestones(self, arg):

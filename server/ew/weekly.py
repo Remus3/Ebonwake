@@ -204,6 +204,14 @@ class WeeklyService:
                 "character": {"level": _stat(ch, "level"), "ap": _stat(ch, "ap"),
                               "aap": _stat(ch, "aap"), "dp": _stat(ch, "dp")}}
 
+    def counts(self):
+        """{id: {done, per_week}} this period (plan 060 book expectation); no
+        character or bracket feed is read."""
+        now = self._now()
+        ticks = self._ticks()
+        return {r["id"]: {"done": min(len(self._in_period(r, ticks, now)), r["per_week"]),
+                          "per_week": r["per_week"]} for r in self.rows}
+
     def _find(self, rid):
         if not isinstance(rid, str) or not ID_RE.match(rid):
             raise ValueError("id must match ^[a-z0-9-]{1,40}$")

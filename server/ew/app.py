@@ -35,7 +35,7 @@ from urllib.parse import parse_qs
 from . import (__version__, bosses, coupons, crafting, deadeye, enhance, events, gamewatch, grind,
                imperial, inventory, itemnames, leveling, market, mounts, ocr, onboarding, pets,
                ports,
-               progress, settings, shopping, single, spots, summary, today, weekly)
+               progress, settings, shopping, single, spots, summary, today, weekly, xpbooks)
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -195,8 +195,12 @@ class EWServer(ThreadingHTTPServer):
             prices=lambda iid: market.price_of(self.market.client.sublist(iid)["data"]),
             tax=lambda: self.market.settings)
         # XP stack counts armed grind buffs that carry an xp_pct (plan 011).
-        self.leveling = leveling.LevelingService(self.store, clock=leveling_clock or time.time,
-                                                 buffs=lambda: self.grind.view()["buffs"])
+        # Plan 060: Combat Secret Book ledger; Black Shrine books follow plan 033 ticks.
+        self.leveling = leveling.LevelingService(
+            self.store, clock=leveling_clock or time.time,
+            buffs=lambda: self.grind.view()["buffs"],
+            books=xpbooks.XpBooksService(self.store, clock=leveling_clock or time.time,
+                                         weekly=lambda: self.weekly.counts()))
         # Plan 012: plan 004's character + plan 005's per-spot silver/h; plan
         # 018: the newest started XP epoch flags rows to re-verify.
         self.spots = spots.SpotsService.from_file(
@@ -521,10 +525,12 @@ class Handler(BaseHTTPRequestHandler):
         ops = {"sample": "sample", "sample_del": "sample_del", "hot_add": "hot_add",
                "hot_del": "hot_del", "milestones": "set_milestones",
                "epoch_add": "epoch_add", "epoch_del": "epoch_del",
-               "deadline_set": "deadline_set", "deadline_del": "deadline_del"}
+               "deadline_set": "deadline_set", "deadline_del": "deadline_del",
+               "book_add": "book_add", "book_use": "book_use", "book_del": "book_del"}
         if len(body) != 1 or not (set(ops) & set(body)):
             raise ValueError("body must be one of {sample|sample_del|hot_add|hot_del|"
-                             "milestones|epoch_add|epoch_del|deadline_set|deadline_del: ...}")
+                             "milestones|epoch_add|epoch_del|deadline_set|deadline_del|"
+                             "book_add|book_use|book_del: ...}")
         (op, arg), = body.items()
         return getattr(self.server.leveling, ops[op])(arg)
 

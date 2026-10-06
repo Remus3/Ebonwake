@@ -64,7 +64,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 057 | Deadeye notes autosave + safe open-in-browser for source links | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 058 | Loop resolves its own merge conflicts: re-dispatch a resolve lane | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 059 | Official event-notice import: maintenance-relative windows, suggest-only | [ ] open |
-| 060 | Combat Secret Book ledger: books per activity, observed XP, books-to-level | [ ] open |
+| 060 | Combat Secret Book ledger: books per activity, observed XP, books-to-level | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 
 Deep dive 2026-10-06 (research 0006): two plans. Ranking: 059 first - pays
 off every week from today, removes the biggest manual-typing chore on the
