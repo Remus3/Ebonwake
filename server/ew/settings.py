@@ -113,6 +113,8 @@ SPEC.update({
     # Plan 059: official event-notice suggestions + the maintenance start override.
     "events.notice_check": (_is_bool, True),
     "events.maintenance_start_utc": (valid_maint_start, ""),
+    # Plan 064: full-window notice reads are added (with undo), not suggested.
+    "notices.auto_add": (_is_bool, True),
     # Plan 062: login opens / exit closes the grind log; exit grace in seconds.
     "play.auto_session": (_is_bool, True),
     "play.grace_s": (lambda v: _is_int(v) and 60 <= v <= 600, 120),

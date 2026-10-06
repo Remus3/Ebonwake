@@ -68,7 +68,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 061 | Profile source robots gate: public BDO-REST-API host is robots-disallowed; self-host base, graceful degrade | [ ] open (priority) |
 | 062 | Auto play-session: login opens, exit closes the grind log (no Start/Stop, no exit prompt) | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 063 | Auto-OCR every new screenshot while logged in: confidence-gated auto-commit + review queue | [ ] open (priority) |
-| 064 | Official notice auto-import: maintenance UTC, Hot Time windows, events + coupons auto-add with undo | [ ] open (priority) |
+| 064 | Official notice auto-import: maintenance UTC, Hot Time windows, events + coupons auto-add with undo | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 065 | Zero-config first run: Documents / Steam library path auto-detect, self-ticking onboarding | [ ] open (priority) |
 | 066 | Progress inference from screenshot OCR: level, XP %, silver, buffs, AP/DP, book use | [ ] open |
 | 067 | Context-aware overlay: widgets chosen by state (in game, idle, maint/reset/boss soon), pins and blocks | [ ] open |

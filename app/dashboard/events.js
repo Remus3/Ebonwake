@@ -259,7 +259,43 @@
     const list = C.noticeRows(sug, S.data ? S.data.items : []);
     ui.noticePill.textContent = S.data ? (list.length ? list.length + ' new' : st.status) : '-';
     ui.noticePill.className = 'ew-pill ' + (list.length ? 'warn' : 'unknown');
-    if (!list.length) { empty(body, st.status === 'ok' ? 'No new event windows on the Events board.' : st.text); return; }
+    // Plan 064: the Steam backup hint, then what was auto-added (with undo).
+    const hint = C.noticeSteamHint(sug);
+    if (hint) {
+      const h = el('div', 'ew-muted', hint.text);
+      if (hint.titles.length) h.title = hint.titles.join('\n');
+      body.appendChild(h);
+    }
+    const auto = C.noticeAutoRows(sug);
+    if (auto.length) {
+      const abox = el('div', 'ew-list');
+      auto.forEach(function (a) {
+        const row = el('div', 'ew-erow');
+        const head = el('div', 'ew-ehead');
+        const t = el('span', 'ew-mname', a.title);
+        t.title = a.url;
+        head.appendChild(t);
+        head.appendChild(el('span', 'ew-badge', 'auto'));
+        const undo = el('button', 'ew-btn ew-bbtn', 'undo');
+        undo.type = 'button';
+        undo.title = 'remove what this notice added and hide it';
+        undo.addEventListener('click', function () {
+          const b = C.noticeUndoBody(a);
+          if (b && armed(undo, 'undo')) send(b, 'undone');
+        });
+        head.appendChild(undo);
+        const open = window.EWToast && window.EWToast.linkButton(a.url);
+        if (open) head.appendChild(open);
+        row.appendChild(head);
+        row.appendChild(el('div', 'ew-mname ew-muted', a.text));
+        abox.appendChild(row);
+      });
+      body.appendChild(abox);
+    }
+    if (!list.length) {
+      if (!auto.length) empty(body, st.status === 'ok' ? 'No new event windows on the Events board.' : st.text);
+      return;
+    }
     const box = el('div', 'ew-list' + (S.err || st.status === 'stale' ? ' ew-stale' : ''));
     list.forEach(function (c) {
       const row = el('div', 'ew-erow suggested');

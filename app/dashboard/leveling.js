@@ -131,7 +131,7 @@
     } else if (h.next) {
       ui.hot.textContent = 'next in ' + C.fmtEta(h.next.starts_in_s) + ' (+' + h.next.pct + '%)';
     } else {
-      ui.hot.textContent = d.hot_windows.length ? '-' : 'no windows set';
+      ui.hot.textContent = d.hot_windows.length || d.hot_auto.length ? '-' : 'no windows set';
     }
     ui.stack.textContent = '+' + h.stack + '%';
     ui.pill.textContent = h.stack > 0 ? 'XP +' + h.stack + '%' : 'no bonus';
@@ -149,8 +149,21 @@
     ui.wins.textContent = '';
     ui.samples.textContent = '';
     if (!d) return;
-    if (!d.hot_windows.length) ui.wins.appendChild(el('div', 'ew-muted', 'No Hot Time windows. Copy them from the event notice (pick PT for patch-note times).'));
+    if (!d.hot_windows.length && !d.hot_auto.length) ui.wins.appendChild(el('div', 'ew-muted', 'No Hot Time windows. Copy them from the event notice (pick PT for patch-note times).'));
     const now = Date.now();
+    // Plan 064: dated windows read from official Hot Time notices (undo on the Events tab).
+    d.hot_auto.forEach(function (w) {
+      const r = el('div', 'ew-lrow');
+      const t = el('span', 'ew-mname', String(w.label || w.id));
+      t.title = typeof w.source === 'string' ? w.source : '';
+      r.appendChild(t);
+      r.appendChild(el('span', 'ew-badge', 'auto'));
+      r.appendChild(el('span', 'ew-muted ew-gnum', C.hotAutoText(w, { now: now })));
+      r.appendChild(el('span', 'ew-mprice ew-gnum', '+' + w.pct + '%'));
+      const open = window.EWToast && typeof w.source === 'string' && window.EWToast.linkButton(w.source);
+      if (open) r.appendChild(open);
+      ui.wins.appendChild(r);
+    });
     d.hot_windows.forEach(function (w) {
       const r = el('div', 'ew-lrow');
       const t = el('span', 'ew-mname', String(w.label || w.id));

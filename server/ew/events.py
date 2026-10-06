@@ -144,6 +144,8 @@ def _clean_item(it):
     done_at = _iso_or_none(it.get("done_at")) if out["done"] else None
     if done_at is not None:
         out["done_at"] = done_at
+    if it.get("auto") is True:  # plan 064: added from an official notice
+        out["auto"] = True
     return out
 
 
@@ -276,8 +278,9 @@ class EventsService:
 
     # -- writes (each returns the GET body) -----------------------------------
 
-    def add(self, arg):
-        """`{kind, title, code?, rewards?, starts?, ends?, url?}`; body adds `item`."""
+    def add(self, arg, auto=False):
+        """`{kind, title, code?, rewards?, starts?, ends?, url?}`; body adds `item`.
+        `auto` (plan 064, server side only) marks a notice import."""
         arg = _keys(arg, "add", ("kind", "title"), ("kind", "title") + OPTIONAL)
         kind = arg["kind"]
         if kind not in KINDS:
@@ -305,9 +308,9 @@ class EventsService:
                 self._check_code_free(doc, code)
             iid = f"e{doc['next_id']}"
             doc["next_id"] += 1
-            doc["items"].append({"id": iid, "kind": kind, "title": title, "code": code,
-                                 "rewards": rewards, "starts": starts, "ends": ends,
-                                 "url": url, "done": False})
+            doc["items"].append(dict({"id": iid, "kind": kind, "title": title, "code": code,
+                                      "rewards": rewards, "starts": starts, "ends": ends,
+                                      "url": url, "done": False}, **({"auto": True} if auto else {})))
             self._save(doc)
             out = self.view()
         out["item"] = next(i for i in out["items"] if i["id"] == iid)
