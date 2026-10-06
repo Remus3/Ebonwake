@@ -47,3 +47,41 @@ Acceptance: tests green; gates green; verifier PASS within 3 rounds.
 ToS check: sourced data and operator toggles; no game input.
 
 Depends on: none.
+
+## As-built deviations (self-adjudicated 2026-10-05, build lane)
+
+1. `agris_roi(silver_h, scroll, rate_before, rate_after, now)` instead of
+   `(silver_h, scroll)`. Alternatives: read the stack and clock inside the
+   function. Why: the pure function stays clock- and store-free and
+   testable; the service passes the capped rate with and without the scroll
+   (so an armed scroll is never counted twice). Reverses if: a second caller
+   needs the two-argument form.
+2. ROI model: drops scale with (100 + rate) %, so the scroll's capped uplift
+   is worth `gain = (after - before) / (100 + before)` of the spot's silver
+   for its minutes; `break_even_silver_h = price / (hours * gain)` (None
+   when the scroll adds nothing, e.g. already at the 500 cap). Alternatives:
+   treat +50 % rate as +50 % silver (overstates value 4x at cap). Why: the
+   multiplier view is the documented BDFoundry mechanic; it is still an
+   estimate (drop rate does not touch trash amount) and the card says
+   "break-even". Reverses if: measured sessions show a different scaling.
+3. Data layout `{caps, agris_scroll, buffs: [...]}`; buff rows carry `id`
+   and optional `aliases` / `note`; `verified` is a date string or `false`
+   (the xp_buffs convention). Aliases map the seeded timer names ("Drop rate
+   scroll", "Old Moon book") to their rows for the plan 005 name match.
+   Why: stable ids for toggles / overrides; aliases avoid renaming the
+   operator's existing timers. Reverses if: plan 005 timers gain a row id.
+4. Overrides: stored in the grind store domain (`drop_on`, `drop_overrides`)
+   and written through `POST /api/grind {drop_override: {id, field,
+   value}}` (value null restores). The dashboard card exposes toggles only;
+   no override editor UI yet. Alternatives: a per-row edit form now. Why:
+   S-sized plan; the API is complete and an editor is a pure UI follow-up.
+   Reverses if: the operator asks to edit values from the card.
+5. Toggles accept every row, not just node / fame / night. Why: the tent,
+   guild and castle buffs are also passive for the operator. Reverses if:
+   never - a toggle is a no-op for an unused row.
+6. Spot average for the ROI: the running session's spot, else the newest
+   logged session's spot (plan 005 `silver_per_h`); none -> the verdict
+   asks for a session. Reverses if: a spot picker is added to the card.
+7. Ranges in the data (Tent +10..50 %, guild +2 / +10 %, Luck up to
+   +12.5 %) carry the top value plus a note; the operator overrides lower
+   tiers.

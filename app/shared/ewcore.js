@@ -1285,7 +1285,79 @@
       return (exact(v, ['name', 'minutes']) || (exact(v, ['name', 'minutes', 'xp_pct']) && inRange(v.xp_pct, XP_PCT))) &&
         validName(v.name) && inRange(v.minutes, BUFF_MINUTES);
     }
+    // Plan 038: passive drop source on/off, and an operator override (null = tracked value).
+    if (k === 'drop_toggle') return exact(v, ['id', 'on']) && validRef(v.id, BUFF_ID_RE) && typeof v.on === 'boolean';
+    if (k === 'drop_override') {
+      return exact(v, ['id', 'field', 'value']) && validRef(v.id, DROP_ROW_RE) &&
+        validRef(v.field, DROP_FIELD_RE) && validDropValue(v.value);
+    }
     return false;
+  }
+
+  // ---- Drop-rate card (plan 038) ----
+  // Every game number (caps, scroll price, dates) comes from GET /api/grind;
+  // these helpers only shape it for display.
+
+  const DROP_ROW_RE = /^([a-z0-9-]{1,40}|agris_scroll)$/;
+  const DROP_FIELD_RE = /^(rate_pct|amount_pct|bypass|base_pct|bypass_pct|beyond_pct|price_silver|minutes|per_week|sale_until_utc|removed_utc)$/;
+  const DROP_BYPASS = ['none', 'to400', 'to500'];
+
+  function validDropValue(v) {
+    if (v === null) return true;
+    if (isNum(v)) return v >= 0 && v <= 1e13;
+    return typeof v === 'string' && (DROP_BYPASS.indexOf(v) >= 0 || /^\d{4}-\d{2}-\d{2}$/.test(v));
+  }
+
+  function pctText(v) { return isNum(v) ? '+' + v + '%' : ''; }
+
+  // GET /api/grind body -> {error, line, wasted, amount, active[], toggles[], roi}.
+  // roi is null when the server has none or the scroll's removal date passed.
+  function dropView(d) {
+    const x = plainObject(d) && plainObject(d.drops) ? d.drops : null;
+    if (!x) return { error: 'no drop data', line: '', wasted: false, amount: '', active: [], toggles: [], roi: null };
+    if (typeof x.error === 'string' && x.error) {
+      return { error: x.error, line: '', wasted: false, amount: '', active: [], toggles: [], roi: null };
+    }
+    const n = function (v) { return isNum(v) ? v : 0; };
+    const wasted = n(x.wasted) > 0;
+    const line = n(x.rate_capped) + '% / ' + n(x.cap_used) + '% cap' +
+      (wasted ? ' (' + n(x.rate_total) + '% stacked, ' + n(x.wasted) + '% wasted)' : '');
+    const active = (Array.isArray(x.active) ? x.active : []).filter(plainObject).map(function (a) {
+      const bits = [pctText(a.rate_pct), isNum(a.amount_pct) ? pctText(a.amount_pct) + ' amount' : '']
+        .filter(function (s) { return s; });
+      return { id: a.id, name: String(a.name), text: bits.join(' '), via: a.via === 'timer' ? 'timer' : 'toggle' };
+    });
+    const toggles = (Array.isArray(x.buffs) ? x.buffs : []).filter(function (r) {
+      return plainObject(r) && typeof r.id === 'string' && typeof r.name === 'string';
+    }).map(function (r) {
+      const bits = [r.bypass === 'none' ? '' : 'bypass ' + String(r.bypass).replace('to', 'to ') + '%',
+        r.verified === false ? 'unverified' : (typeof r.verified === 'string' ? 'as of ' + r.verified : ''),
+        typeof r.note === 'string' ? r.note : '', typeof r.source === 'string' ? r.source : '']
+        .filter(function (s) { return s; });
+      const val = [pctText(r.rate_pct), isNum(r.amount_pct) ? pctText(r.amount_pct) + ' amt' : '']
+        .filter(function (s) { return s; }).join(' ');
+      return { id: r.id, name: r.name, value: val, on: r.on === true, timer: r.timer === true,
+        unverified: r.verified === false, overridden: r.overridden === true, title: bits.join(' - ') };
+    });
+    return { error: null, line: line, wasted: wasted, amount: n(x.amount_total) ? '+' + n(x.amount_total) + '% amount' : '',
+      active: active, toggles: toggles, roi: agrisLine(d.agris_roi) };
+  }
+
+  // Blessing of Agris ROI line, or null (no data / removed).
+  function agrisLine(r) {
+    if (!plainObject(r) || r.hidden === true) return null;
+    const be = isNum(r.break_even_silver_h) ? fmtSilver(r.break_even_silver_h) + '/h' : 'never (no uplift)';
+    let verdict = 'log a session to compare';
+    if (isNum(r.silver_h)) {
+      verdict = (r.worth ? 'worth it' : 'not worth it') + ' at ' + fmtSilver(r.silver_h) + '/h' +
+        (typeof r.spot_name === 'string' ? ' (' + r.spot_name + ')' : '') +
+        ', net ' + fmtSilver(r.net_silver);
+    }
+    const dates = (r.on_sale ? 'sale until ' + r.sale_until_utc + ', ' : 'sale over, ') + 'removed ' + r.removed_utc;
+    return {
+      text: 'Agris ' + fmtSilver(r.price_silver) + ' / ' + r.minutes + 'm: +' + r.gain_pct + '% drops, break-even ' + be,
+      verdict: verdict, worth: r.worth === true, dates: dates
+    };
   }
 
   // Grind form strings -> POST body, or an error for the operator.
@@ -3193,6 +3265,8 @@
     sortSpots: sortSpots,
     spotName: spotName,
     validGrindBody: validGrindBody,
+    dropView: dropView,
+    agrisLine: agrisLine,
     parseGrindForm: parseGrindForm,
     SPOT_GOALS: SPOT_GOALS,
     spotsPath: spotsPath,
