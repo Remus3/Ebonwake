@@ -28,3 +28,33 @@ Acceptance: tests green; gates green; verifier PASS within 3 rounds.
 ToS check: sourced static data, operator counts, cached read-only price.
 
 Depends on: none.
+
+## As-built deviations
+
+1. Range rows, not per-level rows (both data files).
+   Decision: `caphras.json` stores per-range stone totals (C0-C10 8,895
+   verified; C10-C20 29,403 `verified: false`, preview only);
+   `boss_crystal.json` stores the 60-120 per-level band, not a per-level list.
+   `caphras_cost` is exact when it crosses whole ranges and prorates linearly
+   inside a range, flagged `approx: true`; `weeks_to_reform` returns a
+   `{min, max}` band, exact when the operator types `per_level`.
+   Alternatives: invent a per-level split; refuse any endpoint inside a range.
+   Why: the cited sources publish only ranges / a band and the lane has no web
+   access; inventing numbers breaks the sourced-data rule, refusing hides a
+   useful estimate. Reverses if: a sourced per-level table lands (add a
+   `levels` list per slot; the range validator stays).
+2. Grade guard is data-driven and also covers Kharazad / Sovereign.
+   Decision: `allowed_grades` is `{grade: {allowed, verified, source}}`;
+   boss / green allowed (verified), blackstar / kharazad / sovereign
+   `allowed: false, verified: false`. The calc takes an optional `grade` that
+   overrides the slot's own; a not-allowed grade is a 400 ("Caphras is not
+   usable on Blackstar gear"). Alternatives: guard Blackstar only; allow the
+   unverified grades. Why: the plan marks all three unverified; refusing is the
+   safe default for a cost tool. Reverses if: a source shows Caphras on
+   Kharazad / Sovereign (flip `allowed`).
+3. Only one slot (`boss_main_pen`) ships. Why: it is the only sourced cost
+   series. Reverses if: more sourced ranges are added (data-only change).
+4. Calculators live on `DeadeyeService.calc` (injected `price(item_id)` =
+   `market.cached_price`, never fetches); `GET /api/deadeye/calc` with no
+   `kind` returns the tables the card needs. A typed `price` overrides the
+   cache (`price_source` operator / cache / null).

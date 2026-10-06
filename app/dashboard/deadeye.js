@@ -731,6 +731,99 @@
     return { card: c.card, body: body, pill: c.pill, form: f, msg: m };
   }
 
+  // ---- calculators (plan 055) ----
+  // Read-only GETs over sourced static data; the stone price comes from the
+  // market cache unless typed. Nothing is posted.
+
+  function calcInput(ph, title, max) {
+    const i = el('input');
+    i.type = 'text';
+    i.maxLength = max;
+    i.autocomplete = 'off';
+    i.placeholder = ph;
+    i.title = title;
+    return i;
+  }
+
+  function runCalc(kind) {
+    const f = S.ui.calc;
+    const form = kind === 'crystal'
+      ? { on_hand: f.onHand.value, levels: f.levels.value, per_level: f.perLevel.value }
+      : { slot: f.slot.value, from: f.from.value, to: f.to.value, grade: f.grade.value, price: f.price.value };
+    const out = kind === 'crystal' ? f.crystalOut : f.caphrasOut;
+    const q = C.calcQuery(kind, form);
+    out.textContent = '';
+    if (!q.ok) { out.appendChild(el('div', 'ew-err', q.error)); return; }
+    getJSON(q.path).then(function (r) {
+      const s = C.fmtCalc(r);
+      out.textContent = '';
+      out.appendChild(el('div', 'ew-gnum', s.main));
+      out.appendChild(el('div', 'ew-muted ew-gnum', s.sub));
+    }, function (e) { out.textContent = ''; out.appendChild(el('div', 'ew-err', e.message)); });
+  }
+
+  function loadCalcTables(f, pill) {
+    getJSON('/api/deadeye/calc').then(function (d) {
+      const cap = d && d.caphras;
+      if (!cap || !Array.isArray(cap.slots)) return;
+      f.slot.textContent = '';
+      cap.slots.forEach(function (s) {
+        const o = el('option', null, s.name);
+        o.value = s.id;
+        f.slot.appendChild(o);
+      });
+      f.grade.textContent = '';
+      const dflt = el('option', null, 'slot grade');
+      dflt.value = '';
+      f.grade.appendChild(dflt);
+      Object.keys(cap.grades || {}).forEach(function (g) {
+        const info = cap.grades[g] || {};
+        const o = el('option', null, g + (info.allowed ? '' : ' (no Caphras)') + (info.verified ? '' : ' ?'));
+        o.value = g;
+        f.grade.appendChild(o);
+      });
+      pill.textContent = typeof cap.price === 'number' ? 'stone ' + C.fmtSilver(cap.price) : 'no stone price';
+      pill.className = 'ew-pill ' + (typeof cap.price === 'number' ? 'ok' : 'unknown');
+    }, function (e) { pill.textContent = 'error'; pill.title = e.message; });
+  }
+
+  function calcCard() {
+    const c = card('Calculators', 'ew-dcalc');
+    const f = {};
+    const crystal = el('form', 'ew-form ew-dform');
+    crystal.appendChild(el('div', 'ew-muted', 'Jetina boss crystals: weeks to reform'));
+    const row1 = el('div', 'ew-dline');
+    f.onHand = calcInput('crystals on hand', 'Concentrated Boss Crystals on hand', 12);
+    f.levels = calcInput('levels', 'reform levels wanted (1-20)', 2);
+    f.perLevel = calcInput('per level (opt)', 'crystals per level if known (sources say 60-120)', 6);
+    [f.onHand, f.levels, f.perLevel].forEach(function (i) { row1.appendChild(i); });
+    row1.appendChild(button('ew-btn ew-bbtn', 'Weeks', 'weeks of Jetina exchanges', function () { runCalc('crystal'); }));
+    crystal.appendChild(row1);
+    f.crystalOut = el('div', 'ew-cbody');
+    crystal.appendChild(f.crystalOut);
+    crystal.addEventListener('submit', function (ev) { ev.preventDefault(); runCalc('crystal'); });
+    c.card.appendChild(crystal);
+    const caphras = el('form', 'ew-form ew-dform');
+    caphras.appendChild(el('div', 'ew-muted', 'Caphras: stones and silver (not on Blackstar)'));
+    const row2 = el('div', 'ew-dline');
+    f.slot = el('select');
+    f.slot.title = 'slot';
+    f.grade = el('select');
+    f.grade.title = 'gear grade (guard)';
+    f.from = calcInput('from', 'current Caphras level (0-20)', 2);
+    f.to = calcInput('to', 'target Caphras level (0-20)', 2);
+    f.price = calcInput('stone price (opt)', 'Caphras Stone price, e.g. 2.1m; blank = cached market price', 16);
+    [f.slot, f.grade, f.from, f.to, f.price].forEach(function (i) { row2.appendChild(i); });
+    row2.appendChild(button('ew-btn ew-bbtn', 'Cost', 'Caphras stones and silver', function () { runCalc('caphras'); }));
+    caphras.appendChild(row2);
+    f.caphrasOut = el('div', 'ew-cbody');
+    caphras.appendChild(f.caphrasOut);
+    caphras.addEventListener('submit', function (ev) { ev.preventDefault(); runCalc('caphras'); });
+    c.card.appendChild(caphras);
+    loadCalcTables(f, c.pill);
+    return { card: c.card, form: f };
+  }
+
   function mount(panel) {
     S.panel = panel;
     panel.classList.add('ew-deadeye');
@@ -738,14 +831,16 @@
     const p = planCard();
     const k = stacksCard();
     const sh = shopCard();
+    const ca = calcCard();
     panel.appendChild(n.card);
     panel.appendChild(p.card);
     panel.appendChild(k.card);
     panel.appendChild(sh.card);
+    panel.appendChild(ca.card);
     S.ui = Object.assign(n, {
       planBody: p.body, planPill: p.pill, form: p.form, msg: p.msg,
       stBody: k.body, st: k.st, stMsg: k.msg,
-      shopBody: sh.body, shopPill: sh.pill, shopForm: sh.form
+      shopBody: sh.body, shopPill: sh.pill, shopForm: sh.form, calc: ca.form
     });
     if (!S.table) loadTable(); // plan 036: families for the Agris picker
     if (!S.timer) poll(false);

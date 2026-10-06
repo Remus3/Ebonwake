@@ -638,3 +638,180 @@ def test_route_stacks_ops(dsrv):
     assert st == 200 and doc["stacks"]["crons"] == {"owned": 3, "weekly_income": 1}
     st, doc, _ = _req(dsrv, "POST", "/api/deadeye", {"fs_use": {"kind": "advice", "value": 40}})
     assert st == 400 and "error" in doc
+
+
+# --- plan 055: Jetina boss-crystal planner + Caphras cost calculator -------------
+
+def test_crystal_table_schema():
+    t = deadeye.load_crystal()
+    assert t["weekly"]["crystals"] == 155 and t["weekly"]["auras"] == 2
+    assert t["weekly"]["reset_weekday"] == "Thursday"
+    assert t["reform_cost"]["min"] == 60 and t["reform_cost"]["max"] == 120
+    for part in (t["weekly"], t["reform_cost"]):
+        assert isinstance(part["source"], str) and part["source"]
+        assert isinstance(part["verified"], bool)
+
+
+def test_caphras_table_schema():
+    t = deadeye.load_caphras()
+    assert t["item_id"] == 721003 and t["max_level"] == 20
+    g = t["allowed_grades"]
+    assert g["boss"]["allowed"] and g["green"]["allowed"]
+    for name in ("blackstar", "kharazad", "sovereign"):
+        assert g[name]["allowed"] is False and g[name]["verified"] is False
+    for slot in t["slots"]:
+        assert slot["grade"] in g and g[slot["grade"]]["allowed"]
+        ends = [(r["from"], r["to"]) for r in slot["ranges"]]
+        assert ends[0][0] == 0 and ends[-1][1] == t["max_level"]
+        assert all(a[1] == b[0] for a, b in zip(ends, ends[1:]))
+        for r in slot["ranges"]:
+            assert r["stones"] > 0 and r["source"] and isinstance(r["verified"], bool)
+    pen = next(s for s in t["slots"] if s["id"] == "boss_main_pen")
+    assert [r["verified"] for r in pen["ranges"]] == [True, False]  # C11-C20 preview only
+
+
+@pytest.mark.parametrize("bad", [
+    {"weekly": {"crystals": 0, "auras": 2, "reset_weekday": "Thursday", "source": "s",
+                "verified": True}},
+    {"reform_cost": {"min": 120, "max": 60, "source": "s", "verified": True}},
+    {"reform_cost": {"min": 60, "max": 120, "source": "", "verified": True}},
+])
+def test_crystal_validate_rejects(bad):
+    doc = dict(deadeye.load_crystal(), **bad)
+    with pytest.raises(ValueError):
+        deadeye.validate_crystal(doc)
+
+
+@pytest.mark.parametrize("ranges", [
+    [{"from": 0, "to": 10, "stones": 1, "source": "s", "verified": True}],  # stops short of 20
+    [{"from": 0, "to": 10, "stones": 1, "source": "s", "verified": True},
+     {"from": 11, "to": 20, "stones": 1, "source": "s", "verified": True}],  # gap
+    [{"from": 0, "to": 20, "stones": 0, "source": "s", "verified": True}],  # zero stones
+    [{"from": 0, "to": 20, "stones": 5, "source": "s"}],  # no verified flag
+])
+def test_caphras_validate_rejects(ranges):
+    doc = json.loads(json.dumps(deadeye.load_caphras()))
+    doc["slots"][0]["ranges"] = ranges
+    with pytest.raises(ValueError):
+        deadeye.validate_caphras(doc)
+
+
+def test_weeks_to_reform_band():
+    r = deadeye.weeks_to_reform(100, 3)
+    assert r["needed"] == {"min": 180, "max": 360}
+    assert r["short"] == {"min": 80, "max": 260}
+    assert r["weeks"] == {"min": 1, "max": 2}  # ceil(80/155), ceil(260/155)
+    assert r["weekly"] == 155 and r["auras_per_week"] == 2 and r["reset"] == "Thursday"
+    assert r["exact"] is False and r["levels"] == 3 and r["on_hand"] == 100
+
+
+def test_weeks_to_reform_edges():
+    covered = deadeye.weeks_to_reform(500, 2)
+    assert covered["short"] == {"min": 0, "max": 0} and covered["weeks"] == {"min": 0, "max": 0}
+    boundary = deadeye.weeks_to_reform(0, 1, per_level=155)
+    assert boundary["weeks"] == {"min": 1, "max": 1} and boundary["exact"] is True
+    over = deadeye.weeks_to_reform(0, 1, per_level=156)
+    assert over["weeks"] == {"min": 2, "max": 2}
+    assert deadeye.weeks_to_reform(0, 20)["weeks"] == {"min": 8, "max": 16}  # 1200/155, 2400/155
+
+
+@pytest.mark.parametrize("args", [(-1, 1), (0, 0), (0, 21), (True, 1), (0, 1.5), (10 ** 8, 1)])
+def test_weeks_to_reform_bad(args):
+    with pytest.raises(ValueError):
+        deadeye.weeks_to_reform(*args)
+
+
+def test_weeks_to_reform_bad_per_level():
+    for bad in (0, -5, 10 ** 6, "60"):
+        with pytest.raises(ValueError):
+            deadeye.weeks_to_reform(0, 1, per_level=bad)
+
+
+def test_caphras_sums_match_fixtures():
+    lo = deadeye.caphras_cost("boss_main_pen", 0, 10)
+    assert lo["stones"] == 8895 and lo["approx"] is False and lo["verified"] is True
+    hi = deadeye.caphras_cost("boss_main_pen", 10, 20)
+    assert hi["stones"] == 29403 and hi["verified"] is False  # preview-only range
+    full = deadeye.caphras_cost("boss_main_pen", 0, 20, price=2_000_000)
+    assert full["stones"] == 8895 + 29403 == 38298
+    assert full["silver"] == 38298 * 2_000_000 and full["price"] == 2_000_000
+    assert full["item_id"] == 721003 and full["grade"] == "boss"
+    assert lo["silver"] is None and lo["price"] is None
+
+
+def test_caphras_prorated_inside_range_is_approx():
+    r = deadeye.caphras_cost("boss_main_pen", 5, 15)
+    assert r["approx"] is True and r["stones"] == round(8895 / 2 + 29403 / 2)
+    assert deadeye.caphras_cost("boss_main_pen", 3, 3)["stones"] == 0
+
+
+def test_caphras_guard_blackstar():
+    with pytest.raises(ValueError, match="not usable on Blackstar"):
+        deadeye.caphras_cost("boss_main_pen", 0, 10, grade="blackstar")
+    for g in ("kharazad", "sovereign"):
+        with pytest.raises(ValueError, match="not usable"):
+            deadeye.caphras_cost("boss_main_pen", 0, 10, grade=g)
+    assert deadeye.caphras_cost("boss_main_pen", 0, 10, grade="green")["grade"] == "green"
+
+
+@pytest.mark.parametrize("args,kw", [
+    (("nope", 0, 10), {}), (("boss_main_pen", 10, 5), {}), (("boss_main_pen", -1, 5), {}),
+    (("boss_main_pen", 0, 21), {}), (("boss_main_pen", 0, 10), {"grade": "rainbow"}),
+    (("boss_main_pen", 0, 10), {"price": -1}), (("boss_main_pen", 0, 10), {"price": True}),
+])
+def test_caphras_bad(args, kw):
+    with pytest.raises(ValueError):
+        deadeye.caphras_cost(*args, **kw)
+
+
+def test_calc_query_uses_cached_price(tmp_path, clock):
+    seen = []
+
+    def price(iid):
+        seen.append(iid)
+        return 1_500_000
+    svc = deadeye.DeadeyeService(Store(tmp_path / "s"), clock=clock, price=price)
+    r = svc.calc({"kind": ["caphras"], "slot": ["boss_main_pen"], "from": ["0"], "to": ["10"]})
+    assert seen == [721003] and r["silver"] == 8895 * 1_500_000 and r["price_source"] == "cache"
+    r = svc.calc({"kind": ["caphras"], "slot": ["boss_main_pen"], "from": ["0"], "to": ["10"],
+                  "price": ["1000"]})
+    assert r["silver"] == 8895000 and r["price_source"] == "operator"
+    r = svc.calc({"kind": ["crystal"], "on_hand": ["100"], "levels": ["3"]})
+    assert r["weeks"] == {"min": 1, "max": 2}
+    view = svc.calc({})
+    assert view["crystal"]["weekly"]["crystals"] == 155
+    assert view["caphras"]["slots"][0]["id"] == "boss_main_pen"
+    assert view["caphras"]["price"] == 1_500_000
+
+
+def test_calc_query_no_price(tmp_path, clock):
+    svc = deadeye.DeadeyeService(Store(tmp_path / "s"), clock=clock)
+    r = svc.calc({"kind": ["caphras"], "slot": ["boss_main_pen"], "from": ["0"], "to": ["20"]})
+    assert r["silver"] is None and r["price_source"] is None
+
+
+@pytest.mark.parametrize("q", [
+    {"kind": ["x"]},
+    {"kind": ["crystal"], "levels": ["3"]},
+    {"kind": ["crystal"], "on_hand": ["a"], "levels": ["3"]},
+    {"kind": ["caphras"], "slot": ["boss_main_pen"], "from": ["0"]},
+    {"kind": ["caphras"], "slot": ["boss_main_pen"], "from": ["0"], "to": ["1e3"]},
+    {"kind": ["caphras"], "slot": ["boss_main_pen"], "from": ["0"], "to": ["10"],
+     "grade": ["blackstar"]},
+])
+def test_calc_query_bad(svc, q):
+    with pytest.raises(ValueError):
+        svc.calc(q)
+
+
+def test_route_calc(dsrv):
+    st, doc, _ = _req(dsrv, "GET", "/api/deadeye/calc?kind=crystal&on_hand=0&levels=1&per_level=60")
+    assert st == 200 and doc["weeks"] == {"min": 1, "max": 1}
+    st, doc, _ = _req(dsrv, "GET",
+                      "/api/deadeye/calc?kind=caphras&slot=boss_main_pen&from=0&to=10&price=2")
+    assert st == 200 and doc["stones"] == 8895 and doc["silver"] == 17790
+    st, doc, _ = _req(dsrv, "GET", "/api/deadeye/calc")
+    assert st == 200 and set(doc) == {"crystal", "caphras"}
+    st, doc, _ = _req(dsrv, "GET", "/api/deadeye/calc?kind=caphras&slot=boss_main_pen&from=0"
+                                   "&to=10&grade=blackstar")
+    assert st == 400 and "Blackstar" in doc["error"]

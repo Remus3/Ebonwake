@@ -1,0 +1,22 @@
+{
+ "schema": 1,
+ "item_id": 721003,
+ "item_name": "Caphras Stone",
+ "max_level": 20,
+ "min_enhance": "TRI",
+ "notes": "Plan 055. Research 0003 C14 / 0004 F24. Caphras: 20 levels on boss / green gear at TRI+. Costs are per-range stone totals (official wiki 146 ranges; C11-C20 from a search preview, verified false). Per-level splits are not published in the sources: an endpoint inside a range is prorated linearly and flagged approx.",
+ "allowed_grades": {
+  "boss": {"allowed": true, "verified": true, "source": "official wiki 146"},
+  "green": {"allowed": true, "verified": true, "source": "official wiki 146"},
+  "blackstar": {"allowed": false, "verified": false, "source": "research 0003 C14 (search preview)"},
+  "kharazad": {"allowed": false, "verified": false, "source": "research 0004 F24 (search preview)"},
+  "sovereign": {"allowed": false, "verified": false, "source": "research 0004 F24 (search preview)"}
+ },
+ "slots": [
+  {"id": "boss_main_pen", "name": "Boss main weapon (PEN)", "grade": "boss", "enhance": "PEN",
+   "ranges": [
+    {"from": 0, "to": 10, "stones": 8895, "source": "official wiki 146", "verified": true},
+    {"from": 10, "to": 20, "stones": 29403, "source": "official wiki 146 search preview", "verified": false}
+   ]}
+ ]
+}

@@ -2623,6 +2623,87 @@
     return isInt(id, 1) ? { add: { id: id, sid: 0 } } : null;
   }
 
+  // ---- Calculators (plan 055) ----
+  // GET /api/deadeye/calc?kind=crystal&on_hand&levels[&per_level] ->
+  // {needed, short, weeks: {min, max}, exact, weekly, reset, ...};
+  // kind=caphras&slot&from&to[&grade][&price] -> {stones, silver, approx,
+  // verified, price_source, ...}. Read-only GET over sourced static data.
+
+  const CALC_SLOT_RE = /^[a-z][a-z0-9_]{0,39}$/;
+
+  function calcInt(s, lo, hi) {
+    const t = String(s === undefined || s === null ? '' : s).trim().replace(/,/g, '');
+    if (!/^[0-9]{1,9}$/.test(t)) return null;
+    const n = Number(t);
+    return n >= lo && n <= hi ? n : null;
+  }
+
+  // Form strings -> {ok, path} for the calc GET, or {ok: false, error}.
+  function calcQuery(kind, form) {
+    const f = form || {};
+    const blank = function (v) { return v === undefined || v === null || String(v).trim() === ''; };
+    if (kind === 'crystal') {
+      const onHand = calcInt(f.on_hand || '0', 0, 1e7);
+      if (onHand === null) return { ok: false, error: 'crystals on hand: 0-10,000,000' };
+      const levels = calcInt(f.levels, 1, 20);
+      if (levels === null) return { ok: false, error: 'reform levels: 1-20' };
+      let q = 'kind=crystal&on_hand=' + onHand + '&levels=' + levels;
+      if (!blank(f.per_level)) {
+        const per = calcInt(f.per_level, 1, 1e5);
+        if (per === null) return { ok: false, error: 'crystals per level: 1-100,000' };
+        q += '&per_level=' + per;
+      }
+      return { ok: true, path: '/api/deadeye/calc?' + q };
+    }
+    if (kind === 'caphras') {
+      if (!(typeof f.slot === 'string' && CALC_SLOT_RE.test(f.slot))) return { ok: false, error: 'pick a slot' };
+      const from = calcInt(f.from || '0', 0, 20);
+      const to = calcInt(f.to, 0, 20);
+      if (from === null || to === null || to < from) return { ok: false, error: 'Caphras levels: 0 <= from <= to <= 20' };
+      let q = 'kind=caphras&slot=' + f.slot + '&from=' + from + '&to=' + to;
+      if (!blank(f.grade)) {
+        if (!CALC_SLOT_RE.test(String(f.grade))) return { ok: false, error: 'pick a grade' };
+        q += '&grade=' + f.grade;
+      }
+      if (!blank(f.price)) {
+        const p = parseSilver(f.price);
+        if (p === null || p > 1e12) return { ok: false, error: 'stone price: e.g. 2.1m or 2,100,000' };
+        q += '&price=' + p;
+      }
+      return { ok: true, path: '/api/deadeye/calc?' + q };
+    }
+    return { ok: false, error: 'unknown calculator' };
+  }
+
+  // One calc reply -> {main, sub} display strings.
+  function fmtCalc(r) {
+    const o = plainObject(r) ? r : {};
+    const band = function (b, unit) {
+      if (!plainObject(b) || !isInt(b.min, 0) || !isInt(b.max, 0)) return '-';
+      return (b.min === b.max ? fmtSilverExact(b.min) : fmtSilverExact(b.min) + '-' + fmtSilverExact(b.max)) + unit;
+    };
+    if (o.kind === 'crystal') {
+      const w = plainObject(o.weeks) ? o.weeks : {};
+      const main = w.max === 0 ? 'covered by crystals on hand' : band(o.weeks, ' wk') + ' of Jetina exchanges';
+      const sub = 'need ' + band(o.needed, '') + ', short ' + band(o.short, '') + '; ' +
+        (isInt(o.weekly, 1) ? o.weekly : '-') + '/wk, ' + (isInt(o.auras_per_week, 1) ? o.auras_per_week : '-') +
+        ' auras, resets ' + (typeof o.reset === 'string' ? o.reset : '-') +
+        (o.exact === true ? '' : ' (60-120/level band)');
+      return { main: main, sub: sub };
+    }
+    if (o.kind === 'caphras') {
+      const stones = isInt(o.stones, 0) ? fmtSilverExact(o.stones) : '-';
+      const silver = isNum(o.silver) ? fmtSilver(o.silver) + ' silver' : 'no price (watch the stone or type one)';
+      const flags = [];
+      if (o.approx === true) flags.push('prorated inside a range');
+      if (o.verified === false) flags.push('unverified data');
+      if (o.price_source === 'cache') flags.push('cached price');
+      return { main: (o.approx === true ? '~' : '') + stones + ' stones, ' + silver,
+        sub: 'C' + o.from + ' -> C' + o.to + (flags.length ? ' (' + flags.join(', ') + ')' : '') };
+    }
+    return { main: '-', sub: '' };
+  }
+
   // ---- Game state (plan 008) ----
   // GET /api/game -> {state, since, log_file, last_event, screenshots, configured}.
   // Display only: nothing here ever reaches the game.
@@ -5371,6 +5452,8 @@
     fmtShopLine: fmtShopLine,
     fmtShopping: fmtShopping,
     shopWatchBody: shopWatchBody,
+    calcQuery: calcQuery,
+    fmtCalc: fmtCalc,
     validLevelingBody: validLevelingBody,
     parseSampleForm: parseSampleForm,
     parseHotForm: parseHotForm,
