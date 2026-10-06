@@ -1,0 +1,42 @@
+{
+ "note": "Plan 044 mount data, hand-reviewed from cited pages (research 0003 section 1.5). Materials are what one T10 breed attempt asks for; whether a failed attempt consumes all of them is not stated by the source, so the attempt row is verified false.",
+ "kinds": [
+  {"kind": "horse", "max_level": 30},
+  {"kind": "donkey", "max_level": 30},
+  {"kind": "camel", "max_level": 20},
+  {"kind": "elephant", "max_level": 30}
+ ],
+ "t10": {
+  "names": ["Arduanatt", "Dine", "Doom"],
+  "parent_tier": 9,
+  "parent_level": 30,
+  "parents_note": "one male + one female T9 of the same type, both Lv 30",
+  "source": "https://www.blackdesertfoundry.com/dreamy-horses-tier-10/",
+  "verified": "2026-07-03",
+  "materials": [
+   {"key": "censer", "name": "Mythical Censer", "need": 1, "note": "used to breed the pair",
+    "source": "https://www.blackdesertfoundry.com/dreamy-horses-tier-10/", "verified": "2026-07-03"},
+   {"key": "royal_fern_root", "name": "Royal Fern Root", "need": 100,
+    "note": "Wapra / Liana daily-weekly quests; the time-gated bottleneck",
+    "source": "https://www.blackdesertfoundry.com/dreamy-horses-tier-10/", "verified": "2026-07-03"},
+   {"key": "flower_of_oblivion", "name": "Flower of Oblivion", "need": 100,
+    "note": "Imperial horse delivery of T6+",
+    "source": "https://www.blackdesertfoundry.com/dreamy-horses-tier-10/", "verified": "2026-07-03"},
+   {"key": "mythical_feather", "name": "Mythical Feather", "need": 10, "note": "",
+    "source": "https://www.blackdesertfoundry.com/dreamy-horses-tier-10/", "verified": "2026-07-03"}
+  ],
+  "per_attempt": {"note": "materials consumed per failed attempt: not stated by the source",
+                  "source": "https://www.blackdesertfoundry.com/dreamy-horses-tier-10/", "verified": false},
+  "pity": {"base_pct": 3, "per_fail_pct": 0.2, "cap_pct": 100,
+           "note": "success 3 percent base, +0.2 percent per failure",
+           "source": "https://www.blackdesertfoundry.com/dreamy-horses-tier-10/", "verified": "2026-07-03"}
+ },
+ "unlocks": [
+  {"kind": "camel", "name": "Camel", "min_level": 54,
+   "how": "free quest at Sand Grain Bazaar; max Lv 20, faster in desert",
+   "source": "https://www.blackdesertfoundry.com/elephants-and-camels-guide/", "verified": "2025-03-26"},
+  {"kind": "elephant", "name": "Mini elephant", "min_level": 55,
+   "how": "Shakatu's Villa quest; 30-40 M silver, 1,200 LT, 16 slots",
+   "source": "https://www.blackdesertfoundry.com/elephants-and-camels-guide/", "verified": "2025-03-26"}
+ ]
+}
