@@ -49,3 +49,47 @@ Depends on: 011, 018, 033.
 Dependency guard: before writing code the lane checks that `server/ew/leveling.py` (plan 011), `server/ew/data/xp_epochs.json` (plan 018) and `server/ew/weekly.py` (plan 033) exist. If any is missing, the lane changes nothing, writes `"status": "blocked", "needs": ["011", "018", "033"]` into its progress JSON (`ops/loop/control/progress/p060-build.json`) and exits 0.
 
 ## As-built deviations
+
+Self-adjudicated by the build lane (2026-10-06); each: decision /
+alternatives / why / reverses if.
+
+1. Ledger store domain. Decision: own store domain `xpbooks`
+   (`server/ew/xpbooks.py` `XpBooksService`), injected into
+   `LevelingService(books=...)`. Alternatives: a `books` key inside the
+   `leveling` doc. Why: `LevelingService._load` rebuilds the doc from known
+   keys, so an extra key would be dropped by every other leveling write.
+   Reverses if: the leveling doc gets a pass-through for unknown keys.
+2. Ledger shape. Decision: `{owned, used, added}`; `added` logs each
+   `book_add` {at, size, n, activity} (capped 200) and a use spent from the
+   owned count carries `from_owned`. Alternatives: only `{owned, used}`. Why:
+   the weekly expectation needs when / where books came from, and
+   `book_del` (undo a use) must give back only a book that was really spent.
+   Reverses if: book sources are tracked elsewhere.
+3. Weekly expectation. Decision: a source with a plan 033 `weekly_row`
+   (Black Shrine) expects `per_week x n` books (row capacity) and shows this
+   period's ticked `done x n`; other activities count the books the operator
+   added with that activity over the trailing 7 days. `WeeklyService.counts()`
+   is new (ticks only, no character / bracket feed). Alternatives: expected =
+   ticked count only (reads 0 every reset). Why: an expectation that resets
+   to zero each week makes the "with books" ETA jump. Reverses if: the
+   operator wants done-only.
+4. Data schema additions. Decision: sources carry `name` and `weekly_row`;
+   single-outcome activities (Black Shrine, Guild Boss, Altar, ranked PvP)
+   put the reward in `win` with `loss: null`; the file has top-level
+   `source`, `read`, `note`; `pct_at` keys load as int levels. Nearest-level
+   ties pick the lower level. Alternatives: a separate `reward` key. Why:
+   one schema for every source, deterministic fallback. Reverses if: a
+   source with three outcomes appears.
+5. Gain across a level. Decision: `pct_after < pct_before` counts as a
+   level-up (`100 - before + after`), recorded at the level the book was read
+   at. Alternatives: reject. Why: XL books (15 %) cross a level often.
+   Reverses if: book XP is shown to carry over differently.
+6. Corrections. Decision: `book_add` takes n in -99..99 (non-zero; negative
+   fixes a typo, never below 0); `book_use` with none owned is still
+   recorded (owned stays 0). `books_to_next` returns a count per size.
+   Why: the operator types counts from memory. Reverses if: never needed.
+7. Below Lv 60. Decision: the card shows "books from Lv 60" (+ the open
+   Lv 60 deadline, e.g. Olvia Academy) whenever the level is under 60 or
+   unknown, not just once. Alternatives: a dismissable one-time hint. Why:
+   no dismiss state to store; the line is one muted row. Reverses if: the
+   operator asks for it gone.

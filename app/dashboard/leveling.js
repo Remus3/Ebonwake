@@ -4,6 +4,7 @@
    window editor, milestones and recent samples sit in a details row that is
    collapsed by default (the tab must fit 1280x800 with no page scroll).
    Plan 024: one line + pill per level-gated deadline (Olvia Academy).
+   Plan 060: Combat Secret Books line, a "with books" ETA and the book ledger.
    Reads GET /api/leveling every 60 s and on each SSE `leveling` event; writes
    go through the dashboard preload (window.ewApi). Operator-typed data only;
    nothing is read from or sent to the game. Every node is built with DOM APIs -
@@ -116,6 +117,13 @@
     ui.epoch.hidden = !ui.epoch.textContent;
     ui.cap.textContent = d.kill_xp_cap ? 'Lv ' + d.level + ': ' + d.kill_xp_cap : '';
     ui.cap.hidden = !d.kill_xp_cap;
+    // Plan 060: Combat Secret Books line + a second ETA (grind + weekly books).
+    const bk = d.books;
+    ui.books.textContent = bk ? C.booksLine(bk) + (bk.available && C.booksToNextText(bk) ? ' - ' + C.booksToNextText(bk) : '') : '';
+    ui.books.hidden = !ui.books.textContent;
+    const withBooks = bk && bk.available;
+    ui.bkKey.hidden = ui.bkEta.hidden = !withBooks;
+    ui.bkEta.textContent = withBooks && bk.eta_next_with_books_s !== null ? C.fmtEta(bk.eta_next_with_books_s - since) : '-';
     const h = C.hotLive(d.hot, d.xp_stack_pct, S.at, now);
     if (h.active.length) {
       const a = h.active[0];
@@ -185,6 +193,7 @@
       r.appendChild(x);
       ui.epochs.appendChild(r);
     });
+    drawBooks(d.books);
     d.samples.forEach(function (s) {
       if (typeof s.ts !== 'string') return;
       const r = el('div', 'ew-lrow' + (s.pre_patch === true ? ' ew-stale' : ''));
@@ -201,6 +210,31 @@
       x.addEventListener('click', function () { send({ sample_del: s.ts }, 'sample deleted'); });
       r.appendChild(x);
       ui.samples.appendChild(r);
+    });
+  }
+
+  // Plan 060: book editor (owned counts, activity list, recent uses) - shown from Lv 60.
+  function drawBooks(bk) {
+    const ui = S.ui;
+    const on = !!(bk && bk.available);
+    ui.bk.box.hidden = !on;
+    ui.bk.used.textContent = '';
+    if (!on) return;
+    ui.bk.owned.textContent = 'owned: ' + C.BOOK_SIZES.map(function (s) { return bk.owned[s] + ' ' + s; }).join(', ');
+    if (ui.bk.act.options.length <= 1) {
+      bk.activities.forEach(function (a) { const o = el('option', null, a.name); o.value = a.activity; ui.bk.act.appendChild(o); });
+    }
+    bk.used.forEach(function (u) {
+      const r = el('div', 'ew-lrow');
+      r.appendChild(el('span', 'ew-mname', u.size + ' Lv ' + u.level));
+      r.appendChild(el('span', 'ew-mprice ew-gnum', '+' + u.gain + '%'));
+      const x = el('button', 'ew-tx', 'x');
+      x.type = 'button';
+      x.title = 'delete this use (the book goes back)';
+      x.setAttribute('aria-label', x.title);
+      x.addEventListener('click', function () { send({ book_del: u.index }, 'use deleted'); });
+      r.appendChild(x);
+      ui.bk.used.appendChild(r);
     });
   }
 
@@ -278,7 +312,7 @@
 
   function editor(ui) {
     const det = el('details', 'ew-ldet');
-    det.appendChild(el('summary', 'ew-muted', 'Hot Time windows, milestones, XP patch epochs, samples'));
+    det.appendChild(el('summary', 'ew-muted', 'Hot Time windows, milestones, XP patch epochs, books, samples'));
     ui.wins = el('div', 'ew-list');
     det.appendChild(ui.wins);
     // Add window: day toggles + times (zone picked, stored UTC) + label + pct.
@@ -360,10 +394,63 @@
       send(r.body, 'epoch saved');
     });
     det.appendChild(ef);
+    det.appendChild(booksEditor(ui));
     det.appendChild(el('div', 'ew-muted ew-lnote', 'recent samples'));
     ui.samples = el('div', 'ew-list');
     det.appendChild(ui.samples);
     return det;
+  }
+
+  function sizeSelect() {
+    const s = el('select', 'ew-lnum');
+    C.BOOK_SIZES.forEach(function (z) { const o = el('option', null, z); o.value = z; s.appendChild(o); });
+    s.title = 'Combat Secret Book size';
+    return s;
+  }
+
+  // Plan 060: "+n size (activity)" adds owned books; "used" records the XP %
+  // before / after one book (the observed value replaces the Lv 66 fallback).
+  function booksEditor(ui) {
+    const box = el('div');
+    box.hidden = true;
+    box.appendChild(el('div', 'ew-muted ew-lnote', 'Combat Secret Books'));
+    const owned = el('div', 'ew-muted ew-lnote', '');
+    box.appendChild(owned);
+    const af = el('form', 'ew-lform');
+    const asize = sizeSelect();
+    const n = input('ew-lnum', 3, 'n', 'books gained (-n corrects a typo)');
+    n.value = '1';
+    const act = el('select', 'ew-lname');
+    const none = el('option', null, '(no activity)');
+    none.value = '';
+    act.appendChild(none);
+    act.title = 'where the books came from (counts toward the weekly expectation)';
+    [asize, n, act].forEach(function (i) { af.appendChild(i); });
+    af.appendChild(button('Add', 'submit'));
+    af.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      const r = C.parseBookForm({ op: 'add', size: asize.value, n: n.value, activity: act.value });
+      if (!r.ok) { msg(r.error); return; }
+      send(r.body, 'books added');
+    });
+    box.appendChild(af);
+    const uf = el('form', 'ew-lform');
+    const usize = sizeSelect();
+    const before = input('ew-lnum', 8, 'XP % before', 'XP % before reading the book');
+    const after = input('ew-lnum', 8, 'XP % after', 'XP % after reading the book');
+    [usize, before, after].forEach(function (i) { uf.appendChild(i); });
+    uf.appendChild(button('Used', 'submit'));
+    uf.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      const r = C.parseBookForm({ op: 'use', size: usize.value, before: before.value, after: after.value });
+      if (!r.ok) { msg(r.error); return; }
+      send(r.body, 'book use logged').then(function (ok) { if (ok) { before.value = ''; after.value = ''; } });
+    });
+    box.appendChild(uf);
+    const used = el('div', 'ew-list');
+    box.appendChild(used);
+    ui.bk = { box: box, owned: owned, act: act, used: used };
+    return box;
   }
 
   function mount(panel) {
@@ -398,6 +485,9 @@
     ui.mile = stat(kv, 'milestone');
     ui.hot = stat(kv, 'Hot Time');
     ui.stack = stat(kv, 'XP stack');
+    ui.bkEta = stat(kv, 'with books');
+    ui.bkKey = ui.bkEta.previousSibling;
+    ui.bkKey.hidden = ui.bkEta.hidden = true;
     body.appendChild(kv);
     ui.deadlines = el('div', 'ew-list');
     ui.deadlines.hidden = true;
@@ -408,6 +498,9 @@
     ui.cap = el('div', 'ew-muted ew-lnote', '');
     ui.cap.hidden = true;
     body.appendChild(ui.cap);
+    ui.books = el('div', 'ew-muted ew-lnote', '');
+    ui.books.hidden = true;
+    body.appendChild(ui.books);
     ui.msg = el('div', 'ew-muted ew-msg', '');
     body.appendChild(ui.msg);
     body.appendChild(editor(ui));
