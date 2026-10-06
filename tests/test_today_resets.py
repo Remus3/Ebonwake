@@ -261,3 +261,41 @@ def test_route_add_with_rule_and_400s(tsrv):
     ]:
         st, body = _post(tsrv, {"add": {"title": "x", "kind": "weekly", "reset": bad}})
         assert st == 400 and msg in body["error"]
+
+
+# --- plan 056: dice grant points ---------------------------------------------------
+
+def test_dice_preset_grants():
+    rows = {r["name"]: r for r in today.load_presets()}
+    assert rows["Black Spirit's Adventure dice"]["grants_at_min"] == [0, 30, 60]
+    assert "grants_at_min" not in rows["Black Shrine (5/week)"]
+    assert today.dice_preset() == (FIVE_AM, [0, 30, 60], False)
+
+
+@pytest.mark.parametrize("grants", [[], [30, 0], [0, 0], [-1], [0, 1441], ["0"], [True],
+                                    list(range(11)), "0,30"])
+def test_dice_preset_bad_grants_rejected(tmp_path, grants):
+    p = tmp_path / "r.json"
+    p.write_text(json.dumps([{"name": "x", "reset": FIVE_AM, "source": "s", "verified": True,
+                              "grants_at_min": grants}]), encoding="ascii")
+    with pytest.raises(ValueError):
+        today.load_presets(p)
+    assert today.dice_preset(p) == (FIVE_AM, [0, 30, 60], False)
+
+
+def test_dice_preset_unknown_extra_field_rejected(tmp_path):
+    p = tmp_path / "r.json"
+    p.write_text(json.dumps([{"name": "x", "reset": FIVE_AM, "source": "s", "verified": True,
+                              "grants": [0]}]), encoding="ascii")
+    with pytest.raises(ValueError):
+        today.load_presets(p)
+
+
+def test_route_today_carries_dice(tsrv):
+    c = http.client.HTTPConnection("127.0.0.1", tsrv.server_address[1], timeout=5)
+    c.request("GET", "/api/today")
+    doc = json.loads(c.getresponse().read())
+    c.close()
+    assert set(doc["dice"]) == {"earned", "max", "next_at_min", "eta_utc", "played_min",
+                                "logged_in", "next_reset", "verified"}
+    assert doc["dice"]["next_reset"].endswith("T05:00:00+00:00")

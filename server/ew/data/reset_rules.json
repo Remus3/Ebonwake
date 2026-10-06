@@ -9,6 +9,7 @@
    "verified": true},
   {"name": "Black Spirit's Adventure dice",
    "reset": {"every": "day", "at": "05:00"},
+   "grants_at_min": [0, 30, 60],
    "source": "community guide 2023 (research 0003 section 1.6); unverified",
    "verified": false}
 ]

@@ -3770,9 +3770,9 @@
   // hands the overlay a query string. Default on (only a literal false turns
   // one off), except the WIDGETS_OPT_IN ones: default off, only a literal true
   // turns them on (plan 011 leveling, plan 013 season, plan 029 marketTicker,
-  // plan 032 worldBoss).
-  const WIDGETS = ['grindSession', 'grindBuff', 'eventsSoon', 'leveling', 'season', 'marketTicker', 'worldBoss'];
-  const WIDGETS_OPT_IN = ['leveling', 'season', 'marketTicker', 'worldBoss'];
+  // plan 032 worldBoss, plan 056 dice).
+  const WIDGETS = ['grindSession', 'grindBuff', 'eventsSoon', 'leveling', 'season', 'marketTicker', 'worldBoss', 'dice'];
+  const WIDGETS_OPT_IN = ['leveling', 'season', 'marketTicker', 'worldBoss', 'dice'];
 
   function optIn(k) { return WIDGETS_OPT_IN.indexOf(k) >= 0; }
 
@@ -3916,6 +3916,53 @@
 
   function ovServerRowHidden(text) {
     return text === 'ok' || ovQuiet(text);
+  }
+
+  // ---- Black Spirit's Adventure dice (plan 056) ----
+  // GET /api/today `dice` = {earned, max, next_at_min, eta_utc, played_min,
+  // logged_in, ...}: dice earned from logged-in minutes since the dice reset.
+  // The overlay counts eta_utc down locally; the Today tab only SUGGESTS the
+  // tick (the operator ticks; nothing auto-ticks).
+  const DICE_ITEM_ID = 'black-spirits-adventure-dice';
+  const DICE_ITEM_RE = /^black spirit'?s adventure dice$/i;
+
+  function isDiceItem(it) {
+    return plainObject(it) && (it.id === DICE_ITEM_ID ||
+      (typeof it.title === 'string' && DICE_ITEM_RE.test(it.title.trim())));
+  }
+
+  function normalizeDice(d) {
+    if (!plainObject(d) || !isInt(d.max, 1) || !isInt(d.earned, 0) || d.earned > d.max) return null;
+    const next = d.next_at_min === null || isInt(d.next_at_min, 0) ? d.next_at_min : undefined;
+    if (next === undefined) return null;
+    const eta = typeof d.eta_utc === 'string' ? Date.parse(d.eta_utc) : NaN;
+    return { earned: d.earned, max: d.max, next_at_min: next, eta: isNaN(eta) ? null : eta,
+      played_min: isInt(d.played_min, 0) ? d.played_min : 0 };
+  }
+
+  function diceMin(min) { return fmtDurationShort(Math.max(1, min)); }
+
+  // One overlay line: "die 2/3 in 12m" while logged in, "die 2/3 after 12m
+  // play" logged out, "dice 0/3 - log in" before the first login, "dice 3/3".
+  function diceLine(d, now) {
+    const v = normalizeDice(d);
+    if (!v) return '-';
+    if (v.earned >= v.max || v.next_at_min === null) return 'dice ' + v.earned + '/' + v.max;
+    const n = 'die ' + (v.earned + 1) + '/' + v.max;
+    if (v.eta !== null) {
+      const left = v.eta - now;
+      return left <= 0 ? n + ' ready' : n + ' in ' + diceMin(Math.ceil(left / 60000));
+    }
+    if (v.earned === 0 && v.next_at_min === 0) return 'dice 0/' + v.max + ' - log in';
+    return n + ' after ' + diceMin(v.next_at_min - v.played_min) + ' play';
+  }
+
+  // Today tab hint on the open dice row; '' when there is nothing to roll.
+  function diceSuggest(it, d) {
+    if (!isDiceItem(it) || it.done) return '';
+    const v = normalizeDice(d);
+    if (!v || v.earned < 1) return '';
+    return v.earned + '/' + v.max + ' earned - roll, then tick';
   }
 
   // ---- Settings (plan 030) ----
@@ -5295,6 +5342,10 @@
     overlayStyleQuery: overlayStyleQuery,
     overlayStyleFromQuery: overlayStyleFromQuery,
     ovQuiet: ovQuiet,
+    isDiceItem: isDiceItem,
+    normalizeDice: normalizeDice,
+    diceLine: diceLine,
+    diceSuggest: diceSuggest,
     ovServerRowHidden: ovServerRowHidden,
     validPetsBody: validPetsBody,
     parsePetForm: parsePetForm,

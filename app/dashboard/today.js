@@ -1,5 +1,6 @@
 /* EW Today tab (plan 003 slice B): daily + weekly checklists with reset
-   countdowns, events with days left, add item. Plan 021: an item with its own
+   countdowns, events with days left, add item. Plan 056: the open dice row
+   carries a "n/3 earned" pill from GET /api/today dice (never a tick). Plan 021: an item with its own
    reset rule shows its own countdown; the add form offers reset presets and an
    optional custom reset row. Reads GET /api/today; writes go
    through the dashboard preload (window.ewApi) because the server refuses
@@ -218,6 +219,14 @@
       extra = el('span', 'ew-muted ew-tdays', C.fmtResetCountdown(it.reset, Date.now()));
       live = { el: extra, rule: it.reset };
     }
+    if (r.dice) { // plan 056: a suggestion only; the operator ticks
+      const box = el('span', null, '');
+      const pill = el('span', 'ew-pill ok', r.dice);
+      pill.title = 'dice earned from logged-in time (plan 056); never auto-ticked';
+      box.appendChild(pill);
+      if (extra) box.appendChild(extra);
+      extra = box;
+    }
     const n = row(it, extra);
     if (live) n.ewLive = live;
     return n;
@@ -242,7 +251,8 @@
     const rows = week.map(function (ev) {
       return { ev: { id: ev.id, title: ev.title, code: ev.code } };
     }).concat(items.map(function (it) {
-      return { it: it, kind: kind, pending: it.id in S.pending, err: S.rowErr[it.id] || '' };
+      return { it: it, kind: kind, pending: it.id in S.pending, err: S.rowErr[it.id] || '',
+        dice: C.diceSuggest(it, S.data.dice) };
     }));
     C.reconcile(f.list, rows, function (r) { return r.ev ? 'ev:' + r.ev.id : 'it:' + r.it.id; }, listRow);
     collectLive(f.list);

@@ -25,7 +25,7 @@ from . import market, progress
 ANCHORS = ("tl", "tr", "bl", "br", "ml", "mr")
 WIDGETS = {"grindSession": True, "grindBuff": True, "eventsSoon": True,
            "leveling": False, "season": False, "marketTicker": False,
-           "worldBoss": False}
+           "worldBoss": False, "dice": False}
 # Plan 026 rule names (+ plan 032 bossSoon); default off except marketAlert
 # and buffEnding.
 NOTIFY = {"marketAlert": True, "buffEnding": True, "hotTime": False,
