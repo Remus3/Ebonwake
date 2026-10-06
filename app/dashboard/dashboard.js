@@ -44,6 +44,7 @@
     if (id === 'progress' && window.EWProgress) window.EWProgress.show();
     if (id === 'progress' && window.EWLeveling) window.EWLeveling.show();
     if (id === 'progress' && window.EWPets) window.EWPets.show();
+    if (id === 'progress' && window.EWInventory) window.EWInventory.show();
     if (id === 'grind' && window.EWGrind) window.EWGrind.show();
     if (id === 'events' && window.EWEvents) window.EWEvents.show();
     if (id === 'deadeye' && window.EWDeadeye) window.EWDeadeye.show();
@@ -78,6 +79,7 @@
         window.EWProgress.mount(p);
         if (window.EWLeveling) window.EWLeveling.mount(p);
         if (window.EWPets) window.EWPets.mount(p); // plan 043
+        if (window.EWInventory) window.EWInventory.mount(p); // plan 045
       } else if (t.id === 'grind' && window.EWGrind) {
         window.EWGrind.mount(p);
       } else if (t.id === 'events' && window.EWEvents) {

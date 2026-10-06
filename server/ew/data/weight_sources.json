@@ -1,0 +1,30 @@
+{
+  "_doc": "Plan 045. Candidate weight (LT) sources for the inventory planner checklist. Ranges are fan-guide figures (research 0004 section 3, undated) and stay verified: false until re-read against an official source; the operator types the LT they actually own. Warehouse rule verified on the official wiki (wikiNo=47, updated 2025-08-06).",
+  "sources": {
+    "note": "research 0004 section 3: fan guides, undated; not re-verified",
+    "verified": false,
+    "rows": [
+      {"id": "strength", "name": "Strength training", "min": 0, "max": 40, "verified": false},
+      {"id": "weight_skill", "name": "Weight Training skill", "min": 0, "max": 150, "verified": false},
+      {"id": "pearl", "name": "Pearl Shop weight", "min": 50, "max": 250, "verified": false},
+      {"id": "belt", "name": "Belt (e.g. Basilisk +80)", "min": 0, "max": 80, "verified": false},
+      {"id": "jewelry_set", "name": "Root Treant jewelry set", "min": 0, "max": 100, "verified": false},
+      {"id": "alchemy_stone", "name": "Life alchemy stone", "min": 15, "max": 120, "verified": false},
+      {"id": "crystals", "name": "Crystals", "min": 20, "max": 50, "verified": false}
+    ]
+  },
+  "value_pack": {
+    "lt": 200,
+    "inventory_slots": 16,
+    "storage_slots": 16,
+    "note": "research 0004 section 3: fandom preview; official notice not re-read",
+    "verified": false
+  },
+  "warehouse": {
+    "base_vt": 5000,
+    "fame_vt": 2000,
+    "transfer_vt": 200,
+    "source": "https://www.naeu.playblackdesert.com/en-us/Wiki?wikiNo=47",
+    "verified": "2025-08-06"
+  }
+}
