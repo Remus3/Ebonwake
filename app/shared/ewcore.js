@@ -4370,13 +4370,173 @@
       });
   }
 
+  // ---- Cooking / alchemy margin calculator (plan 054) ----
+  // GET /api/crafting -> {recipes: [{id, name, kind, inputs: [{id, name, qty,
+  // vendor_price, label, unit}], outputs / procs: [{id, name, qty_avg, label,
+  // unit, net_unit}], margin: {cost, gross, net, profit, profit_1000,
+  // margin_pct, complete, missing}}], tax: {vp, fame_pct}, max_recipes}.
+  // The server owns every number; the card only formats.
+  const CRAFT_KINDS = ['cooking', 'alchemy'];
+  const CRAFT_LIMITS = { inputs: 20, outputs: 10, procs: 10, name: 60, line: 40, qty: 9999,
+    qty_avg: 1000, silver: 1e13 };
+
+  function craftText(v, max) {
+    return typeof v === 'string' && v.trim() !== '' && v.length <= max && /^[\x20-\x7e]+$/.test(v);
+  }
+
+  function craftInputOk(x) {
+    if (!plainObject(x) || Object.keys(x).some(function (k) {
+      return ['id', 'name', 'qty', 'vendor_price'].indexOf(k) < 0;
+    })) return false;
+    const hasId = x.id !== undefined && x.id !== null;
+    const hasName = x.name !== undefined && x.name !== null;
+    if (!hasId && !hasName) return false;
+    if (hasId && !isId(x.id)) return false;
+    if (hasName && !craftText(x.name, CRAFT_LIMITS.line)) return false;
+    if (!isInt(x.qty, 1) || x.qty > CRAFT_LIMITS.qty) return false;
+    const vp = x.vendor_price;
+    return vp === undefined || vp === null || (isInt(vp, 0) && vp <= CRAFT_LIMITS.silver);
+  }
+
+  function craftOutputOk(x) {
+    if (!plainObject(x) || Object.keys(x).some(function (k) {
+      return ['id', 'name', 'qty_avg'].indexOf(k) < 0;
+    })) return false;
+    if (!isId(x.id)) return false;
+    if (x.name !== undefined && x.name !== null && !craftText(x.name, CRAFT_LIMITS.line)) return false;
+    return isNum(x.qty_avg) && x.qty_avg > 0 && x.qty_avg <= CRAFT_LIMITS.qty_avg;
+  }
+
+  function craftList(v, lo, hi, ok) {
+    return Array.isArray(v) && v.length >= lo && v.length <= hi && v.every(ok);
+  }
+
+  function validRecipe(r, withId) {
+    if (!plainObject(r)) return false;
+    const allowed = ['name', 'kind', 'inputs', 'outputs', 'procs'].concat(withId ? ['id'] : []);
+    if (Object.keys(r).some(function (k) { return allowed.indexOf(k) < 0; })) return false;
+    if (withId && !(typeof r.id === 'string' && SLUG.test(r.id))) return false;
+    if (!craftText(r.name, CRAFT_LIMITS.name)) return false;
+    if (r.kind !== undefined && CRAFT_KINDS.indexOf(r.kind) < 0) return false;
+    return craftList(r.inputs, 1, CRAFT_LIMITS.inputs, craftInputOk) &&
+      craftList(r.outputs, 1, CRAFT_LIMITS.outputs, craftOutputOk) &&
+      (r.procs === undefined || craftList(r.procs, 0, CRAFT_LIMITS.procs, craftOutputOk));
+  }
+
+  // POST /api/crafting body: exactly one of {add: recipe}, {edit: recipe + id},
+  // {delete: id}.
+  function validCraftingBody(body) {
+    if (!plainObject(body)) return false;
+    const keys = Object.keys(body);
+    if (keys.length !== 1) return false;
+    const v = body[keys[0]];
+    if (keys[0] === 'add') return validRecipe(v, false);
+    if (keys[0] === 'edit') return validRecipe(v, true);
+    if (keys[0] === 'delete') return typeof v === 'string' && SLUG.test(v);
+    return false;
+  }
+
+  // One textarea -> recipe lines, one per non-empty line.
+  //   input:  "<qty> <#id | name> [@ <vendor price>]"   e.g. "5 #9001", "2 Leavening Agent @20"
+  //   output: "<qty_avg> #<id> [name]"                   e.g. "2.5 #9213 Beer"
+  // Vendor prices use the silver parser ("1.5k").
+  function parseCraftLines(text, side) {
+    const out = [];
+    const rows = String(text === undefined || text === null ? '' : text).split(/\r?\n/);
+    for (let i = 0; i < rows.length; i++) {
+      const t = rows[i].trim();
+      if (!t) continue;
+      const where = side + ' line ' + (out.length + 1);
+      if (side === 'input') {
+        const m = /^(\d{1,4})\s*x?\s+(#\d{1,10}|[^@#]*[^@#\s])\s*(?:@\s*(.+))?$/i.exec(t);
+        if (!m) return { ok: false, error: where + ': use "qty #id" or "qty name [@ vendor price]"' };
+        const line = { qty: Number(m[1]) };
+        if (m[2][0] === '#') line.id = Number(m[2].slice(1));
+        else line.name = m[2];
+        if (m[3] !== undefined) {
+          const v = parseSilver(m[3]);
+          if (v === null) return { ok: false, error: where + ': vendor price is not silver' };
+          line.vendor_price = v;
+        }
+        if (!craftInputOk(line)) return { ok: false, error: where + ': qty 1..9999, id or name up to 40 chars' };
+        out.push(line);
+      } else {
+        const m = /^(\d{1,4}(?:\.\d{1,3})?)\s*x?\s+#(\d{1,10})(?:\s+(.+))?$/i.exec(t);
+        if (!m) return { ok: false, error: where + ': use "avg #id [name]"' };
+        const line = { id: Number(m[2]), qty_avg: Number(m[1]) };
+        if (m[3] !== undefined) line.name = m[3].trim();
+        if (!craftOutputOk(line)) return { ok: false, error: where + ': avg in (0, 1000], id, name up to 40 chars' };
+        out.push(line);
+      }
+    }
+    return { ok: true, lines: out };
+  }
+
+  // Form fields {name, kind, inputs, outputs, procs} (texts) -> {ok, body} for
+  // add (no id) or edit (id), or {ok: false, error}.
+  function parseCraftForm(f, id) {
+    const src = plainObject(f) ? f : {};
+    const name = String(src.name === undefined || src.name === null ? '' : src.name).trim();
+    if (!craftText(name, CRAFT_LIMITS.name)) return { ok: false, error: 'name: 1..60 printable ASCII chars' };
+    const kind = CRAFT_KINDS.indexOf(src.kind) >= 0 ? src.kind : 'cooking';
+    const recipe = { name: name, kind: kind };
+    const sides = [['inputs', 'input', 1], ['outputs', 'output', 1], ['procs', 'proc', 0]];
+    for (let i = 0; i < sides.length; i++) {
+      const r = parseCraftLines(src[sides[i][0]], sides[i][1]);
+      if (!r.ok) return r;
+      if (r.lines.length < sides[i][2]) return { ok: false, error: sides[i][0] + ': at least one line' };
+      if (r.lines.length > CRAFT_LIMITS[sides[i][0]]) {
+        return { ok: false, error: sides[i][0] + ': at most ' + CRAFT_LIMITS[sides[i][0]] + ' lines' };
+      }
+      recipe[sides[i][0]] = r.lines;
+    }
+    if (id !== undefined && id !== null) {
+      recipe.id = id;
+      return validRecipe(recipe, true) ? { ok: true, body: { edit: recipe } } : { ok: false, error: 'bad recipe' };
+    }
+    return validRecipe(recipe, false) ? { ok: true, body: { add: recipe } } : { ok: false, error: 'bad recipe' };
+  }
+
+  // A stored recipe -> the form texts parseCraftForm reads back.
+  function craftFormOf(r) {
+    if (!plainObject(r)) return { name: '', kind: 'cooking', inputs: '', outputs: '', procs: '' };
+    const inLine = function (x) {
+      return x.qty + ' ' + (isId(x.id) ? '#' + x.id : x.name) +
+        (isInt(x.vendor_price, 0) ? ' @' + x.vendor_price : '');
+    };
+    const outLine = function (x) { return x.qty_avg + ' #' + x.id + (x.name ? ' ' + x.name : ''); };
+    const lines = function (v, fn) { return Array.isArray(v) ? v.filter(plainObject).map(fn).join('\n') : ''; };
+    return { name: typeof r.name === 'string' ? r.name : '',
+      kind: CRAFT_KINDS.indexOf(r.kind) >= 0 ? r.kind : 'cooking',
+      inputs: lines(r.inputs, inLine), outputs: lines(r.outputs, outLine), procs: lines(r.procs, outLine) };
+  }
+
+  // One recipe row's margin -> display strings.
+  function craftSummary(r) {
+    const m = plainObject(r) && plainObject(r.margin) ? r.margin : null;
+    if (!m) return { cost: '-', net: '-', profit: '-', per1000: '-', pct: '', loss: true, missing: '' };
+    const miss = Array.isArray(m.missing) ? m.missing.filter(plainObject).map(function (x) {
+      return x.side + ' ' + (isId(x.id) ? '#' + x.id : String(x.name));
+    }) : [];
+    const p = m.complete === true && isNum(m.profit) ? m.profit : null;
+    return {
+      cost: fmtSilver(m.cost), net: fmtSilver(m.net),
+      profit: p === null ? '-' : fmtSilver(p),
+      per1000: m.complete === true && isNum(m.profit_1000) ? fmtSilver(m.profit_1000) : '-',
+      pct: isNum(m.margin_pct) ? m.margin_pct + '%' : '',
+      loss: p === null || p < 0,
+      missing: miss.length ? 'no price: ' + miss.join(', ') : ''
+    };
+  }
+
   // The only routes the dashboard bridge forwards, each with its body check.
   const POST_VALIDATORS = {
     '/api/market/watch': validWatchBody, '/api/today': validTodayBody, '/api/progress': validProgressBody,
     '/api/grind': validGrindBody, '/api/events': validEventsBody, '/api/deadeye': validDeadeyeBody,
     '/api/ocr': validOcrBody, '/api/leveling': validLevelingBody, '/api/settings': validSettingsBody,
     '/api/bosses': validBossesBody, '/api/pets': validPetsBody, '/api/inventory': validInventoryBody,
-    '/api/mounts': validMountsBody, '/api/onboarding': validOnboardingBody
+    '/api/mounts': validMountsBody, '/api/onboarding': validOnboardingBody,
+    '/api/crafting': validCraftingBody
   };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
@@ -4723,7 +4883,7 @@
     '/api/grind': 'Grind', '/api/events': 'Events', '/api/deadeye': 'Deadeye', '/api/ocr': 'OCR',
     '/api/leveling': 'Leveling', '/api/settings': 'Settings', '/api/bosses': 'World bosses',
     '/api/pets': 'Pets', '/api/inventory': 'Inventory', '/api/mounts': 'Mounts',
-    '/api/onboarding': 'Get started'
+    '/api/onboarding': 'Get started', '/api/crafting': 'Crafting'
   };
 
   // One POST result (the ew:post bridge reply) -> one toast.
@@ -5143,6 +5303,11 @@
     petExchangeLines: petExchangeLines,
     petSpeciesOptions: petSpeciesOptions,
     validInventoryBody: validInventoryBody,
+    validCraftingBody: validCraftingBody,
+    parseCraftLines: parseCraftLines,
+    parseCraftForm: parseCraftForm,
+    craftFormOf: craftFormOf,
+    craftSummary: craftSummary,
     parseInvSetForm: parseInvSetForm,
     parseInvSourceForm: parseInvSourceForm,
     parseInvTownForm: parseInvTownForm,
