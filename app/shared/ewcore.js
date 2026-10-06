@@ -1265,6 +1265,61 @@
 
   function validLoot(v) { return inRange(v.silver, SILVER) && inRange(v.trash, TRASH); }
 
+  // Plan 039: per-session loot list [{name|id, count}] and operator loot items
+  // (bounds mirror server/ew/grind.py MAX_LOOT / MAX_LOOT_COUNT / MAX_VENDOR).
+  const LOOT_MAX = 50;
+  const LOOT_COUNT = [1, 1e7];
+  const VENDOR_PRICE = [0, 1e10];
+  const ITEM_ID = [1, 2147483647];
+
+  function validLootList(l) {
+    return Array.isArray(l) && l.length <= LOOT_MAX && l.every(function (e) {
+      if (exact(e, ['name', 'count'])) return validName(e.name) && inRange(e.count, LOOT_COUNT);
+      return exact(e, ['id', 'count']) && inRange(e.id, ITEM_ID) && inRange(e.count, LOOT_COUNT);
+    });
+  }
+
+  // stop / log with an optional `loot` key.
+  function withLoot(v, keys) {
+    if (plainObject(v) && Object.prototype.hasOwnProperty.call(v, 'loot')) {
+      return exact(v, keys.concat(['loot'])) && validLootList(v.loot);
+    }
+    return exact(v, keys);
+  }
+
+  function validLootItem(v) {
+    if (!plainObject(v) || !onlyKeys(v, ['spot', 'name', 'marketable', 'id', 'vendor_price'])) return false;
+    if (!validName(v.spot) || !validName(v.name) || typeof v.marketable !== 'boolean') return false;
+    if (v.id !== undefined && !inRange(v.id, ITEM_ID)) return false;
+    if (v.vendor_price !== undefined && !inRange(v.vendor_price, VENDOR_PRICE)) return false;
+    return v.marketable || v.vendor_price !== undefined;
+  }
+
+  // Sell-vs-vendor hint {choice, diff} -> short text; diff is silver per unit.
+  function lootHintText(h) {
+    if (!plainObject(h)) return '';
+    if (h.choice === 'unknown') return 'no price';
+    if (h.choice === 'either') return 'either';
+    if (h.choice !== 'vendor' && h.choice !== 'market') return '';
+    return isNum(h.diff) && h.diff > 0 ? h.choice + ' +' + fmtSilver(h.diff) + '/u' : h.choice;
+  }
+
+  // Silver a session counts toward silver/h: loot value when valued, else typed.
+  function sessionSilver(s) {
+    return plainObject(s) && isNum(s.valued_silver) ? s.valued_silver : (plainObject(s) ? s.silver : null);
+  }
+
+  // "trash pile worth X" + unpriced count for a loot-valued session, else ''.
+  function trashPileText(s) {
+    const v = plainObject(s) ? s.loot_value : null;
+    if (!plainObject(v)) return '';
+    const parts = [];
+    if (isNum(v.trash) && v.trash > 0) parts.push('trash pile worth ' + fmtSilver(v.trash));
+    const n = Array.isArray(v.unknown) ? v.unknown.length : 0;
+    if (n) parts.push(n + (n === 1 ? ' item' : ' items') + ' unpriced');
+    return parts.join(', ');
+  }
+
   // Exact shape check for POST /api/grind bodies (main-process IPC guard).
   function validGrindBody(body) {
     if (!plainObject(body)) return false;
@@ -1275,11 +1330,13 @@
     if (k === 'start' || k === 'add_spot') return validName(v);
     if (k === 'delete') return validRef(v, SESSION_ID_RE);
     if (k === 'clear_buff') return validRef(v, BUFF_ID_RE);
-    if (k === 'stop') return exact(v, ['silver', 'trash']) && validLoot(v);
+    if (k === 'stop') return withLoot(v, ['silver', 'trash']) && validLoot(v);
     if (k === 'log') {
-      return exact(v, ['spot', 'minutes', 'silver', 'trash']) && validName(v.spot) &&
+      return withLoot(v, ['spot', 'minutes', 'silver', 'trash']) && validName(v.spot) &&
         inRange(v.minutes, MINUTES) && validLoot(v);
     }
+    if (k === 'loot_item') return validLootItem(v);
+    if (k === 'loot_forget') return exact(v, ['spot', 'name']) && validName(v.spot) && validName(v.name);
     if (k === 'buff') {
       // xp_pct is optional (plan 011): absent = not counted in the XP stack.
       return (exact(v, ['name', 'minutes']) || (exact(v, ['name', 'minutes', 'xp_pct']) && inRange(v.xp_pct, XP_PCT))) &&
@@ -1376,9 +1433,32 @@
     const minutes = function (r) { return wholeIn(f.minutes, r); };
     const minErr = function (r) { return 'minutes must be a whole number ' + r[0] + '-' + r[1]; };
     const name = function (k) { return typeof f[k] === 'string' ? f[k].trim() : ''; };
+    // Plan 039: f.loot = [{name, count string}]; blank / 0 counts are skipped.
+    const items = function () {
+      const out = [];
+      const rows = Array.isArray(f.loot) ? f.loot : [];
+      for (let i = 0; i < rows.length; i++) {
+        const c = rows[i] && rows[i].count;
+        const t = c === undefined || c === null ? '' : String(c).trim();
+        if (t === '' || t === '0') continue;
+        const n = wholeIn(t, LOOT_COUNT);
+        if (n === null || !validName(rows[i].name)) {
+          return { error: 'loot count must be a whole number 1-10000000 (' + rows[i].name + ')' };
+        }
+        out.push({ name: rows[i].name, count: n });
+      }
+      return out.length > LOOT_MAX ? { error: 'at most ' + LOOT_MAX + ' loot items' } : { list: out };
+    };
+    const withItems = function (body) {
+      const it = items();
+      if (it.error) return { error: it.error };
+      if (it.list.length) body.loot = it.list;
+      return body;
+    };
     if (kind === 'stop') {
       const l = loot();
-      return l.error ? { ok: false, error: l.error } : { ok: true, body: { stop: l } };
+      const b = l.error ? l : withItems(l);
+      return b.error ? { ok: false, error: b.error } : { ok: true, body: { stop: b } };
     }
     if (kind === 'log') {
       if (!validName(f.spot)) return { ok: false, error: 'pick a spot' };
@@ -1386,7 +1466,28 @@
       if (m === null) return { ok: false, error: minErr(MINUTES) };
       const l = loot();
       if (l.error) return { ok: false, error: l.error };
-      return { ok: true, body: { log: { spot: f.spot, minutes: m, silver: l.silver, trash: l.trash } } };
+      const b = withItems({ spot: f.spot, minutes: m, silver: l.silver, trash: l.trash });
+      return b.error ? { ok: false, error: b.error } : { ok: true, body: { log: b } };
+    }
+    if (kind === 'loot_item') {
+      if (!validName(f.spot)) return { ok: false, error: 'pick a spot' };
+      const n = name('name');
+      if (!validName(n)) return { ok: false, error: 'item name: 1-' + NAME_MAX + ' plain characters' };
+      const item = { spot: f.spot, name: n, marketable: f.marketable === true };
+      if (!blank('id')) {
+        const id = wholeIn(f.id, ITEM_ID);
+        if (id === null) return { ok: false, error: 'item id must be a whole number (blank = none)' };
+        item.id = id;
+      }
+      if (!blank('vendor_price')) {
+        const v = wholeIn(f.vendor_price, VENDOR_PRICE);
+        if (v === null) return { ok: false, error: 'vendor price must be a whole number 0-10000000000' };
+        item.vendor_price = v;
+      }
+      if (!item.marketable && item.vendor_price === undefined) {
+        return { ok: false, error: 'trash (not marketable) needs a vendor price' };
+      }
+      return { ok: true, body: { loot_item: item } };
     }
     if (kind === 'buff') {
       if (!validName(name('name'))) return { ok: false, error: 'buff name: 1-' + NAME_MAX + ' plain characters' };
@@ -3268,6 +3369,9 @@
     dropView: dropView,
     agrisLine: agrisLine,
     parseGrindForm: parseGrindForm,
+    lootHintText: lootHintText,
+    sessionSilver: sessionSilver,
+    trashPileText: trashPileText,
     SPOT_GOALS: SPOT_GOALS,
     spotsPath: spotsPath,
     spotNeedText: spotNeedText,

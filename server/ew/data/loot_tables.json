@@ -1,0 +1,11 @@
+{
+  "_doc": "Plan 039. Per-spot loot tables keyed by plan 012 spot id (grind_spots.json). items: {id? (arsha item id, needed for a market price), name, vendor_price? (silver per unit at an NPC), marketable}. verified is false unless a lane read the cited page that day, else that YYYY-MM-DD. Seed is the common Black Stone drops only; each spot's trash item and its vendor price are operator-added in the Grind tab (store, not this file).",
+  "spots": {
+    "desert-naga-temple": {"items": [{"id": 16001, "name": "Black Stone (Weapon)", "marketable": true}, {"id": 16002, "name": "Black Stone (Armor)", "marketable": true}], "source": "https://bdocodex.com/us/item/16001/", "verified": false},
+    "polly-forest": {"items": [{"id": 16001, "name": "Black Stone (Weapon)", "marketable": true}, {"id": 16002, "name": "Black Stone (Armor)", "marketable": true}], "source": "https://bdocodex.com/us/item/16001/", "verified": false},
+    "rhutum-outstation": {"items": [{"id": 16001, "name": "Black Stone (Weapon)", "marketable": true}, {"id": 16002, "name": "Black Stone (Armor)", "marketable": true}], "source": "https://bdocodex.com/us/item/16001/", "verified": false},
+    "biraghi-den": {"items": [{"id": 16001, "name": "Black Stone (Weapon)", "marketable": true}, {"id": 16002, "name": "Black Stone (Armor)", "marketable": true}], "source": "https://bdocodex.com/us/item/16001/", "verified": false},
+    "fadus-habitat": {"items": [{"id": 16001, "name": "Black Stone (Weapon)", "marketable": true}, {"id": 16002, "name": "Black Stone (Armor)", "marketable": true}], "source": "https://bdocodex.com/us/item/16001/", "verified": false},
+    "sausan-garrison": {"items": [{"id": 16001, "name": "Black Stone (Weapon)", "marketable": true}, {"id": 16002, "name": "Black Stone (Armor)", "marketable": true}], "source": "https://bdocodex.com/us/item/16001/", "verified": false}
+  }
+}

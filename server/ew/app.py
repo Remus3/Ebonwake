@@ -150,8 +150,12 @@ class EWServer(ThreadingHTTPServer):
             self.store, profile_client, level=lambda: self.leveling.current_level(),
             epoch=lambda: self.leveling.active_epoch())
         # Plan 018: buff presets follow the newest started XP epoch.
-        self.grind = grind.GrindService(self.store, clock=grind_clock or time.time,
-                                        epoch=lambda: self.leveling.active_epoch())
+        # Plan 039: loot priced from the cached arsha sublist, taxed per plan 027.
+        self.grind = grind.GrindService(
+            self.store, clock=grind_clock or time.time,
+            epoch=lambda: self.leveling.active_epoch(),
+            prices=lambda iid: market.price_of(self.market.client.sublist(iid)["data"]),
+            tax=lambda: self.market.settings)
         # XP stack counts armed grind buffs that carry an xp_pct (plan 011).
         self.leveling = leveling.LevelingService(self.store, clock=leveling_clock or time.time,
                                                  buffs=lambda: self.grind.view()["buffs"])
@@ -283,6 +287,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.progress.view())
         if path == "/api/grind":
             return self._send(200, self.server.grind.view())
+        if path == "/api/grind/loot":
+            try:
+                spot = parse_qs(query).get("spot", [None])[0]
+                return self._send(200, self.server.grind.loot(spot))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
         if path == "/api/events":
             return self._send(200, dict(self.server.events.view(),
                                         suggested=self.server.coupons.view(refresh=True)))
@@ -348,10 +358,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post_grind(self, body):
         ops = {"start", "stop", "log", "delete", "add_spot", "buff", "clear_buff",
-               "drop_toggle", "drop_override"}
+               "drop_toggle", "drop_override", "loot_item", "loot_forget"}
         if len(body) != 1 or not (ops & set(body)):
             raise ValueError("body must be one of {start|stop|log|delete|add_spot|buff|"
-                             "clear_buff|drop_toggle|drop_override: ...}")
+                             "clear_buff|drop_toggle|drop_override|loot_item|loot_forget: ...}")
         (op, arg), = body.items()
         return getattr(self.server.grind, op)(arg)
 
