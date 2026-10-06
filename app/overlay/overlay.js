@@ -32,6 +32,13 @@
    weekly cap) is greyed; Garmoth shows n/3. Countdowns run locally from
    at_utc; once a spawn passes the next one leads. Offline keeps the rows,
    muted. Nothing is read from the game's own boss notice.
+   Context (plan 067): the server picks the widgets by context (closed, in
+   game, idle, maintenance / reset / boss soon, Hot Time; pins and blocks from
+   Settings) - GET /api/overlay/context at start and on each heartbeat, then
+   SSE `overlay_context` on change. Applied in place: W is updated, rows are
+   shown / hidden and reordered (appendChild moves them), newly shown widgets
+   load at once; `hidden` (game closed) hides the panel. The window is never
+   recreated; the query widgets are only the fallback until the first context.
    Dice (plan 056): opt-in (default off) one line from the GET /api/today
    `dice` block ("die 2/3 in 12m"), counted down locally from eta_utc; a
    re-GET on each SSE `game` event. Offline keeps the last line, muted. */
@@ -40,8 +47,12 @@
   const C = window.EWCore;
   const TODAY_MS = 60000;
   const TODAY_MIN_MS = 10000; // heartbeat-driven refreshes, throttled
+  // Mutable in place by plan 067 contexts; the query is the start-up fallback.
   const W = C.widgetsFromQuery(window.location.search);
-  const GRIND_ON = W.grindSession || W.grindBuff;
+  W.maintenance = false;
+  let ctx = null;
+  let ctxSig = null;
+  function grindOn() { return W.grindSession || W.grindBuff; }
   let attempt = 0;
   let today = null;
   let todayStale = false;
@@ -69,8 +80,15 @@
   let bossSig = null;
 
   // Plan 022: a row shows only when its widget is on and it has something to say.
+  // Plan 067: a late load for a widget the context just turned off stays hidden.
+  function rowOn(id) {
+    return Object.keys(C.OVERLAY_ROWS).every(function (w) {
+      return C.OVERLAY_ROWS[w].indexOf(id) < 0 || !!W[w];
+    });
+  }
+
   function showRow(id, enabled, text) {
-    document.getElementById(id).hidden = !enabled || C.ovQuiet(text);
+    document.getElementById(id).hidden = !enabled || !rowOn(id) || C.ovQuiet(text);
   }
 
   function setServer(text) {
@@ -224,7 +242,7 @@
     const box = document.getElementById('ov-ticker');
     while (box.firstChild) box.removeChild(box.firstChild);
     rows.forEach(function (r) { box.appendChild(tickerLine(r)); });
-    document.getElementById('ov-ticker-row').hidden = !rows.length && !tickerStale;
+    document.getElementById('ov-ticker-row').hidden = !W.marketTicker || (!rows.length && !tickerStale);
   }
 
   // Names rebuilt only when they change; greyed names carry ew-boss-looted.
@@ -268,11 +286,59 @@
     document.getElementById('ov-weekly').textContent = C.fmtDuration(C.nextWeeklyReset(now) - now);
     drawToday(now);
     if (W.dice) drawDice(now);
-    if (GRIND_ON) drawGrind(now);
+    if (grindOn()) drawGrind(now);
     if (W.eventsSoon) drawEvents(now);
     if (W.leveling) drawLeveling(now);
     if (W.marketTicker) drawTicker(now);
     if (W.worldBoss) drawBoss(now);
+    if (W.maintenance) drawMaint(now);
+  }
+
+  function drawMaint(now) {
+    const v = document.getElementById('ov-maint');
+    v.textContent = C.maintLine(ctx ? ctx.maintAt : null, now);
+    showRow('ov-maint-row', true, v.textContent);
+  }
+
+  // Plan 067: apply a context in place - no window recreate, no settings write.
+  function applyContext(d) {
+    const c = C.overlayContext(d);
+    if (!c) return;
+    const sig = JSON.stringify([c.order, c.hidden, c.maintAt]);
+    ctx = c;
+    if (sig === ctxSig) return;
+    ctxSig = sig;
+    const on = C.widgetsTurnedOn(W, c.widgets);
+    Object.keys(c.widgets).forEach(function (k) { W[k] = c.widgets[k]; });
+    document.getElementById('ov-panel').hidden = c.hidden;
+    const box = document.getElementById('ov-widgets');
+    C.overlayRowOrder(c.order).forEach(function (id) {
+      const row = document.getElementById(id);
+      if (!row) return;
+      box.appendChild(row);
+      row.hidden = true; // a shown widget's draw unhides it once it has something to say
+    });
+    tickerSig = null;
+    bossSig = null;
+    if (on.indexOf('grindSession') >= 0 || on.indexOf('grindBuff') >= 0) loadGrind();
+    if (on.indexOf('eventsSoon') >= 0) loadEvents();
+    if (on.indexOf('leveling') >= 0) loadLeveling();
+    if (on.indexOf('season') >= 0) loadSeason();
+    if (on.indexOf('worldBoss') >= 0) loadBoss();
+    if (on.indexOf('marketTicker') >= 0) loadTicker();
+    if (on.indexOf('dice') >= 0) loadToday(true);
+    tick();
+    if (W.season) drawSeason();
+    reportSize();
+  }
+
+  // A GET that started before a newer SSE push is dropped, never rolls back.
+  let ctxGen = 0;
+  function loadContext() {
+    const gen = ctxGen;
+    getJSON('/api/overlay/context').then(function (d) {
+      if (gen === ctxGen) applyContext(d);
+    }).catch(function () { /* keep the last one */ });
   }
 
   function getJSON(path) {
@@ -371,7 +437,8 @@
       drawToday(Date.now());
       if (W.dice) drawDice(Date.now());
     });
-    if (GRIND_ON) loadGrind();
+    loadContext();
+    if (grindOn()) loadGrind();
     if (W.eventsSoon) loadEvents();
     if (W.leveling) loadLeveling();
     if (W.season) loadSeason();
@@ -390,6 +457,13 @@
       if (W.dice) loadToday(true); // also re-GETs the game state
       else loadGame();
     });
+    src.addEventListener('overlay_context', function (e) {
+      let d = null;
+      try { d = JSON.parse(e.data); } catch (err) { d = null; }
+      ctxGen += 1;
+      if (d) applyContext(d);
+      else loadContext();
+    });
     src.addEventListener('leveling', function () {
       if (W.leveling) loadLeveling();
       if (W.season) loadSeason();
@@ -400,7 +474,7 @@
       grindStale = true;
       drawToday(Date.now());
       if (W.dice) drawDice(Date.now());
-      if (GRIND_ON) drawGrind(Date.now());
+      if (grindOn()) drawGrind(Date.now());
       eventsStale = true;
       if (W.eventsSoon) drawEvents(Date.now());
       levStale = true;
@@ -430,9 +504,8 @@
   setInterval(tick, 1000);
   setInterval(function () { loadToday(true); }, TODAY_MS);
   loadToday(true);
-  if (W.marketTicker) {
-    setInterval(loadTicker, TICKER_MS);
-    loadTicker();
-  }
+  // Always armed: a context may turn the ticker on later (plan 067).
+  setInterval(function () { if (W.marketTicker) loadTicker(); }, TICKER_MS);
+  if (W.marketTicker) loadTicker();
   connect();
 })();

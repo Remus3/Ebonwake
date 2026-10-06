@@ -32,6 +32,7 @@ NOTIFY = {"marketAlert": True, "buffEnding": True, "hotTime": False,
           "resetPassed": False, "newCoupon": False, "gameExit": False,
           "bossSoon": False}
 THEMES = ("system", "dark", "light")
+OVERLAY_MODES = ("auto", "pin", "block")  # plan 067: per-widget pin / block
 MODS = ("Control", "Ctrl", "Alt", "Shift", "CommandOrControl", "Super")
 _KEY_RE = re.compile(r"^([A-Z0-9]|F([1-9]|1[0-9]|2[0-4]))$")
 MAX_SET = 64
@@ -122,7 +123,12 @@ SPEC.update({
     "ocr.auto": (_is_bool, True),
     "ocr.auto_commit_min": (_num_in(0.75, 0.99), 0.9),
     "ocr.daily_cap": (lambda v: _is_int(v) and 0 <= v <= 1000, 120),
+    # Plan 067: widgets chosen by context; per-widget pin / block on top.
+    "overlay.auto": (_is_bool, True),
+    "overlay.idle_min": (lambda v: _is_int(v) and 5 <= v <= 240, 20),
 })
+for _w in WIDGETS:
+    SPEC[f"overlay.mode.{_w}"] = (_one_of(OVERLAY_MODES), "auto")
 
 
 def defaults():

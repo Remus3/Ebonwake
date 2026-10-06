@@ -119,3 +119,20 @@ def resolve(date, edge, slot_=None, notices=None):
     hh, mm = (int(x) for x in s["start_utc"].split(":"))
     start = _dt.datetime.combine(_as_date(date), _dt.time(hh, mm), _dt.timezone.utc)
     return start if edge == "before" else start + _dt.timedelta(minutes=s["duration_min"])
+
+
+def next_window(now, slot_=None, notices=None):
+    """Plan 067: (start, end) UTC of the first maintenance whose end is after
+    aware `now` - the weekly slot on its weekday, or a notice's window on its
+    date (a notice replaces that date's slot) - within 8 days; else None."""
+    now = now.astimezone(_dt.timezone.utc)
+    s = _clean(slot_) if slot_ is not None else DEFAULT
+    notices = notices or {}
+    day = now.date() - _dt.timedelta(days=1)  # a window that began yesterday may still run
+    for _ in range(9):
+        if day.isoformat() in notices or WEEKDAYS[day.weekday()] == s["weekday"]:
+            st, en = resolve(day, "before", s, notices), resolve(day, "after", s, notices)
+            if st is not None and en is not None and en > now:
+                return st, en
+        day += _dt.timedelta(days=1)
+    return None
