@@ -31,7 +31,10 @@
    spawn muted below; a boss ticked looted for that PT day (or Garmoth at its
    weekly cap) is greyed; Garmoth shows n/3. Countdowns run locally from
    at_utc; once a spawn passes the next one leads. Offline keeps the rows,
-   muted. Nothing is read from the game's own boss notice. */
+   muted. Nothing is read from the game's own boss notice.
+   Dice (plan 056): opt-in (default off) one line from the GET /api/today
+   `dice` block ("die 2/3 in 12m"), counted down locally from eta_utc; a
+   re-GET on each SSE `game` event. Offline keeps the last line, muted. */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -99,6 +102,13 @@
     t.textContent = 'daily ' + g.daily.done + '/' + g.daily.total + '  weekly ' + g.weekly.done + '/' + g.weekly.total;
     t.className = todayStale ? 'ew-stale' : '';
     showRow('ov-today-row', true, t.textContent);
+  }
+
+  function drawDice(now) {
+    const v = document.getElementById('ov-dice');
+    v.textContent = today ? C.diceLine(today.dice, now) : (todayStale ? 'offline' : '-');
+    v.className = 'ew-ov-val' + (todayStale ? ' ew-stale' : '');
+    showRow('ov-dice-row', true, v.textContent);
   }
 
   // Offline keeps the last values (clock still running), muted.
@@ -257,6 +267,7 @@
     document.getElementById('ov-daily').textContent = C.fmtDuration(C.nextDailyReset(now) - now);
     document.getElementById('ov-weekly').textContent = C.fmtDuration(C.nextWeeklyReset(now) - now);
     drawToday(now);
+    if (W.dice) drawDice(now);
     if (GRIND_ON) drawGrind(now);
     if (W.eventsSoon) drawEvents(now);
     if (W.leveling) drawLeveling(now);
@@ -356,7 +367,10 @@
       todayStale = false;
     }).catch(function () {
       todayStale = true;
-    }).then(function () { drawToday(Date.now()); });
+    }).then(function () {
+      drawToday(Date.now());
+      if (W.dice) drawDice(Date.now());
+    });
     if (GRIND_ON) loadGrind();
     if (W.eventsSoon) loadEvents();
     if (W.leveling) loadLeveling();
@@ -372,7 +386,10 @@
       setServer('ok');
       loadToday(false);
     };
-    src.addEventListener('game', function () { loadGame(); });
+    src.addEventListener('game', function () {
+      if (W.dice) loadToday(true); // also re-GETs the game state
+      else loadGame();
+    });
     src.addEventListener('leveling', function () {
       if (W.leveling) loadLeveling();
       if (W.season) loadSeason();
@@ -382,6 +399,7 @@
       todayStale = true;
       grindStale = true;
       drawToday(Date.now());
+      if (W.dice) drawDice(Date.now());
       if (GRIND_ON) drawGrind(Date.now());
       eventsStale = true;
       if (W.eventsSoon) drawEvents(Date.now());

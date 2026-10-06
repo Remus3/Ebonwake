@@ -43,7 +43,13 @@ DEFAULT_RULES = {"daily": {"every": "day", "at": "00:00"},
 RULE_KIND = {"day": "daily", "week": "weekly"}
 PRESETS_FILE = Path(__file__).resolve().parent / "data" / "reset_rules.json"
 PRESET_FIELDS = ("name", "reset", "source", "verified")
+# Plan 056: optional play-minute grant points (the dice row: one at login, more
+# after 30 / 60 logged-in minutes).
+PRESET_OPTIONAL = ("grants_at_min",)
 MAX_SOURCE = 200
+MAX_GRANTS = 10
+DICE_PRESET = "Black Spirit's Adventure dice"
+DICE_FALLBACK = {"every": "day", "at": "05:00"}, [0, 30, 60]
 
 
 # -- reset clocks (same rule as app/shared/ewcore.js) --------------------------
@@ -184,17 +190,46 @@ def load_presets(path=None):
         raise ValueError("reset presets must be a list")
     out = []
     for row in doc:
-        if not isinstance(row, dict) or set(row) != set(PRESET_FIELDS):
-            raise ValueError(f"preset rows must have exactly {', '.join(PRESET_FIELDS)}")
+        if (not isinstance(row, dict) or not set(PRESET_FIELDS) <= set(row)
+                or set(row) - set(PRESET_FIELDS) - set(PRESET_OPTIONAL)):
+            raise ValueError(f"preset rows must have exactly {', '.join(PRESET_FIELDS)}"
+                             f" (+ optional {', '.join(PRESET_OPTIONAL)})")
         name, source = row["name"], row["source"]
         if not (isinstance(name, str) and 0 < len(name.strip()) <= MAX_TITLE
                 and isinstance(source, str) and 0 < len(source.strip()) <= MAX_SOURCE
                 and isinstance(row["verified"], bool)):
             raise ValueError("preset name/source must be text and verified a bool")
         rule = validate_rule(row["reset"])
-        out.append({"name": name, "kind": RULE_KIND[rule["every"]], "reset": rule,
-                    "source": source, "verified": row["verified"]})
+        preset = {"name": name, "kind": RULE_KIND[rule["every"]], "reset": rule,
+                  "source": source, "verified": row["verified"]}
+        if "grants_at_min" in row:
+            preset["grants_at_min"] = _check_grants(row["grants_at_min"])
+        out.append(preset)
     return out
+
+
+def _check_grants(g):
+    """Strictly ascending ints 0..1440, 1..MAX_GRANTS of them; raises ValueError."""
+    if (not isinstance(g, list) or not 0 < len(g) <= MAX_GRANTS
+            or any(not isinstance(m, int) or isinstance(m, bool) or not 0 <= m <= 1440
+                   for m in g)
+            or any(a >= b for a, b in zip(g, g[1:]))):
+        raise ValueError("grants_at_min must be ascending ints 0..1440")
+    return list(g)
+
+
+def dice_preset(path=None):
+    """Plan 056: the dice row -> (rule, grants_at_min, verified); a missing or
+    malformed seed falls back to the 05:00 / [0, 30, 60] community rule."""
+    try:
+        rows = load_presets(path)
+    except ValueError:
+        rows = []
+    for r in rows:
+        if r["name"] == DICE_PRESET and r["kind"] == "daily" and "grants_at_min" in r:
+            return r["reset"], r["grants_at_min"], r["verified"]
+    rule, grants = DICE_FALLBACK
+    return dict(rule), list(grants), False
 
 
 def _presets():

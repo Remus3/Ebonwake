@@ -30,6 +30,8 @@ import threading
 import time
 from pathlib import Path
 
+from . import today as _today
+
 POLL_S = 2.0
 RECENT_LOG_S = 120
 MAX_SHOTS = 50
@@ -340,3 +342,102 @@ class GameWatch:
             state = self._state or ("not_running" if self.configured else "unconfigured")
             return {"updated": _iso(self._updated) if self._updated is not None else None,
                     "status": state}
+
+
+# -- plan 056: Black Spirit's Adventure dice from logged-in minutes -------------
+
+DICE_SEEN_S = 60  # status() refreshes `seen` at most once a minute while logged in
+
+
+def _parse(s):
+    if not isinstance(s, str):
+        return None
+    try:
+        when = _dt.datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    return when.timestamp() if when.tzinfo is not None else None
+
+
+def _num(v):
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0 else 0.0
+
+
+class DiceClock:
+    """Store domain `dice`: {"reset": <iso>, "acc_s": <s>, "login_at": <iso>|null,
+    "seen": <iso>|null, "active": bool}. A GameWatch listener: minutes are
+    wall-clock while the plan 008 state is `logged_in`, summed since the dice
+    reset (`rule`, plan 021 row). An open session survives an EW restart: a
+    first poll that still reads logged_in resumes it; any other first state
+    closes it at `seen` (the last moment EW saw it logged in), so EW downtime
+    with the game closed is never counted. Read-only on the game."""
+
+    def __init__(self, store, rule, grants, verified=False, clock=time.time):
+        self.store = store
+        self.rule = rule
+        self.grants = list(grants)
+        self.verified = bool(verified)
+        self.clock = clock
+        self._lock = threading.Lock()
+
+    def _dt(self, ts):
+        return _dt.datetime.fromtimestamp(ts, _dt.timezone.utc)
+
+    def _load(self, now):
+        """Stored doc rolled to the reset in force at `now` (epoch s)."""
+        doc = self.store.get("dice")
+        reset = _today.last_reset(self.rule, self._dt(now)).timestamp()
+        login = _parse(doc.get("login_at"))
+        out = {"reset": reset, "acc_s": _num(doc.get("acc_s")), "login": login,
+               "seen": _parse(doc.get("seen")), "active": doc.get("active") is True}
+        if _parse(doc.get("reset")) != reset:  # a reset passed: start over
+            out.update(acc_s=0.0, active=login is not None)
+        return out
+
+    def _save(self, d):
+        self.store.put("dice", {
+            "reset": _iso(d["reset"]), "acc_s": round(d["acc_s"], 3),
+            "login_at": _iso(d["login"]) if d["login"] is not None else None,
+            "seen": _iso(d["seen"]) if d["seen"] is not None else None,
+            "active": d["active"]})
+
+    @staticmethod
+    def _close(d, at):
+        d["acc_s"] += max(0.0, at - max(d["login"], d["reset"]))
+        d["login"] = None
+
+    def on_game(self, prev, new, at):
+        """Plan 008 change hook (GameWatch.listeners)."""
+        with self._lock:
+            d = self._load(at)
+            if d["login"] is not None and prev != "logged_in" and new != "logged_in":
+                # Orphan from a previous EW run: close where EW last saw it.
+                seen = d["seen"] if d["seen"] is not None else d["login"]
+                self._close(d, min(seen, at))
+            elif d["login"] is not None and new != "logged_in":
+                self._close(d, at)
+            elif d["login"] is None and new == "logged_in":
+                d["login"], d["active"] = at, True
+            d["seen"] = at
+            self._save(d)
+
+    def status(self, now=None):
+        """GET /api/today `dice`: {earned, max, next_at_min, eta_utc, played_min,
+        logged_in, next_reset, verified}."""
+        now = self.clock() if now is None else now
+        with self._lock:
+            d = self._load(now)
+            if d["login"] is not None and (d["seen"] is None or now - d["seen"] >= DICE_SEEN_S):
+                d["seen"] = now
+                self._save(d)
+        live = d["login"] is not None
+        played = d["acc_s"] + (max(0.0, now - max(d["login"], d["reset"])) if live else 0.0)
+        earned = sum(1 for g in self.grants if g * 60 <= played) if d["active"] else 0
+        nxt = next((g for g in self.grants[earned:]), None)
+        eta = None
+        if nxt is not None and live:
+            eta = _iso(now + max(0.0, nxt * 60 - played))
+        return {"earned": earned, "max": len(self.grants), "next_at_min": nxt,
+                "eta_utc": eta, "played_min": int(played // 60), "logged_in": live,
+                "next_reset": _iso(_today.next_reset(self.rule, self._dt(now)).timestamp()),
+                "verified": self.verified}

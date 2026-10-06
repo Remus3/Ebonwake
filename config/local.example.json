@@ -18,7 +18,7 @@
     "display": null,
     "scale": 1.0,
     "opacity": 0.85,
-    "widgets": {"grindSession": true, "grindBuff": true, "eventsSoon": true, "leveling": false, "season": false, "marketTicker": false, "worldBoss": false}
+    "widgets": {"grindSession": true, "grindBuff": true, "eventsSoon": true, "leveling": false, "season": false, "marketTicker": false, "worldBoss": false, "dice": false}
   },
   "notify": {
     "_doc": "Plan 026. Per-rule OS notifications (dashboard toasts follow the same switches). Defaults: marketAlert and buffEnding on, the rest off. bossSoon (plan 032): 15 and 5 min before each world boss spawn not yet looted. silent: no notification sound (default true).",

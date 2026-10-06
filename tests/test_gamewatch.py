@@ -4,6 +4,7 @@ Every fixture is a synthetic UTF-16LE file written into tmp_path. No test reads
 a real game log, a real config or runs the real tasklist.
 """
 
+import datetime
 import http.client
 import json
 import os
@@ -15,6 +16,7 @@ import pytest
 
 from server.ew import app as ewapp
 from server.ew import gamewatch, market
+from server.ew.store import Store
 
 T0 = 1_800_000_000.0  # injected clock base (epoch seconds)
 
@@ -751,3 +753,125 @@ def test_bare_make_server_never_reads_real_config(tmp_path, monkeypatch):
     ("ExitGame", "running"), ("CatalogInfo", None), ("Catalog_Index", None)])
 def test_camel_and_snake_tokens(text, state):
     assert gamewatch.classify(text) == state
+
+
+# --- plan 056: dice from logged-in minutes -------------------------------------------
+
+def _utc(y, mo, d, h=0, mi=0, s=0):
+    return datetime.datetime(y, mo, d, h, mi, s, tzinfo=datetime.timezone.utc).timestamp()
+
+
+FIVE = {"every": "day", "at": "05:00"}
+D0 = _utc(2026, 10, 6, 10)  # 10:00 UTC, after the 05:00 dice reset
+
+
+def _dice(tmp_path, t=D0):
+    clk = Clock(t)
+    return gamewatch.DiceClock(Store(tmp_path / "store"), FIVE, [0, 30, 60], clock=clk), clk
+
+
+def test_dice_none_before_login(tmp_path):
+    d, _ = _dice(tmp_path)
+    s = d.status()
+    assert s["earned"] == 0 and s["max"] == 3 and s["next_at_min"] == 0
+    assert s["eta_utc"] is None and s["logged_in"] is False and s["played_min"] == 0
+    assert s["next_reset"] == "2026-10-07T05:00:00+00:00" and s["verified"] is False
+
+
+def test_dice_login_grants_one_then_eta(tmp_path):
+    d, clk = _dice(tmp_path)
+    d.on_game("running", "logged_in", D0)
+    clk.t = D0 + 18 * 60
+    s = d.status()
+    assert s["earned"] == 1 and s["next_at_min"] == 30 and s["played_min"] == 18
+    assert s["eta_utc"] == "2026-10-06T10:30:00+00:00" and s["logged_in"] is True
+    clk.t = D0 + 30 * 60
+    assert d.status()["earned"] == 2
+    clk.t = D0 + 61 * 60
+    s = d.status()
+    assert s["earned"] == 3 and s["next_at_min"] is None and s["eta_utc"] is None
+
+
+def test_dice_accumulates_across_disconnects(tmp_path):
+    d, clk = _dice(tmp_path)
+    d.on_game("running", "logged_in", D0)
+    d.on_game("logged_in", "disconnected", D0 + 20 * 60)
+    clk.t = D0 + 3600  # an hour offline adds nothing
+    s = d.status()
+    assert s["played_min"] == 20 and s["earned"] == 1 and s["eta_utc"] is None
+    assert s["next_at_min"] == 30
+    d.on_game("disconnected", "logged_in", D0 + 3600)
+    clk.t = D0 + 3600 + 10 * 60
+    s = d.status()
+    assert s["played_min"] == 30 and s["earned"] == 2
+    assert s["eta_utc"] == "2026-10-06T11:40:00+00:00"
+
+
+def test_dice_reset_at_rule_time(tmp_path):
+    d, clk = _dice(tmp_path, _utc(2026, 10, 6, 4, 0))
+    d.on_game("running", "logged_in", _utc(2026, 10, 6, 4, 0))
+    clk.t = _utc(2026, 10, 6, 4, 59, 59)
+    assert d.status()["earned"] == 2  # 59 min before the reset
+    clk.t = _utc(2026, 10, 6, 5, 10)  # session spans 05:00: only 10 min count
+    s = d.status()
+    assert s["played_min"] == 10 and s["earned"] == 1 and s["next_at_min"] == 30
+    d.on_game("logged_in", "not_running", _utc(2026, 10, 6, 5, 10))
+    clk.t = _utc(2026, 10, 7, 6)  # next day, never logged in: nothing earned
+    s = d.status()
+    assert s["earned"] == 0 and s["played_min"] == 0 and s["next_at_min"] == 0
+
+
+def test_dice_ew_restart_resumes_open_session(tmp_path):
+    d, clk = _dice(tmp_path)
+    d.on_game("running", "logged_in", D0)
+    clk.t = D0 + 5 * 60
+    d.status()  # refreshes `seen`
+    d2, _ = _dice(tmp_path, D0 + 40 * 60)  # new EW process, same store
+    d2.on_game(None, "logged_in", D0 + 40 * 60)  # first poll: still in game
+    s = d2.status()
+    assert s["played_min"] == 40 and s["earned"] == 2 and s["logged_in"] is True
+
+
+def test_dice_ew_restart_closes_orphan_at_seen(tmp_path):
+    d, clk = _dice(tmp_path)
+    d.on_game("running", "logged_in", D0)
+    clk.t = D0 + 25 * 60
+    d.status()  # seen = +25 min
+    d2, _ = _dice(tmp_path, D0 + 3 * 3600)  # EW back hours later, game closed
+    d2.on_game(None, "not_running", D0 + 3 * 3600)
+    s = d2.status()
+    assert s["played_min"] == 25 and s["earned"] == 1 and s["logged_in"] is False
+
+
+def test_dice_seen_throttled(tmp_path):
+    d, clk = _dice(tmp_path)
+    d.on_game("running", "logged_in", D0)
+    clk.t = D0 + 30
+    d.status()
+    assert d.store.get("dice")["seen"] == "2026-10-06T10:00:00+00:00"
+    clk.t = D0 + 61
+    d.status()
+    assert d.store.get("dice")["seen"] == "2026-10-06T10:01:01+00:00"
+
+
+def test_dice_corrupt_store_degrades(tmp_path):
+    d, _ = _dice(tmp_path)
+    d.store.put("dice", {"reset": 5, "acc_s": "x", "login_at": "nope", "seen": [],
+                         "active": "yes"})
+    s = d.status()
+    assert s["earned"] == 0 and s["played_min"] == 0 and s["logged_in"] is False
+
+
+def test_dice_never_auto_ticks_today(tmp_path):
+    s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
+                          market_seed=[], profile_cfg={})
+    try:
+        assert s.dice.on_game in s.game.listeners
+        assert s.dice.grants == [0, 30, 60] and s.dice.rule == FIVE
+        s.dice.on_game("running", "logged_in", time.time() - 3700)
+        v = s.today_view()
+        assert v["dice"]["earned"] == 3 and v["dice"]["max"] == 3
+        dice = [i for i in v["items"] if i["id"] == "black-spirits-adventure-dice"]
+        assert dice and dice[0]["done"] is False  # a suggestion only, never a tick
+    finally:
+        s.server_close()

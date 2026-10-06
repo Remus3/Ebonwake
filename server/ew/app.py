@@ -250,9 +250,14 @@ class EWServer(ThreadingHTTPServer):
         # Plan 046: game exit -> play window recorded + grind.pending_stop (never a stop).
         self.summary = summary.SummaryService(self.store, self.grind,
                                               clock=grind_clock or time.time)
+        # Plan 056: dice earned from logged-in minutes since the plan 021 dice reset.
+        rule, grants, verified = today.dice_preset()
+        self.dice = gamewatch.DiceClock(self.store, rule, grants, verified=verified,
+                                        clock=today_clock or time.time)
         listeners = getattr(self.game, "listeners", None)
         if isinstance(listeners, list):
             listeners.append(self.summary.on_game)
+            listeners.append(self.dice.on_game)
         if ocr_cache_dir is None:  # beside the store, so a test store keeps OCR in tmp too
             ocr_cache_dir = Path(store_root).parent / "ocr" if store_root else RUNTIME / "ocr"
         # Plan 040: loot import matches against the spot's grind loot list.
@@ -274,9 +279,9 @@ class EWServer(ThreadingHTTPServer):
         return dict(ch, level=self.progress._level(ch))
 
     def today_view(self, body=None):
-        """GET /api/today: plan 003 checklist + plan 033 `weekly_plan`."""
+        """GET /api/today: plan 003 checklist + plan 033 `weekly_plan` + plan 056 `dice`."""
         return dict(self.today.view() if body is None else body,
-                    weekly_plan=self.weekly.view())
+                    weekly_plan=self.weekly.view(), dice=self.dice.status())
 
     def server_close(self):
         self.game.stop()
