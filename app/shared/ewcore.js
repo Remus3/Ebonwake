@@ -3656,7 +3656,6 @@
 
   const BOSS_GARMOTH = 'Garmoth';
   const BOSS_NAME_MAX = 40;
-  const BOSS_SOON_MIN = [5, 15];
 
   function bossGarmoth(view) {
     const g = plainObject(view) && plainObject(view.garmoth) ? view.garmoth : null;
@@ -3745,14 +3744,16 @@
     return !!m && realDate(m[1], m[2], m[3]);
   }
 
-  // Notify rule bossSoon: one hit at 15 min and one at 5 min before each
-  // spawn that is not already all looted. A state rule (fires on a baseline);
-  // the key carries the threshold so the ledger lets each fire once.
+  // Notify rule bossSoon: one hit per alert-ladder step (plan 070: 15 / 5 / 1
+  // min, setting notify.ladder_min) before each spawn that is not already all
+  // looted. A state rule (fires on a baseline); the key carries the step so
+  // the ledger lets each fire once.
   function bossHits(prev, next, now) {
+    const steps = promptLadder(next.prompts);
     return bossRows(next.bosses, now, 3).filter(function (r) { return !r.done; }).map(function (r) {
-      const mins = BOSS_SOON_MIN.filter(function (m) { return r.at_ms - now <= m * 60000; })[0];
-      if (mins === undefined) return null;
-      return hit('bossSoon:' + r.key + ':' + mins, 'World boss in ' + mins + 'm: ' + r.text,
+      const mins = ladderStep(r.at_ms - now, steps);
+      if (mins === null) return null;
+      return ladderHit('bossSoon:' + r.key + ':' + mins, 'World boss in ' + mins + 'm: ' + r.text,
         r.text + ' spawns in ' + r.left);
     }).filter(Boolean);
   }
@@ -4540,7 +4541,8 @@
   // Every key is a dotted config/local.json path; secrets and loop never appear.
   const THEMES = ['system', 'dark', 'light'];
   const UI_SCALE = [0.9, 1.3];
-  const NOTIFY_RULES_PREFS = ['marketAlert', 'buffEnding', 'hotTime', 'resetPassed', 'newCoupon', 'gameExit', 'bossSoon'];
+  const NOTIFY_RULES_PREFS = ['marketAlert', 'buffEnding', 'hotTime', 'resetPassed', 'newCoupon', 'gameExit', 'bossSoon',
+    'resetSoon'];
   const SETTINGS_GROUPS = [
     { id: 'overlay', title: 'Overlay', fields: WIDGETS.map(function (w) {
       return { key: 'overlay.widgets.' + w, label: 'Widget: ' + w, type: 'bool' };
@@ -4569,7 +4571,11 @@
     ] },
     { id: 'notify', title: 'Notifications', fields: NOTIFY_RULES_PREFS.map(function (n) {
       return { key: 'notify.' + n, label: n, type: 'bool' };
-    }).concat([{ key: 'coupons.check', label: 'Coupon suggestions', type: 'bool' }]) },
+    }).concat([
+      // Plan 070: game-closed quiet + the minutes-before alert ladder.
+      { key: 'notify.quiet_closed', label: 'Quiet while the game is closed (market alerts still notify)', type: 'bool' },
+      { key: 'notify.ladder_min', label: 'Alert minutes before, e.g. 15,5,1', type: 'ladder' },
+      { key: 'coupons.check', label: 'Coupon suggestions', type: 'bool' }]) },
     // Plan 059: event-notice suggestions + the weekly maintenance start (UTC).
     { id: 'events', title: 'Events', fields: [
       { key: 'events.notice_check', label: 'Event notice suggestions', type: 'bool' },
@@ -4618,6 +4624,7 @@
       case 'family': return v === '' || (typeof v === 'string' && FAMILY_RE.test(v));
       case 'enum': return typeof v === 'string' && f.options.indexOf(v) >= 0;
       case 'hhmm': return v === '' || (typeof v === 'string' && /^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(v));
+      case 'ladder': return parseLadder(v) !== null;
       // Shape only (the server checks the folder exists): '' or an absolute path.
       case 'dir': return v === '' || (typeof v === 'string' && v.length <= DIR_MAX && v === v.trim() &&
         !/[\u0000-\u001f\u007f]/.test(v) && /^([A-Za-z]:[\\/]|[\\/])/.test(v));
@@ -4656,6 +4663,7 @@
       else if (f.type === 'display') hint = 'blank or a display number 0-16';
       else if (f.type === 'hhmm') hint = 'blank or HH:MM (UTC), e.g. 07:00';
       else if (f.type === 'dir') hint = 'blank (auto-detect) or a full folder path';
+      else if (f.type === 'ladder') hint = '1-6 minutes, 1-120, largest first, e.g. 15,5,1';
       return { error: f.label + ': ' + hint };
     }
     return { value: v };
@@ -5649,21 +5657,91 @@
   const NOTIFY_TITLE_MAX = 64;
   const NOTIFY_BODY_MAX = 200;
   const NOTIFY_RATE = { max: 6, windowMs: 60000 };
-  const BUFF_ENDING_S = 300;
   const NOTIFY_PRINTABLE = /^[\x20-\x7e]*$/;
 
+  // ---- Prompt hygiene (plan 070) ----
+  // Mirrors server/ew/prompts.py + data/prompt_ttl.json (a node test pins the
+  // values). GET /api/prompts {quiet_closed, quiet_states, allow_closed,
+  // ladder_min, timers} rides in the notify snapshot as `prompts`.
+  const TOAST_ONCE_MS = 600000; // prompt_ttl.json ttl_s.toast
+  const LADDER_MIN = [15, 5, 1];
+  const QUIET_STATES = ['not_running'];
+  const QUIET_ALLOW = ['marketAlert', 'couponExpiry', 'gameExit'];
+
+  function validLadder(v) {
+    return Array.isArray(v) && v.length >= 1 && v.length <= 6 && v.every(function (m, i) {
+      return Number.isInteger(m) && m >= 1 && m <= 120 && (i === 0 || v[i - 1] > m);
+    });
+  }
+
+  // Settings form text "15,5,1" -> [15, 5, 1], or null.
+  function parseLadder(s) {
+    if (typeof s !== 'string' || !s || s.length > 32) return null;
+    const parts = s.split(',').map(function (p) { return p.trim(); });
+    if (!parts.every(function (p) { return /^[0-9]+$/.test(p); })) return null;
+    const v = parts.map(Number);
+    return validLadder(v) ? v : null;
+  }
+
+  function promptLadder(p) {
+    return plainObject(p) && validLadder(p.ladder_min) ? p.ladder_min : LADDER_MIN;
+  }
+
+  // The step due for an event leftMs away: the smallest whose mark passed, or null.
+  function ladderStep(leftMs, steps) {
+    if (!isNum(leftMs) || leftMs <= 0) return null;
+    const due = (validLadder(steps) ? steps : LADDER_MIN).filter(function (m) { return leftMs <= m * 60000; });
+    return due.length ? due[due.length - 1] : null;
+  }
+
+  function ladderHit(key, title, body) { return { key: key, title: title, body: body, ladder: true }; }
+
+  // Hits -> {fire, drop} under the game-closed quiet: while the game is in a
+  // quiet state only allow_closed rules fire; a held ladder hit is stale (its
+  // mark passed while closed) and goes to drop, which the caller feeds to the
+  // ledger so it never fires late; any other held hit waits for a later round
+  // (its rule re-fires at login if still current).
+  function promptGate(hits, game, p) {
+    const list = Array.isArray(hits) ? hits : [];
+    const q = plainObject(p) ? p : {};
+    const g = normalizeGame(game);
+    const states = Array.isArray(q.quiet_states) ? q.quiet_states : QUIET_STATES;
+    if (q.quiet_closed === false || !g || states.indexOf(g.state) < 0) return { fire: list.slice(), drop: [] };
+    const allow = Array.isArray(q.allow_closed) ? q.allow_closed : QUIET_ALLOW;
+    const fire = [];
+    const drop = [];
+    list.forEach(function (h) {
+      if (!plainObject(h)) return;
+      if (allow.indexOf(h.rule) >= 0) fire.push(h);
+      else if (h.ladder === true) drop.push(h);
+    });
+    return { fire: fire, drop: drop };
+  }
+
+  // A toast pushed with once: true shows once per key: a repeat within
+  // TOAST_ONCE_MS of its first show (from any tab or the notify loop) is
+  // ignored, even after it expired or was dismissed. push returns whether it showed.
   function toastQueue() {
     let list = [];
     let seq = 0;
+    let shown = {};
     return {
       push: function (t, now) {
-        if (!plainObject(t)) return;
+        if (!plainObject(t)) return false;
         const level = Object.prototype.hasOwnProperty.call(TOAST_MS, t.level) ? t.level : 'warn';
         const key = typeof t.key === 'string' && t.key ? t.key : 'toast:' + (++seq);
+        if (t.once === true) {
+          const kept = {};
+          Object.keys(shown).forEach(function (k) { if (now - shown[k] < TOAST_ONCE_MS) kept[k] = shown[k]; });
+          shown = kept;
+          if (Object.prototype.hasOwnProperty.call(shown, key)) return false;
+          shown[key] = now;
+        }
         list = list.filter(function (x) { return x.key !== key; });
         list.push({ key: key, level: level, text: String(t.text === undefined ? '' : t.text).slice(0, TOAST_TEXT_MAX),
           until: now + TOAST_MS[level] });
         if (list.length > TOAST_MAX) list = list.slice(list.length - TOAST_MAX);
+        return true;
       },
       expire: function (now) {
         const n = list.length;
@@ -5721,17 +5799,19 @@
     return out;
   }
 
+  // Plan 070: one hit per ladder step before the end (was once at 5 min).
   function buffHits(prev, next, now) {
     if (!plainObject(next.grind)) return [];
     const at = isNum(next.grindAt) ? next.grindAt : next.at;
+    const steps = promptLadder(next.prompts);
     return buffsLive(next.grind.buffs, at, now).filter(function (b) {
-      return b.left_s <= BUFF_ENDING_S && typeof b.name === 'string';
+      return typeof b.name === 'string' && ladderStep(b.left_s * 1000, steps) !== null;
     }).map(function (b) {
-      // One key per arming: the server's ends, else the end minute.
+      // One key per arming and step: the server's ends, else the end minute.
       const end = typeof b.ends === 'string' ? b.ends : String(Math.round((now + b.left_s * 1000) / 60000));
       const id = b.id === undefined || b.id === null ? b.name : b.id;
-      return hit('buffEnding:' + id + ':' + end, 'Buff ending: ' + b.name,
-        b.name + ' ends in ' + fmtDuration(b.left_s * 1000));
+      return ladderHit('buffEnding:' + id + ':' + end + ':' + ladderStep(b.left_s * 1000, steps),
+        'Buff ending: ' + b.name, b.name + ' ends in ' + fmtDuration(b.left_s * 1000));
     });
   }
 
@@ -5743,14 +5823,38 @@
   function hotHits(prev, next, now) {
     const was = hotActive(prev, isNum(prev && prev.at) ? prev.at : now);
     const cur = hotActive(next, now);
-    if (!was || !cur) return [];
+    // Plan 070: Hot Time end on the alert ladder (a state part: fires on a baseline).
+    const steps = promptLadder(next.prompts);
+    const ending = (cur || []).map(function (a) {
+      const m = ladderStep(a.ends_in_s * 1000, steps);
+      if (m === null) return null;
+      const label = typeof a.label === 'string' && a.label ? a.label : 'Hot Time';
+      return ladderHit('hotTime:end:' + a.id + ':' + lastResetOf({ every: 'day', at: '00:00' }, now) + ':' + m,
+        'Hot Time ends in ' + m + 'm: ' + label, label + ' ends in ' + fmtDuration(a.ends_in_s * 1000));
+    }).filter(Boolean);
+    if (!was || !cur) return ending;
     const ids = was.map(function (a) { return a.id; });
-    return cur.filter(function (a) { return ids.indexOf(a.id) < 0; }).map(function (a) {
+    return ending.concat(cur.filter(function (a) { return ids.indexOf(a.id) < 0; }).map(function (a) {
       const label = typeof a.label === 'string' && a.label ? a.label : 'Hot Time';
       return hit('hotTime:' + a.id + ':' + lastResetOf({ every: 'day', at: '00:00' }, now),
         'Hot Time started: ' + label,
         label + (isNum(a.pct) ? ' +' + a.pct + '% XP' : '') + ' for ' + fmtDuration(a.ends_in_s * 1000));
-    });
+    }));
+  }
+
+  // Plan 070 resetSoon: daily / weekly reset and maintenance start on the
+  // alert ladder, from the server's GET /api/prompts timers [{key, at, title}].
+  function resetSoonHits(prev, next, now) {
+    const p = plainObject(next.prompts) ? next.prompts : null;
+    const steps = promptLadder(p);
+    return (p && Array.isArray(p.timers) ? p.timers : []).map(function (t) {
+      if (!plainObject(t) || typeof t.key !== 'string' || typeof t.at !== 'string') return null;
+      const left = Date.parse(t.at) - now;
+      const m = ladderStep(left, steps);
+      if (m === null) return null;
+      const title = typeof t.title === 'string' && t.title ? t.title : 'Reset';
+      return ladderHit(t.key + ':' + m, title + ' in ' + m + 'm', title + ' in ' + fmtDuration(left));
+    }).filter(Boolean);
   }
 
   function resetHits(prev, next, now) {
@@ -5812,7 +5916,8 @@
     { name: 'resetPassed', defaultOn: false, fire: resetHits },
     { name: 'newCoupon', defaultOn: false, fire: couponHits },
     { name: 'gameExit', defaultOn: false, fire: gameHits },
-    { name: 'bossSoon', defaultOn: false, fire: bossHits }
+    { name: 'bossSoon', defaultOn: false, fire: bossHits },
+    { name: 'resetSoon', defaultOn: false, fire: resetSoonHits }
   ];
 
   // config/local.json `notify` block -> {rule: bool}; non-booleans keep the default.
@@ -5854,8 +5959,10 @@
       try { hits = r.fire(prev || null, next, nowMs) || []; } catch (e) { hits = []; }
       hits.forEach(function (h) {
         if (!plainObject(h) || typeof h.key !== 'string' || !h.key) return;
-        out.push({ key: h.key, rule: r.name, title: notifyText(h.title, NOTIFY_TITLE_MAX) || r.name,
-          body: notifyText(h.body, NOTIFY_BODY_MAX) });
+        const o = { key: h.key, rule: r.name, title: notifyText(h.title, NOTIFY_TITLE_MAX) || r.name,
+          body: notifyText(h.body, NOTIFY_BODY_MAX) };
+        if (h.ladder === true) o.ladder = true; // plan 070: promptGate drops a stale one
+        out.push(o);
       });
     });
     return out;
@@ -5991,6 +6098,13 @@
     NOTIFY_RATE: NOTIFY_RATE,
     NOTIFY_RULES: NOTIFY_RULES,
     toastQueue: toastQueue,
+    TOAST_ONCE_MS: TOAST_ONCE_MS,
+    LADDER_MIN: LADDER_MIN,
+    QUIET_STATES: QUIET_STATES,
+    QUIET_ALLOW: QUIET_ALLOW,
+    parseLadder: parseLadder,
+    ladderStep: ladderStep,
+    promptGate: promptGate,
     postToast: postToast,
     notifyPrefs: notifyPrefs,
     notifySilent: notifySilent,
