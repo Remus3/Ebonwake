@@ -143,6 +143,7 @@
     const x = el('button', 'ew-tx', 'x');
     x.type = 'button';
     x.title = 'delete (click twice)';
+    x.setAttribute('aria-label', x.title);
     x.addEventListener('click', function () { if (armed(x, 'x')) send({ delete: r.id }, 'deleted'); });
     return x;
   }

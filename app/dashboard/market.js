@@ -263,8 +263,9 @@
     const list = el('div', 'ew-list' + (stale ? ' ew-stale' : ''));
     items.forEach(function (it) {
       if (!it) return;
-      const row = el('div', 'ew-mrow');
-      row.title = 'click to fill the add form';
+      const row = el('button', 'ew-mrow ew-rowbtn');
+      row.type = 'button';
+      row.title = 'fill the add form';
       row.appendChild(el('span', 'ew-mname', label(it)));
       const price = typeof it.lastSoldPrice === 'number' ? it.lastSoldPrice : it.basePrice;
       row.appendChild(priceEl(price));

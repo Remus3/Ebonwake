@@ -282,7 +282,7 @@
     const list = S.data ? S.data.sessions.filter(function (s) { return s && typeof s === 'object'; }) : [];
     ui.logPill.textContent = S.data ? list.length + ' sessions' : '-';
     if (!S.data) { body.appendChild(el('div', 'ew-muted', S.err ? S.err : 'loading...')); return; }
-    if (!list.length) { body.appendChild(el('div', 'ew-muted', 'No sessions yet.')); return; }
+    if (!list.length) { body.appendChild(el('div', 'ew-muted', 'Log a grind to see silver/h.')); return; }
     const box = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
     list.forEach(function (s) {
       const r = el('div', 'ew-grow');
@@ -302,6 +302,7 @@
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';
       x.title = 'delete (click twice)';
+      x.setAttribute('aria-label', x.title);
       x.addEventListener('click', function () {
         if (armed(x, 'x')) send({ delete: s.id }, 'deleted');
       });
@@ -355,6 +356,7 @@
         const x = el('button', 'ew-tx', 'x');
         x.type = 'button';
         x.title = 'forget this item (click twice)';
+        x.setAttribute('aria-label', x.title);
         x.addEventListener('click', function () {
           if (!armed(x, 'x')) return;
           send({ loot_forget: { spot: S.lootSpot, name: it.name } }, 'loot item removed')
@@ -452,6 +454,7 @@
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';
       x.title = 'clear';
+      x.setAttribute('aria-label', 'clear buff');
       x.disabled = row.id === null;
       x.hidden = row.left_s === null;
       x.addEventListener('click', function () { if (row.id !== null) send({ clear_buff: row.id }, 'cleared'); });

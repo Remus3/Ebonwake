@@ -12,6 +12,7 @@
   let attempt = 0;
   let active = null;
   let ticks = 0;
+  const GEAR = String.fromCharCode(0x2699); // System icon tab (plan 047)
   // Health inputs for C.healthPill; sseOk stays null until the stream reports.
   const H = { version: null, health: null, sources: null, lastOkMs: null, sseOk: null, restarting: false };
 
@@ -29,10 +30,18 @@
     return c;
   }
 
-  function select(id) {
+  function tabIds() {
+    return Array.prototype.map.call(document.querySelectorAll('.ew-tab'), function (b) { return b.dataset.tab; });
+  }
+
+  // Plan 047: roving tabindex - only the selected tab is in the Tab order.
+  function select(id, focus) {
     active = id;
     document.querySelectorAll('.ew-tab').forEach(function (b) {
-      b.setAttribute('aria-selected', String(b.dataset.tab === id));
+      const on = b.dataset.tab === id;
+      b.setAttribute('aria-selected', String(on));
+      b.tabIndex = on ? 0 : -1;
+      if (on && focus) b.focus();
     });
     document.querySelectorAll('.ew-panel').forEach(function (p) {
       p.classList.toggle('active', p.dataset.tab === id);
@@ -53,19 +62,31 @@
   }
 
   function render(state) {
-    const tabs = C.normalizeTabs(state);
+    const tabs = C.orderTabs(C.normalizeTabs(state));
     const nav = document.getElementById('tabs');
     const panels = document.getElementById('panels');
     nav.textContent = '';
     panels.textContent = '';
     tabs.forEach(function (t) {
-      const b = el('button', 'ew-tab', t.title);
+      const b = el('button', 'ew-tab' + (t.edge ? ' ew-tab-edge' : ''));
+      b.type = 'button';
+      b.appendChild(el('span', null, t.edge ? GEAR : t.title));
+      const badge = el('span', 'ew-tab-badge');
+      badge.hidden = true;
+      b.appendChild(badge);
+      if (t.edge) { b.title = t.title; b.setAttribute('aria-label', t.title); }
       b.dataset.tab = t.id;
+      b.id = 'tab-' + t.id;
       b.setAttribute('role', 'tab');
+      b.setAttribute('aria-controls', 'panel-' + t.id);
+      b.tabIndex = -1;
       b.addEventListener('click', function () { select(t.id); });
       nav.appendChild(b);
       const p = el('div', 'ew-panel');
       p.dataset.tab = t.id;
+      p.id = 'panel-' + t.id;
+      p.setAttribute('role', 'tabpanel');
+      p.setAttribute('aria-labelledby', 'tab-' + t.id);
       if (t.id === 'home' && window.EWHome) {
         window.EWHome.mount(p);
       } else if (t.id === 'today' && window.EWToday) {
@@ -108,6 +129,31 @@
     const ids = tabs.map(function (t) { return t.id; });
     select(active && ids.indexOf(active) >= 0 ? active : (ids.indexOf(saved) >= 0 ? saved : ids[0]));
     paintSystem();
+    paintBadges();
+  }
+
+  // Badges ride on the Home snapshots (polled every 60 s whatever tab shows).
+  function paintBadges() {
+    const snaps = window.EWHome && typeof window.EWHome.snapshots === 'function' ? window.EWHome.snapshots() : null;
+    const badges = C.tabBadges(snaps, Date.now());
+    document.querySelectorAll('.ew-tab').forEach(function (b) {
+      const s = b.querySelector('.ew-tab-badge');
+      if (!s) return;
+      const text = badges[b.dataset.tab] || '';
+      if (s.textContent !== text) s.textContent = text;
+      s.hidden = !text;
+    });
+  }
+
+  // Left/Right/Home/End on the strip; Ctrl+1..9 anywhere in this window
+  // (dashboard only - the overlay is focus-less and has no tab strip).
+  function onKey(ev) {
+    const onStrip = ev.target && ev.target.classList && ev.target.classList.contains('ew-tab');
+    if (!ev.ctrlKey && !onStrip) return;
+    const id = C.tabKey(tabIds(), active, ev);
+    if (!id) return;
+    ev.preventDefault();
+    select(id, onStrip);
   }
 
   function paintPill() {
@@ -211,11 +257,12 @@
     const w = document.getElementById('weekly-reset');
     if (d) d.textContent = C.fmtDuration(C.nextDailyReset(now) - now);
     if (w) w.textContent = C.fmtDuration(C.nextWeeklyReset(now) - now);
-    if (++ticks % 5 === 0) { paintPill(); paintSystem(); } // ages + the 90 s cut-off
+    if (++ticks % 5 === 0) { paintPill(); paintSystem(); paintBadges(); } // ages + the 90 s cut-off
   }
 
   const rb = document.getElementById('server-restart');
   if (rb) rb.addEventListener('click', restart);
+  document.addEventListener('keydown', onKey);
   load();
   watchStream();
   setInterval(pollVersion, C.VERSION_POLL_MS);

@@ -29,6 +29,15 @@ html, body {
   padding: 6px 12px; border-radius: var(--ew-radius); cursor: pointer; font: inherit;
 }
 .ew-tab[aria-selected="true"] { color: var(--fk-text); background: var(--fk-surface); box-shadow: inset 0 -2px 0 var(--fk-accent); }
+/* Plan 047: System is a right-aligned icon tab; badges come from polled data. */
+.ew-tab-edge { margin-left: auto; padding: 6px 10px; }
+.ew-tab-badge {
+  margin-left: 6px; padding: 0 6px; border-radius: 999px; font-size: 12px;
+  border: 1px solid var(--fk-border); color: var(--fk-status-warn);
+}
+.ew-tab-badge[hidden] { display: none; }
+/* Keyboard focus is always visible (mouse clicks do not draw it). */
+:focus-visible { outline: 2px solid var(--fk-accent); outline-offset: 1px; }
 
 .ew-pill { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--fk-border); font-size: 12px; }
 .ew-pill.ok { color: var(--fk-status-ok); }
@@ -38,17 +47,20 @@ html, body {
 
 .ew-main { flex: 1; min-height: 0; display: flex; }
 
-/* A tab is a grid of compact cards that fits the window; lists scroll inside cards. */
+/* A tab is a grid of compact cards that fits the window; lists scroll inside cards.
+   Plan 047: cards are content-sized (no stretched empty cards), capped at
+   half the window; list cards span two rows and get the full height. */
 .ew-panel { flex: 1; min-height: 0; padding: var(--ew-gap); display: none; }
 .ew-panel.active {
-  display: grid; gap: var(--ew-gap);
+  display: grid; gap: var(--ew-gap); overflow: auto;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  grid-auto-rows: minmax(120px, 1fr);
+  grid-auto-rows: min-content; align-content: start;
 }
 .ew-card {
-  min-height: 0; overflow: auto; background: var(--fk-surface-2);
+  min-height: 0; overflow: auto; background: var(--fk-surface-2); max-height: calc(50vh - 34px);
   border: 1px solid var(--fk-border); border-radius: var(--ew-radius); padding: 10px;
 }
+.ew-card.ew-mcard { grid-row: span 2; max-height: calc(100vh - 74px); }
 .ew-card h2 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; color: var(--fk-text-muted); letter-spacing: .06em; }
 .ew-num { font: 600 20px var(--ew-mono); }
 .ew-muted { color: var(--fk-text-muted); }
@@ -62,7 +74,9 @@ html, body {
   display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center;
   gap: 6px; padding: 3px 4px; border-radius: var(--ew-radius); cursor: pointer;
 }
-.ew-mrow:hover, .ew-mrow:focus { background: var(--fk-surface); outline: none; }
+.ew-mrow:hover, .ew-mrow:focus-visible { background: var(--fk-surface); }
+/* A clickable row that is a real <button> (plan 047) looks like a row. */
+.ew-rowbtn { width: 100%; text-align: left; font: inherit; color: inherit; background: none; border: 0; }
 .ew-mrow.sel { box-shadow: inset 2px 0 0 var(--fk-accent); }
 .ew-mname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ew-mprice { font-family: var(--ew-mono); }
@@ -130,6 +144,7 @@ html, body {
 .ew-tx {
   font: 11px var(--ew-font); color: var(--fk-text-muted); background: none; cursor: pointer;
   border: 1px solid transparent; border-radius: var(--ew-radius); padding: 0 5px;
+  min-width: 20px; min-height: 20px;
 }
 .ew-tx:hover { color: var(--fk-status-bad); border-color: var(--fk-border); }
 /* This week (plan 033): name, n/per_week, -/+, then the gap and reset on a wrap line. */
@@ -153,7 +168,7 @@ html, body {
 .ew-form input[type="text"], .ew-form input[type="date"] { width: 120px; }
 
 /* Progress tab (plan 004): many tracks scroll the panel, steps scroll per card. */
-.ew-panel.active.ew-progress { overflow: auto; grid-auto-rows: minmax(200px, 1fr); }
+.ew-panel.active.ew-progress { overflow: auto; }
 .ew-track h2 .ew-mname { min-width: 0; }
 .ew-bar { height: 6px; border-radius: 3px; background: var(--fk-surface); margin-bottom: 6px; overflow: hidden; }
 .ew-bar-fill { height: 100%; background: var(--fk-accent); }
@@ -206,6 +221,8 @@ html, body {
 }
 .ew-grow:hover, .ew-srow:hover, .ew-brow:hover { background: var(--fk-surface); }
 .ew-brow.on .ew-mname { color: var(--fk-status-ok); }
+/* Plan 047 L8: a text marker next to every colour cue. */
+.ew-brow.on .ew-mname::before { content: "ON "; font-weight: 600; }
 .ew-brow input {
   width: 100%; box-sizing: border-box; font: inherit; color: var(--fk-text); background: var(--fk-surface);
   border: 1px solid var(--fk-border); border-radius: var(--ew-radius); padding: 1px 4px;
@@ -235,6 +252,8 @@ html, body {
 .ew-ecode { font-family: var(--ew-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
 .ew-erow.soon { box-shadow: inset 2px 0 0 var(--fk-status-warn); }
 .ew-erow.soon .ew-mprice { color: var(--fk-status-warn); }
+.ew-erow.soon .ew-mprice::before, .ew-hrow.warn .ew-hval::before { content: "\23F1  "; }
+.ew-hrow.bad .ew-hval::before { content: "! "; }
 .ew-erow.done .ew-ecode, .ew-erow.done .ew-ehead .ew-mname { color: var(--fk-text-muted); text-decoration: line-through; }
 .ew-erow.expired { opacity: .55; }
 .ew-srcrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 2px 4px; }
@@ -245,6 +264,7 @@ html, body {
    preview and plan list scroll inside their card; hidden must beat flex. */
 .ew-deadeye [hidden] { display: none; }
 .ew-panel.active.ew-deadeye { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); grid-auto-rows: minmax(0, 1fr); }
+.ew-panel.active.ew-deadeye .ew-card { max-height: none; } /* the editor fills the window */
 .ew-dtabs { display: flex; flex-wrap: wrap; gap: 2px; margin-bottom: 4px; }
 .ew-dtab {
   border: 0; background: none; color: var(--fk-text-muted); cursor: pointer; font: inherit;

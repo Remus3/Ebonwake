@@ -4,7 +4,9 @@
    showInactive() plus one completed paint, plan 010), checks overlay transparency and hotkey
    registration, and (plan 022) that the overlay sits inside its display's work
    area and off the minimap, and (plan 026) fires one synthetic toast + OS
-   notification. Never touches any other window or the game. */
+   notification, and (plan 047) counts scrolling cards per tab - a failure
+   only when o.freshStore (EW_SELFTEST_FRESH=1). Never touches any other
+   window or the game. */
 'use strict';
 
 const fs = require('fs');
@@ -25,6 +27,9 @@ const MEASURE = '(function(){var d=document.documentElement,b=document.body;' +
   'return {scrollH:Math.max(d.scrollHeight,b.scrollHeight),clientH:d.clientHeight,' +
   'scrollW:Math.max(d.scrollWidth,b.scrollWidth),clientW:d.clientWidth,' +
   'active:a?a.dataset.tab:null,activeH:a?a.getBoundingClientRect().height:0,' +
+  // Plan 047: cards (or their list bodies) that scroll on this tab.
+  'cardsScroll:a?Array.prototype.filter.call(a.querySelectorAll(".ew-card,.ew-card .ew-cbody"),' +
+  'function(c){return c.scrollHeight>c.clientHeight+1;}).length:0,' +
   'tabs:Array.prototype.map.call(document.querySelectorAll(".ew-tab"),function(t){return t.dataset.tab;}),' +
   'pill:(document.getElementById("server-pill")||{}).textContent};})()';
 
@@ -81,6 +86,8 @@ async function run(o) {
       m.painted = didPaint;
       m.fits = m.scrollH <= m.clientH && m.scrollW <= m.clientW;
       m.switched = m.active === id && m.activeH > 0;
+      // Plan 047: on a fresh store no card scrolls; a lived-in store may.
+      m.cardsFit = !(m.cardsScroll > 0);
       res.tabs.push(m);
       let img = await o.dashboard.webContents.capturePage();
       for (let i = 0; i < 5 && img.isEmpty(); i++) {
@@ -127,7 +134,10 @@ async function run(o) {
     res.overlay.insideWorkArea = core.rectInside(res.overlay.bounds, place.workArea);
     res.overlay.clearOfMinimap = place.defaultAnchor && place.workArea
       ? !core.rectsIntersect(res.overlay.bounds, core.minimapZone(place.workArea)) : null;
-    res.ok = res.tabs.every(function (t) { return t.fits && t.switched && t.painted && t.captured; }) &&
+    res.freshStore = !!o.freshStore;
+    res.ok = res.tabs.every(function (t) {
+      return t.fits && t.switched && t.painted && t.captured && (t.cardsFit || !res.freshStore);
+    }) &&
       Object.keys(res.hotkeys).every(function (k) { return res.hotkeys[k].registered; }) &&
       res.overlay.toggled && res.overlay.cornerAlpha === 0 && !res.overlay.focusable &&
       res.overlay.insideWorkArea && res.overlay.clearOfMinimap !== false;
