@@ -426,3 +426,251 @@ def test_state_reports_grind_source(gsrv):
     _, doc, _ = _req(gsrv, "GET", "/api/state")
     assert doc["sources"]["grind"]["status"] == "ok"
     assert doc["sources"]["grind"]["updated"] == T0.isoformat()
+
+
+# --- plan 039: loot-valued sessions -------------------------------------------
+
+M = 1_000_000
+
+
+def test_loot_tables_schema_and_keys():
+    from server.ew import spots
+    tables = grind.load_loot_tables()
+    ids = {r["id"] for r in spots.load_table()}
+    assert tables and set(tables) <= ids
+    for entry in tables.values():
+        assert entry["source"].startswith("https://")
+        assert entry["verified"] is False or grind.DATE_RE.match(entry["verified"])
+        names = [it["name"] for it in entry["items"]]
+        assert names and len(names) == len({n.lower() for n in names})
+        for it in entry["items"]:
+            assert isinstance(it["marketable"], bool)
+            assert it["marketable"] or "vendor_price" in it
+
+
+@pytest.mark.parametrize("doc", [
+    [], {"spots": []}, {"spots": {"Bad Id": {"items": [], "source": "https://x", "verified": False}}},
+    {"spots": {"a": {"items": [{"name": "X"}], "source": "https://x", "verified": False}}},
+    {"spots": {"a": {"items": [{"name": "X", "marketable": "yes"}], "source": "https://x",
+                     "verified": False}}},
+    {"spots": {"a": {"items": [{"name": "X", "marketable": False, "vendor_price": -1}],
+                     "source": "https://x", "verified": False}}},
+    {"spots": {"a": {"items": [{"name": "X", "marketable": True, "id": True}],
+                     "source": "https://x", "verified": False}}},
+    {"spots": {"a": {"items": [], "source": "", "verified": False}}},
+    {"spots": {"a": {"items": [], "source": "https://x", "verified": True}}},
+    {"spots": {"a": {"items": [{"name": "X", "marketable": True},
+                               {"name": "x", "marketable": True}],
+                     "source": "https://x", "verified": False}}},
+])
+def test_loot_tables_bad_schema(doc):
+    with pytest.raises(ValueError):
+        grind.validate_loot_tables(doc)
+
+
+def test_loot_value_tax_paths():
+    loot = [{"name": "Trash", "count": 1000, "vendor_price": 1500, "marketable": False},
+            {"name": "Stone", "id": 16001, "count": 10, "marketable": True}]
+    prices = {16001: 100_000}
+    no_vp = grind.loot_value(loot, prices, False, 0)
+    assert no_vp["trash"] == 1_500_000          # vendor: no tax
+    assert no_vp["market"] == 650_000           # 1 M gross at 65 percent
+    assert no_vp["total"] == 2_150_000 and no_vp["unknown"] == []
+    vp = grind.loot_value(loot, prices, True, 0)
+    assert vp["market"] == 845_000 and vp["total"] == 2_345_000   # 84.5 percent
+    fame = grind.loot_value(loot, prices, True, 1.5)
+    assert fame["market"] == 1_000_000 * 6500 * 13150 // 10 ** 8
+    kinds = {i["name"]: i["kind"] for i in no_vp["items"]}
+    assert kinds == {"Trash": "vendor", "Stone": "market"}
+
+
+def test_loot_value_missing_price_flagged():
+    loot = [{"name": "Stone", "id": 16001, "count": 3, "marketable": True},
+            {"name": "NoId", "count": 2, "marketable": True},
+            {"name": "Junk", "count": 5, "marketable": False}]
+    v = grind.loot_value(loot, {}, False, 0)
+    assert v["total"] == 0 and v["unknown"] == ["Stone", "NoId", "Junk"]
+    assert all(i["kind"] == "unknown" and i["value"] == 0 for i in v["items"])
+
+
+@pytest.mark.parametrize("item, price, want, diff", [
+    ({"name": "T", "marketable": False, "vendor_price": 100}, None, "vendor", None),
+    ({"name": "S", "marketable": True}, 1000, "market", None),
+    ({"name": "B", "marketable": True, "vendor_price": 500}, 1000, "market", 150),   # 650 vs 500
+    ({"name": "B", "marketable": True, "vendor_price": 700}, 1000, "vendor", 50),    # 650 vs 700
+    ({"name": "B", "marketable": True, "vendor_price": 650}, 1000, "either", 0),
+    ({"name": "B", "marketable": True, "vendor_price": 650}, None, "vendor", None),
+    ({"name": "U", "marketable": True}, None, "unknown", None),
+    ({"name": "U", "marketable": False}, None, "unknown", None),
+])
+def test_sell_or_vendor(item, price, want, diff):
+    r = grind.sell_or_vendor(item, price, False, 0)
+    assert r["choice"] == want and r["diff"] == diff
+
+
+def _loot_svc(tmp_path, clock, prices=None, vp=False):
+    tables = {"polly-forest": {"items": [
+        {"id": 16001, "name": "Black Stone (Weapon)", "marketable": True}],
+        "source": "https://x", "verified": False}}
+    return grind.GrindService(Store(tmp_path / "store"), clock=clock, loot_tables=tables,
+                              prices=(prices or {}).get,
+                              tax=lambda: {"vp": vp, "fame_pct": 0})
+
+
+def test_loot_only_session_shows_silver_per_h(tmp_path, clock):
+    s = _loot_svc(tmp_path, clock, prices={16001: 200_000})
+    s.add_spot("Polly's Forest")          # maps to plan 012 id polly-forest by name
+    s.loot_item({"spot": "pollys-forest", "name": "Trash Pile", "marketable": False,
+                 "vendor_price": 1000})
+    s.start("pollys-forest")
+    clock.advance(1800)
+    doc = s.stop({"silver": 0, "trash": 2000,
+                  "loot": [{"name": "Trash Pile", "count": 2000},
+                           {"id": 16001, "count": 10}]})
+    ses = doc["sessions"][0]
+    assert ses["loot_value"]["trash"] == 2 * M
+    assert ses["loot_value"]["market"] == 1_300_000
+    assert ses["valued_silver"] == 3_300_000 and ses["silver_per_h"] == 6_600_000
+    assert _spot(doc, "Polly's Forest")["silver_per_h"] == 6_600_000
+    assert ses["loot"][0] == {"name": "Trash Pile", "id": None, "count": 2000,
+                              "kind": "vendor", "unit": 1000, "value": 2 * M}
+
+
+def test_typed_silver_unchanged_without_loot(tmp_path, clock):
+    s = _loot_svc(tmp_path, clock)
+    s.add_spot("Gyfin")
+    doc = s.log({"spot": "gyfin", "minutes": 60, "silver": 5 * M, "trash": 0})
+    ses = doc["sessions"][0]
+    assert ses["valued_silver"] == 5 * M and ses["loot"] is None and ses["loot_value"] is None
+    assert _spot(doc, "Gyfin")["silver_per_h"] == 5 * M
+
+
+def test_log_with_loot_flags_unknown_price(tmp_path, clock):
+    s = _loot_svc(tmp_path, clock)
+    s.add_spot("Polly's Forest")
+    doc = s.log({"spot": "pollys-forest", "minutes": 60, "silver": 7, "trash": 0,
+                 "loot": [{"name": "black stone (weapon)", "count": 4}]})
+    ses = doc["sessions"][0]
+    assert ses["loot_value"]["unknown"] == ["Black Stone (Weapon)"]
+    assert ses["valued_silver"] == 0
+
+
+@pytest.mark.parametrize("loot", [
+    "x", [{"name": "Nope", "count": 1}], [{"name": "Black Stone (Weapon)", "count": 0}],
+    [{"name": "Black Stone (Weapon)", "count": 1, "extra": 1}], [{"count": 1}],
+    [{"id": 16001, "count": 1}, {"name": "Black Stone (Weapon)", "count": 1}],
+    [{"name": "Black Stone (Weapon)", "count": True}],
+])
+def test_bad_loot_rejected(tmp_path, clock, loot):
+    s = _loot_svc(tmp_path, clock)
+    s.add_spot("Polly's Forest")
+    with pytest.raises(ValueError):
+        s.log({"spot": "pollys-forest", "minutes": 5, "silver": 0, "trash": 0, "loot": loot})
+    assert s.view()["sessions"] == []
+
+
+def test_loot_item_upsert_forget_and_bad(tmp_path, clock):
+    s = _loot_svc(tmp_path, clock)
+    s.add_spot("Gyfin")
+    s.loot_item({"spot": "gyfin", "name": "Rag", "marketable": False, "vendor_price": 5})
+    s.loot_item({"spot": "gyfin", "name": "rag", "marketable": False, "vendor_price": 9})
+    items = s.loot("gyfin")["items"]
+    assert [(i["name"], i["vendor_price"], i["origin"]) for i in items] == [("rag", 9, "operator")]
+    for bad in ({"spot": "gyfin", "name": "X", "marketable": False},
+                {"spot": "nope", "name": "X", "marketable": True},
+                {"spot": "gyfin", "name": "X", "marketable": 1},
+                {"spot": "gyfin", "name": "X", "marketable": True, "id": -1}):
+        with pytest.raises(ValueError):
+            s.loot_item(bad)
+    s.loot_forget({"spot": "gyfin", "name": "RAG"})
+    assert s.loot("gyfin")["items"] == []
+    with pytest.raises(ValueError):
+        s.loot_forget({"spot": "gyfin", "name": "RAG"})
+
+
+def test_loot_view_hints_and_table_merge(tmp_path, clock):
+    s = _loot_svc(tmp_path, clock, prices={16001: 1000}, vp=True)
+    s.add_spot("Polly's Forest")
+    s.loot_item({"spot": "pollys-forest", "name": "Black Stone (Weapon)", "id": 16001,
+                 "marketable": True, "vendor_price": 900})
+    v = s.loot("pollys-forest")
+    assert v["table"] == "polly-forest" and v["source"] == "https://x" and v["verified"] is False
+    (it,) = v["items"]
+    assert it["origin"] == "operator" and it["price"] == 1000 and it["net"] == 845
+    assert it["hint"] == {"choice": "vendor", "vendor": 900, "market_net": 845, "diff": 55}
+    with pytest.raises(ValueError):
+        s.loot("nope")
+
+
+def test_price_lookup_failure_degrades(tmp_path, clock):
+    def boom(_iid):
+        raise RuntimeError("down")
+    s = grind.GrindService(Store(tmp_path / "store"), clock=clock,
+                           loot_tables={"gyfin": {"items": [{"id": 1, "name": "A",
+                                                             "marketable": True}],
+                                                  "source": "https://x", "verified": False}},
+                           prices=boom)
+    s.add_spot("Gyfin")
+    assert s.loot("gyfin")["items"][0]["price"] is None
+    doc = s.log({"spot": "gyfin", "minutes": 5, "silver": 0, "trash": 0,
+                 "loot": [{"name": "A", "count": 1}]})
+    assert doc["sessions"][0]["loot_value"]["unknown"] == ["A"]
+
+
+def test_corrupt_loot_fields_degrade(tmp_path, clock):
+    st = Store(tmp_path / "store")
+    st.put("grind", {"spots": [{"id": "a", "name": "A"}], "buffs": [], "next_sid": 3,
+                     "loot_items": {"a": [{"name": 5}], "zz": "x"},
+                     "sessions": [
+                         {"id": "s1", "spot": "a", "started": T0.isoformat(), "minutes": 60,
+                          "silver": 10, "trash": 0, "loot": "bad", "loot_value": {"total": "x"}},
+                         {"id": "s2", "spot": "a", "started": T0.isoformat(), "minutes": 60,
+                          "silver": 10, "trash": 0, "loot": [],
+                          "loot_value": {"total": 120, "trash": 120, "market": 0,
+                                         "unknown": []}}]})
+    s = grind.GrindService(st, clock=clock, loot_tables={})
+    doc = s.view()
+    by = {x["id"]: x for x in doc["sessions"]}
+    assert by["s1"]["valued_silver"] == 10 and by["s1"]["loot_value"] is None
+    assert by["s2"]["valued_silver"] == 120
+    assert s.loot("a")["items"] == []
+
+
+def _arsha_fetch(price):
+    def f(url, timeout):
+        return json.dumps({"id": 16001, "sid": 0, "name": "Black Stone (Weapon)",
+                           "basePrice": price, "lastSoldPrice": price}).encode()
+    return f
+
+
+def test_route_loot_get_and_post(tmp_path, clock):
+    from server.ew import market
+    mc = market.ArshaClient(fetch=_arsha_fetch(100_000), clock=clock,
+                            cache_dir=tmp_path / "cache")
+    s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
+                          sse_interval=0.05, market_seed=[], grind_clock=clock,
+                          market_client=mc)
+    threading.Thread(target=s.serve_forever, daemon=True).start()
+    try:
+        _req(s, "POST", "/api/grind", {"add_spot": "Polly's Forest"})
+        st, doc, _ = _req(s, "POST", "/api/grind",
+                          {"loot_item": {"spot": "pollys-forest", "name": "Pile",
+                                         "marketable": False, "vendor_price": 10}})
+        assert st == 200
+        st, doc, _ = _req(s, "GET", "/api/grind/loot?spot=pollys-forest")
+        assert st == 200 and doc["table"] == "polly-forest"
+        stone = next(i for i in doc["items"] if i["id"] == 16001)
+        assert stone["price"] == 100_000 and stone["hint"]["choice"] == "market"
+        st, doc, _ = _req(s, "POST", "/api/grind",
+                          {"log": {"spot": "pollys-forest", "minutes": 60, "silver": 0,
+                                   "trash": 0, "loot": [{"id": 16001, "count": 10},
+                                                        {"name": "Pile", "count": 100}]}})
+        assert st == 200 and doc["sessions"][0]["silver_per_h"] == 650_000 + 1000
+        assert _req(s, "GET", "/api/grind/loot?spot=nope")[0] == 400
+        assert _req(s, "GET", "/api/grind/loot")[0] == 400
+        st, doc, _ = _req(s, "POST", "/api/grind",
+                          {"loot_forget": {"spot": "pollys-forest", "name": "Pile"}})
+        assert st == 200
+    finally:
+        s.shutdown()
+        s.server_close()
