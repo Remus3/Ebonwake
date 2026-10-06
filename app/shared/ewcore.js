@@ -3466,12 +3466,198 @@
       });
   }
 
+  // ---- Inventory / weight / storage + Value Pack ledger (plan 045) ----
+  // GET /api/inventory -> {sources: [{id, name, min, max, verified, owned_lt,
+  // next_lt, next_cost, note, warn}], base_lt, lt_owned, vp_lt, lt_total,
+  // next_cheapest, slots, warehouse, towns, town_slots, vp, ledger, error}.
+  // Operator-typed; the server owns every total.
+
+  const INV_KEY = /^[a-z][a-z0-9_]{0,39}$/;
+  const INV_SALE_ID = /^s[1-9][0-9]{0,8}$/;
+  const INV_NOTE_MAX = 120;
+  const INV_NAME_MAX = 40;
+  const INV_SILVER_MAX = 1e13;
+  const INV_LIMITS = { base_lt: [0, 20000], slots: [1, 400], slots_used: [0, 400], vp_cost: [0, INV_SILVER_MAX],
+    lt: [0, 5000], next_lt: [1, 5000], next_cost: [0, INV_SILVER_MAX], used: [0, 10000], total: [1, 10000] };
+
+  function invNum(v, key) { return v === null || intIn(v, INV_LIMITS[key][0], INV_LIMITS[key][1]); }
+
+  function invFields(v, keys, need) {
+    if (!plainObject(v) || !onlyKeys(v, keys)) return false;
+    if (!keys.some(function (k) { return k in v && need.indexOf(k) >= 0; })) return false;
+    return keys.every(function (k) {
+      if (!(k in v)) return true;
+      if (k === 'id') return typeof v.id === 'string' && (INV_KEY.test(v.id) || SLUG.test(v.id));
+      if (k === 'note') return validAscii(v.note, INV_NOTE_MAX, true);
+      if (k === 'name') return validAscii(v.name, INV_NAME_MAX);
+      if (k === 'fame_vt' || k === 'vp') return typeof v[k] === 'boolean';
+      if (k === 'price') return intIn(v.price, 1, INV_SILVER_MAX);
+      return invNum(v[k], k);
+    });
+  }
+
+  // POST /api/inventory body: exactly one of
+  // {set|source|town_add|town_edit|town_del|sale|sale_del}.
+  function validInventoryBody(body) {
+    if (!plainObject(body)) return false;
+    const keys = Object.keys(body);
+    if (keys.length !== 1) return false;
+    const k = keys[0];
+    const v = body[k];
+    const setKeys = ['base_lt', 'slots', 'slots_used', 'fame_vt', 'vp_cost'];
+    const srcKeys = ['lt', 'next_lt', 'next_cost', 'note'];
+    const townKeys = ['name', 'used', 'total', 'note'];
+    if (k === 'set') return invFields(v, setKeys, setKeys);
+    if (k === 'source') return plainObject(v) && typeof v.id === 'string' && INV_KEY.test(v.id) &&
+      invFields(v, ['id'].concat(srcKeys), srcKeys);
+    if (k === 'town_add') return invFields(v, townKeys, ['name']) && 'name' in v;
+    if (k === 'town_edit') return plainObject(v) && typeof v.id === 'string' && SLUG.test(v.id) &&
+      invFields(v, ['id'].concat(townKeys), townKeys);
+    if (k === 'town_del') return typeof v === 'string' && SLUG.test(v);
+    if (k === 'sale') return invFields(v, ['price', 'vp'], ['price']) && 'price' in v;
+    if (k === 'sale_del') return typeof v === 'string' && INV_SALE_ID.test(v);
+    return false;
+  }
+
+  // One typed number field: '' -> null (clears), digits or silver ("1.5b") -> int.
+  function invInput(text, key) {
+    const t = String(text === undefined || text === null ? '' : text).trim();
+    if (!t) return { ok: true, value: null };
+    const v = parseSilver(t);
+    if (v === null || !invNum(v, key)) {
+      return { ok: false, error: key.replace('_', ' ') + ' must be ' + INV_LIMITS[key][0] + '..' + INV_LIMITS[key][1] };
+    }
+    return { ok: true, value: v };
+  }
+
+  function invForm(f, keys, wrap) {
+    const out = {};
+    for (let i = 0; i < keys.length; i++) {
+      const r = invInput(f[keys[i]], keys[i]);
+      if (!r.ok) return r;
+      out[keys[i]] = r.value;
+    }
+    return { ok: true, body: wrap(out) };
+  }
+
+  // Planner form {base_lt, slots, slots_used, vp_cost, fame_vt} -> {set: ...}.
+  function parseInvSetForm(f) {
+    return invForm(f || {}, ['base_lt', 'slots', 'slots_used', 'vp_cost'], function (o) {
+      o.fame_vt = !!(f && f.fame_vt === true);
+      return { set: o };
+    });
+  }
+
+  // Source form {id, lt, next_lt, next_cost, note} -> {source: ...}.
+  function parseInvSourceForm(f) {
+    if (!f || typeof f.id !== 'string' || !INV_KEY.test(f.id)) return { ok: false, error: 'pick a weight source' };
+    const note = String(f.note || '').trim();
+    if (!validAscii(note, INV_NOTE_MAX, true)) return { ok: false, error: 'note must be ASCII, at most ' + INV_NOTE_MAX };
+    return invForm(f, ['lt', 'next_lt', 'next_cost'], function (o) {
+      return { source: Object.assign({ id: f.id }, o, { note: note }) };
+    });
+  }
+
+  // Town form {name, used, total, note} -> {town_add: ...}.
+  function parseInvTownForm(f) {
+    const name = String(f && f.name || '').trim();
+    if (!validAscii(name, INV_NAME_MAX)) return { ok: false, error: 'town name must be 1..' + INV_NAME_MAX + ' ASCII characters' };
+    const note = String(f.note || '').trim();
+    if (!validAscii(note, INV_NOTE_MAX, true)) return { ok: false, error: 'note must be ASCII, at most ' + INV_NOTE_MAX };
+    const r = invForm(f, ['used', 'total'], function (o) { return o; });
+    if (!r.ok) return r;
+    if (r.body.used !== null && r.body.total !== null && r.body.used > r.body.total) {
+      return { ok: false, error: 'used must not exceed total' };
+    }
+    return { ok: true, body: { town_add: { name: name, used: r.body.used, total: r.body.total, note: note } } };
+  }
+
+  // Sale form {price, vp} -> {sale: {price, vp}}.
+  function parseInvSale(f) {
+    const p = parseSilver(f && f.price);
+    if (p === null || !intIn(p, 1, INV_SILVER_MAX)) return { ok: false, error: 'price must be silver, e.g. 84,500,000 or 84.5m' };
+    return { ok: true, body: { sale: { price: p, vp: f.vp === true } } };
+  }
+
+  // Summary -> [{text, cls}]: weight, slots, warehouse, VP, ledger.
+  function invSummaryLines(view) {
+    if (!plainObject(view) || !Array.isArray(view.sources)) return [];
+    const out = [];
+    const vp = plainObject(view.vp) ? view.vp : {};
+    const lt = isNum(view.lt_total) ? fmtSilverExact(view.lt_total) + ' LT' : 'type base LT';
+    out.push({ text: 'weight ' + lt + ' (sources +' + (isNum(view.lt_owned) ? view.lt_owned : 0) +
+      (view.vp_lt > 0 ? ', VP +' + view.vp_lt : '') + ')', cls: isNum(view.lt_total) ? 'ok' : 'unknown' });
+    const s = plainObject(view.slots) ? view.slots : {};
+    if (isNum(s.total)) {
+      const free = isNum(s.free) ? ', ' + s.free + ' free' : '';
+      out.push({ text: 'inventory ' + (isNum(s.used) ? s.used + '/' : '') + s.total + ' slots' + free,
+        cls: isNum(s.free) && s.free <= 0 ? 'bad' : (isNum(s.free) && s.free < 8 ? 'warn' : 'ok') });
+    }
+    const w = plainObject(view.warehouse) ? view.warehouse : {};
+    if (isNum(w.vt)) out.push({ text: 'market warehouse ' + fmtSilverExact(w.vt) + ' VT, ' + w.transfer_vt + ' VT per transfer', cls: 'ok' });
+    if (vp.active === true) {
+      const left = isNum(vp.left_s) ? ' - ' + fmtDuration(vp.left_s * 1000) + ' left' : ' (settings; arm the Grind timer for expiry)';
+      out.push({ text: 'Value Pack on' + left, cls: isNum(vp.left_s) && vp.left_s < 86400 ? 'warn' : 'ok' });
+    } else if (typeof vp.reminder === 'string') {
+      out.push({ text: vp.reminder, cls: 'warn' });
+    }
+    const l = plainObject(view.ledger) ? view.ledger : null;
+    if (l && isNum(l.count) && l.count > 0) {
+      let t = 'VP +30% earned ' + fmtSilver(l.gain_30d) + ' in 30 d (' + fmtSilver(l.gain_total) + ' total, ' + l.count + ' sales)';
+      if (isNum(l.net_30d)) t += ', net of VP cost ' + fmtSilver(l.net_30d);
+      out.push({ text: t, cls: isNum(l.net_30d) && l.net_30d < 0 ? 'warn' : 'ok' });
+    }
+    return out;
+  }
+
+  // Source checklist rows; junk dropped.
+  function invSourceRows(view) {
+    const r = plainObject(view) && Array.isArray(view.sources) ? view.sources : [];
+    return r.filter(function (x) { return plainObject(x) && typeof x.id === 'string' && INV_KEY.test(x.id) && typeof x.name === 'string'; })
+      .map(function (x) {
+        const own = isNum(x.owned_lt) ? '+' + x.owned_lt + ' LT' : 'not set';
+        const next = isNum(x.next_lt) ? 'next +' + x.next_lt + (isNum(x.next_cost) ? ' for ' + fmtSilver(x.next_cost) : '') : '';
+        return { id: x.id, name: x.name, owned: own, next: next, note: typeof x.note === 'string' ? x.note : '',
+          warn: typeof x.warn === 'string' ? x.warn : '', done: isNum(x.owned_lt) && x.owned_lt > 0,
+          range: x.min + '..' + x.max + ' LT' + (x.verified === true ? '' : ' (unverified)'),
+          lt: isNum(x.owned_lt) ? x.owned_lt : null, next_lt: isNum(x.next_lt) ? x.next_lt : null,
+          next_cost: isNum(x.next_cost) ? x.next_cost : null };
+      });
+  }
+
+  // Cheapest next +LT, silver per LT ascending (server order kept).
+  function invNextLines(view) {
+    const n = plainObject(view) && Array.isArray(view.next_cheapest) ? view.next_cheapest : [];
+    return n.filter(function (x) { return plainObject(x) && isNum(x.next_lt) && isNum(x.cost_per_lt); }).map(function (x) {
+      return String(x.name) + ': +' + x.next_lt + ' LT for ' + fmtSilver(x.next_cost) + ' (' + fmtSilver(x.cost_per_lt) + '/LT)';
+    });
+  }
+
+  function invTownRows(view) {
+    const t = plainObject(view) && Array.isArray(view.towns) ? view.towns : [];
+    return t.filter(function (x) { return plainObject(x) && typeof x.id === 'string' && SLUG.test(x.id) && typeof x.name === 'string'; })
+      .map(function (x) {
+        const slots = isNum(x.total) ? (isNum(x.used) ? x.used + '/' : '') + x.total + (isNum(x.free) ? ' (' + x.free + ' free)' : '') : 'slots not set';
+        return { id: x.id, text: x.name + ' - ' + slots + (x.note ? ' - ' + x.note : ''),
+          full: isNum(x.free) && x.free <= 0 };
+      });
+  }
+
+  function invSaleRows(view, max) {
+    const l = plainObject(view) && plainObject(view.ledger) && Array.isArray(view.ledger.sales) ? view.ledger.sales : [];
+    return l.filter(function (x) { return plainObject(x) && typeof x.id === 'string' && INV_SALE_ID.test(x.id) && isNum(x.price); })
+      .slice(0, isNum(max) ? max : 5).map(function (x) {
+        return { id: x.id, text: String(x.at || '').slice(0, 10) + ' sold ' + fmtSilver(x.price) + ' -> ' + fmtSilver(x.net) +
+          (x.vp === true ? ' (VP +' + fmtSilver(x.gain) + ')' : ' (no VP)') };
+      });
+  }
+
   // The only routes the dashboard bridge forwards, each with its body check.
   const POST_VALIDATORS = {
     '/api/market/watch': validWatchBody, '/api/today': validTodayBody, '/api/progress': validProgressBody,
     '/api/grind': validGrindBody, '/api/events': validEventsBody, '/api/deadeye': validDeadeyeBody,
     '/api/ocr': validOcrBody, '/api/leveling': validLevelingBody, '/api/settings': validSettingsBody,
-    '/api/bosses': validBossesBody, '/api/pets': validPetsBody
+    '/api/bosses': validBossesBody, '/api/pets': validPetsBody, '/api/inventory': validInventoryBody
   };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
@@ -3524,7 +3710,7 @@
     '/api/market/watch': 'Market watch', '/api/today': 'Today', '/api/progress': 'Progress',
     '/api/grind': 'Grind', '/api/events': 'Events', '/api/deadeye': 'Deadeye', '/api/ocr': 'OCR',
     '/api/leveling': 'Leveling', '/api/settings': 'Settings', '/api/bosses': 'World bosses',
-    '/api/pets': 'Pets'
+    '/api/pets': 'Pets', '/api/inventory': 'Inventory'
   };
 
   // One POST result (the ew:post bridge reply) -> one toast.
@@ -3920,6 +4106,16 @@
     petCoverageLines: petCoverageLines,
     petExchangeLines: petExchangeLines,
     petSpeciesOptions: petSpeciesOptions,
+    validInventoryBody: validInventoryBody,
+    parseInvSetForm: parseInvSetForm,
+    parseInvSourceForm: parseInvSourceForm,
+    parseInvTownForm: parseInvTownForm,
+    parseInvSale: parseInvSale,
+    invSummaryLines: invSummaryLines,
+    invSourceRows: invSourceRows,
+    invNextLines: invNextLines,
+    invTownRows: invTownRows,
+    invSaleRows: invSaleRows,
     validPost: validPost,
     POST_ROUTES: POST_ROUTES,
     THEMES: THEMES,
