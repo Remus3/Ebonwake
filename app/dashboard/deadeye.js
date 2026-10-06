@@ -15,7 +15,9 @@
     data: null, err: null, last: null, timer: null, ui: null, busy: false,
     section: null, drafts: {}, preview: false,
     // Plan 035 EV panel: open step id, rate table (GET once), per-step inputs and replies.
-    ev: null, table: null, evIn: {}, evOut: {}
+    ev: null, table: null, evIn: {}, evOut: {},
+    // Plan 037 shopping list: GET body (cached prices only) and its error.
+    shop: null, shopErr: null
   };
 
   function el(tag, cls, text) {
@@ -72,6 +74,13 @@
     clearTimeout(S.timer);
     S.timer = setTimeout(function () { poll(true); }, POLL_MS);
     getJSON('/api/deadeye').then(accept, function (e) { S.err = e.message; }).then(draw);
+    loadShop();
+  }
+
+  function loadShop() {
+    getJSON('/api/deadeye/shopping').then(function (d) {
+      if (d && Array.isArray(d.lines)) { S.shop = d; S.shopErr = null; }
+    }, function (e) { S.shopErr = e.message; }).then(drawShop);
   }
 
   function msg(text) { if (S.ui) S.ui.msg.textContent = text; }
@@ -87,8 +96,11 @@
     return window.EWToast.via(b).post('/api/deadeye', body).then(function (res) {
       S.busy = false;
       if (res && res.ok) {
-        if (accept(res.data)) draw();
-        else poll(true);
+        if (accept(res.data)) { draw(); loadShop(); } else if (res.data && Array.isArray(res.data.lines)) {
+          S.shop = res.data; // a shop_set / shop_step reply is the shopping GET body
+          S.shopErr = null;
+          drawShop();
+        } else poll(true);
         msg(okText);
         return true;
       }
@@ -322,7 +334,12 @@
     cl.appendChild(cr);
     cl.appendChild(el('span', null, 'crons'));
     [fam, el('span', 'ew-muted', 'FS'), fs, cl,
-      button('ew-btn ew-bbtn', 'Calc', 'expected attempts and silver per level', function () { calc(r); })]
+      button('ew-btn ew-bbtn', 'Calc', 'expected attempts and silver per level', function () { calc(r); }),
+      button('ew-btn ew-bbtn', 'Use in list', 'shopping list uses this family, FS and crons', function () {
+        const n = C.parseFs(inp.fs);
+        if (n === null) { msg('FS: a whole number 0-' + C.ENHANCE_MAX_FS); return; }
+        send({ shop_step: { id: r.id, family: inp.family || null, fs: n, crons: inp.crons } }, 'shopping list updated');
+      })]
       .forEach(function (x) { line.appendChild(x); });
     box.appendChild(line);
     const out = S.evOut[r.id];
@@ -358,6 +375,106 @@
     const box = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
     list.forEach(function (r, i) { box.appendChild(planRow(r, i, list.length)); });
     body.appendChild(box);
+  }
+
+  // ---- shopping list (plan 037) ----
+
+  function watchLine(ln) {
+    const b = bridge();
+    const body = C.shopWatchBody(ln.id);
+    if (!b) { msg('watching needs the Ebonwake app window'); return; }
+    if (!body) return;
+    window.EWToast.via(b).post('/api/market/watch', body).then(function (res) {
+      if (res && res.ok) { msg('watching ' + C.fmtShopLine(ln).name); loadShop(); } else msg('failed: ' + ((res && res.error) || 'unknown error'));
+    }, function (e) { msg('failed: ' + (e && e.message || e)); });
+  }
+
+  function shopRow(ln) {
+    const f = C.fmtShopLine(ln);
+    const row = el('div', 'ew-prow');
+    const name = el('span', 'ew-mname', f.name);
+    if (f.preorder) name.title = f.preorder;
+    row.appendChild(name);
+    row.appendChild(el('span', 'ew-muted ew-gnum', 'x' + f.qty));
+    row.appendChild(el('span', 'ew-muted ew-gnum', '@ ' + f.unit));
+    row.appendChild(el('span', 'ew-mprice ew-gnum', f.total));
+    const w = button('ew-tx', ln.watched === true ? 'watched' : 'watch', 'add to the market watchlist (EW only)', function () { watchLine(ln); });
+    w.disabled = ln.watched === true;
+    row.appendChild(w);
+    const extra = [f.note, f.preorder].filter(Boolean).join('; ');
+    if (extra) row.appendChild(el('div', 'ew-pnote ew-muted', extra));
+    return row;
+  }
+
+  function drawShop() {
+    const ui = S.ui;
+    if (!ui || !ui.shopBody.isConnected) return;
+    const body = ui.shopBody;
+    body.textContent = '';
+    const d = S.shop;
+    const s = C.fmtShopping(d);
+    ui.shopPill.textContent = d ? s.total : '-';
+    ui.shopPill.className = 'ew-pill ' + (d && d.total !== null ? 'ok' : 'unknown');
+    if (!d) {
+      body.appendChild(el('div', S.shopErr ? 'ew-err' : 'ew-muted', S.shopErr || 'loading...'));
+      return;
+    }
+    if (S.shopErr) body.appendChild(el('div', 'ew-err', 'last data - ' + S.shopErr));
+    const f = ui.shopForm;
+    const st = d.settings || {};
+    if (document.activeElement !== f.silver && document.activeElement !== f.hours) {
+      f.silver.placeholder = 'silver on hand (' + C.fmtSilver(st.silver_on_hand) + ')';
+      f.hours.placeholder = 'h/day (' + st.hours_per_day + ')';
+    }
+    body.appendChild(el('div', 'ew-gnum', 'total ' + s.total));
+    body.appendChild(el('div', 'ew-muted ew-gnum', s.afford));
+    if (!d.lines.length) {
+      body.appendChild(el('div', 'ew-muted', 'Nothing to buy: no open step has priced materials ' +
+        '(turn crons on with EV -> Use in list).'));
+    } else {
+      const box = el('div', 'ew-list');
+      d.lines.forEach(function (ln) { if (ln && typeof ln.id === 'number') box.appendChild(shopRow(ln)); });
+      body.appendChild(box);
+    }
+    (Array.isArray(d.steps) ? d.steps : []).forEach(function (x) {
+      if (x && typeof x.note === 'string' && x.note) body.appendChild(el('div', 'ew-muted', x.item + ': ' + x.note));
+    });
+    body.appendChild(el('div', 'ew-muted', 'expected quantities (mean attempts, constant FS), cached prices; ' +
+      'materials beyond crons come from rate rows that list them.'));
+  }
+
+  function saveShop() {
+    const f = S.ui.shopForm;
+    const r = C.parseShopForm({ silver: f.silver.value, hours: f.hours.value });
+    if (!r.ok) { msg(r.error); return; }
+    send(r.body, 'saved').then(function (ok) {
+      if (ok) { f.silver.value = ''; f.hours.value = ''; }
+    });
+  }
+
+  function shopCard() {
+    const c = card('Shopping list', 'ew-dshop');
+    const body = el('div', 'ew-cbody');
+    c.card.appendChild(body);
+    const form = el('form', 'ew-form ew-dform');
+    const silver = el('input');
+    silver.type = 'text';
+    silver.maxLength = 22;
+    silver.autocomplete = 'off';
+    silver.placeholder = 'silver on hand';
+    const hours = el('input');
+    hours.type = 'text';
+    hours.maxLength = 5;
+    hours.size = 6;
+    hours.autocomplete = 'off';
+    hours.placeholder = 'h/day';
+    const line = el('div', 'ew-dline');
+    [silver, hours, button('ew-btn ew-bbtn', 'Save', 'silver on hand and grind hours per day', saveShop)]
+      .forEach(function (x) { line.appendChild(x); });
+    form.appendChild(line);
+    form.addEventListener('submit', function (ev) { ev.preventDefault(); saveShop(); });
+    c.card.appendChild(form);
+    return { card: c.card, body: body, pill: c.pill, form: { silver: silver, hours: hours } };
   }
 
   function addStep() {
@@ -396,6 +513,7 @@
     fillSelect(ui.form.target, 'PRI');
     drawNotes();
     drawPlan();
+    drawShop();
   }
 
   // ---- mount ----
@@ -491,9 +609,14 @@
     panel.classList.add('ew-deadeye');
     const n = notesCard();
     const p = planCard();
+    const sh = shopCard();
     panel.appendChild(n.card);
     panel.appendChild(p.card);
-    S.ui = Object.assign(n, { planBody: p.body, planPill: p.pill, form: p.form, msg: p.msg });
+    panel.appendChild(sh.card);
+    S.ui = Object.assign(n, {
+      planBody: p.body, planPill: p.pill, form: p.form, msg: p.msg,
+      shopBody: sh.body, shopPill: sh.pill, shopForm: sh.form
+    });
     if (!S.timer) poll(false);
     else draw();
   }

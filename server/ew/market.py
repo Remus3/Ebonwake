@@ -310,6 +310,13 @@ class MarketService:
         res = self.client.peek(self.client._key("sublist", item_id, sid), TTL["sublist"])
         return price_of(res["data"]) if res else None
 
+    def cached_quote(self, item_id, sid=0):
+        """{price, preorder} from the sublist cache, stale or not; never fetches
+        (plan 037 shopping list)."""
+        res = self.client.peek(self.client._key("sublist", item_id, sid), TTL["sublist"])
+        sub = res["data"] if res else None
+        return {"price": price_of(sub), "preorder": preorder_state(sub)}
+
     def source(self):
         """`/api/state` sources.market: {updated, ttl_s, status: ok|stale|error|none}."""
         ttl = TTL["sublist"]
