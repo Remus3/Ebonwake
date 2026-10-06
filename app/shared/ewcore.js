@@ -122,6 +122,31 @@
     });
   }
 
+  // Plan 073: /api/signals digest -> one row per signal (server order). `off`
+  // (quiet by design: game closed, feature off) renders muted, never bad.
+  const SIGNAL_CLS = { ok: 'ok', warn: 'warn', bad: 'bad', off: 'unknown' };
+  function signalRows(doc) {
+    const rows = doc && Array.isArray(doc.rows) ? doc.rows : [];
+    return rows.filter(function (r) { return r && typeof r === 'object'; }).map(function (r) {
+      const level = SIGNAL_CLS[r.level] ? r.level : 'warn';
+      const name = typeof r.name === 'string' ? r.name : String(r.id || '?');
+      const age = isNum(r.age_s) ? fmtAge(r.age_s) + ' ago' : '-';
+      return { id: String(r.id || ''), name: name, level: level, cls: SIGNAL_CLS[level],
+        text: name + ' ' + level + (isNum(r.age_s) ? ' - ' + age : ''),
+        detail: typeof r.detail === 'string' ? r.detail : '',
+        hint: typeof r.hint === 'string' ? r.hint : '' };
+    });
+  }
+
+  // Plan 073: Home shows one pill only while any row is `bad`; null otherwise.
+  function signalPill(doc) {
+    const bad = signalRows(doc).filter(function (r) { return r.level === 'bad'; });
+    if (!bad.length) return null;
+    return { cls: 'bad', tab: 'system',
+      text: bad.length === 1 ? bad[0].name + ': not working' : bad.length + ' signals not working',
+      title: bad.map(function (r) { return r.name + ': ' + (r.hint || r.detail); }).join('\n') };
+  }
+
   // Server card rows from /api/version + /api/health (either may be null).
   function serverRows(version, health, appCommit, nowMs) {
     const v = version && typeof version === 'object' ? version : {};
@@ -6410,6 +6435,8 @@
     healthPill: healthPill,
     notOnServer: notOnServer,
     sourceFreshness: sourceFreshness,
+    signalRows: signalRows,
+    signalPill: signalPill,
     serverRows: serverRows,
     validAccelerator: validAccelerator,
     hotkeys: hotkeys,

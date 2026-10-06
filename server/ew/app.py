@@ -12,7 +12,8 @@ adds its `suggested` coupon block),
 (plan 043), /api/inventory (plan 045), /api/mounts (plan 044), /api/summary (plan 046),
 /api/onboarding (plan 051), /api/crafting (plan 054), /api/imperial (plan 053),
 /api/overlay/context (plan 067; SSE `overlay_context` on change),
-/api/whatnow (plan 069; SSE `whatnow` carries the full view on change), and POST
+/api/whatnow (plan 069; SSE `whatnow` carries the full view on change),
+/api/signals (plan 073, GET only), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
 /api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings + /api/pets +
 /api/inventory + /api/mounts + /api/onboarding + /api/crafting + /api/imperial behind one
@@ -38,7 +39,7 @@ from . import (__version__, autotick, bosses, context, coupons, crafting, deadey
                eventnotices, events, gamewatch, grind, imperial, inventory, itemnames, leveling, maint,
                market, mounts, ocr, ocrauto, onboarding, pets,
                ports,
-               playsession, progress, settings, shopping, single, spots, summary, today,
+               playsession, progress, settings, shopping, signals, single, spots, summary, today,
                weekly, whatnow, xpbooks)
 from .store import Store
 
@@ -349,9 +350,50 @@ class EWServer(ThreadingHTTPServer):
             "leveling": self.leveling.view, "maint": self._maint_inputs,
             "events": self.events.view, "market": self._market_alerts,
             "ocr": self.ocr_auto.view}, clock=today_clock or time.time)
+        # Plan 073: per-signal liveness over local state only (never fetches or polls).
+        self.signals = signals.SignalService({
+            "session_log": self._sig_session_log, "screenshots": self._sig_screenshots,
+            "ocr": self._sig_ocr, "notices": self._sig_notices, "market": self._sig_market,
+            "profile": self._sig_profile, "boss_drift": lambda: None},
+            clock=today_clock or time.time)
         if game_poll:  # off by default so tests never probe processes; main() turns it on
             self.game.start()
             self.ocr_auto.start()
+
+    # -- plan 073 signal inputs ------------------------------------------------
+
+    def _game_health(self):
+        fn = getattr(self.game, "health", None)
+        return fn() if fn is not None else None
+
+    def _sig_session_log(self):
+        h = self._game_health()
+        return None if h is None else {k: h[k] for k in (
+            "configured", "log_dir_ok", "state", "line_at", "since", "polled_at")}
+
+    def _sig_screenshots(self):
+        h = self._game_health()
+        return None if h is None else {"configured": h["shots_configured"],
+                                       "dir_ok": h["shots_dir_ok"], "state": h["state"],
+                                       "last_at": h["last_shot_at"]}
+
+    def _sig_ocr(self):
+        h = self._game_health()
+        return dict(self.ocr_auto.health(), state=h["state"] if h else None)
+
+    def _sig_notices(self):
+        client = self.notices.client
+        if client is None:
+            return {"enabled": False}
+        return dict(client.attempt(), enabled=True)
+
+    def _sig_market(self):
+        return self.market.health()
+
+    def _sig_profile(self):
+        src = self.progress.source()
+        reason = self.progress._off_reason() if src["status"] == "off" else None
+        return {"status": src["status"], "reason": reason, "updated": src["updated"]}
 
     def _ocr_auto_changed(self):
         self.bus.bump("ocr")
@@ -556,6 +598,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.imperial.view())
         if path == "/api/whatnow":
             return self._send(200, self.server.whatnow.view())
+        if path == "/api/signals":
+            return self._send(200, self.server.signals.view())
         if path == "/events":
             return self._sse()
         if path == "/":  # plan 020: redirect so relative asset paths resolve

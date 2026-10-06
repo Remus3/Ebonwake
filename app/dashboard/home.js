@@ -4,7 +4,8 @@
    /api/summary - the last game session's summary card, plan 051
    /api/onboarding - the "Get started" first-run card, plan 069
    /api/whatnow - the "What now" card on top, also replaced from each SSE
-   `whatnow` event's full view) and
+   `whatnow` event's full view, plan 073 /api/signals - one pill on top only
+   while a signal is bad) and
    lets C.composeNow order the cards; a 404 (old server) drops that payload's
    card, other errors keep the last data. Read-only except the one-click tick
    of a daily, which reuses the Today tick route through the dashboard preload,
@@ -17,7 +18,7 @@
   const POLL_MS = 60000;
   const SOURCES = { today: '/api/today', grind: '/api/grind', leveling: '/api/leveling',
     events: '/api/events', market: '/api/market/watch', bosses: '/api/bosses', summary: '/api/summary',
-    onboarding: '/api/onboarding', whatnow: '/api/whatnow' };
+    onboarding: '/api/onboarding', whatnow: '/api/whatnow', signals: '/api/signals' };
   const S = { snap: { at: {} }, err: {}, last: null, timer: null, panel: null, shape: null, vals: [],
     pending: {}, msg: '', obMsg: '' };
 
@@ -138,7 +139,19 @@
   function shapeOf(cards) {
     return JSON.stringify(cards.map(function (c) {
       return [c.id, c.meta, c.empty, c.rows.map(function (r) { return [r.label, r.note, r.cls, r.tick]; })];
-    })) + '|' + JSON.stringify(S.err) + '|' + Object.keys(S.pending).join(',') + '|' + S.msg + '|' + S.obMsg;
+    })) + '|' + JSON.stringify(S.err) + '|' + Object.keys(S.pending).join(',') + '|' + S.msg + '|' + S.obMsg +
+      '|' + JSON.stringify(C.signalPill(S.snap.signals));
+  }
+
+  // Plan 073: one pill on top only while a signal is `bad`; it opens System.
+  function signalNode() {
+    const pill = C.signalPill(S.snap.signals);
+    if (!pill) return null;
+    const b = el('button', 'ew-pill ew-hsig ' + pill.cls, pill.text);
+    b.type = 'button';
+    b.title = pill.title;
+    b.addEventListener('click', function () { openTab(pill.tab); });
+    return b;
   }
 
   function rowNode(r) {
@@ -217,7 +230,9 @@
     p.textContent = '';
     cards.forEach(function (c) { p.appendChild(cardNode(c)); });
     const e = errNode();
-    if (e) p.firstChild.querySelector('.ew-cbody').appendChild(e);
+    if (e && p.firstChild) p.firstChild.querySelector('.ew-cbody').appendChild(e);
+    const sig = signalNode();
+    if (sig) p.insertBefore(sig, p.firstChild);
   }
 
   function values(cards) {
