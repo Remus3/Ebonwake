@@ -76,7 +76,7 @@
     if (!force && !C.pollDue(S.last, now, POLL_MS)) { draw(); return; }
     S.last = now;
     clearTimeout(S.timer);
-    S.timer = setTimeout(function () { poll(true); }, POLL_MS);
+    S.timer = setTimeout(function () { if (!C.pollPaused(S.panel, document)) poll(true); }, POLL_MS);
     getJSON('/api/progress').then(accept, function (e) { S.err = e.message; }).then(function () { draw(); });
     // Plan 041: profile trend sparklines; a failure just leaves them empty.
     getJSON(C.PROFILE_HISTORY_PATH).then(function (h) { S.hist = h; }, function () { S.hist = null; })
@@ -691,6 +691,7 @@
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';
       x.title = 'remove mount (click twice)';
+      x.setAttribute('aria-label', x.title);
       x.addEventListener('click', function () { removeMount(m, x); });
       meta.appendChild(x);
       r.appendChild(meta);
@@ -941,6 +942,7 @@
   }
 
   function mount(panel) {
+    S.panel = panel;
     panel.classList.add('ew-progress');
     const ch = characterCard();
     const pr = profileCard();
@@ -954,8 +956,14 @@
       panel: panel, char: ch.form, charMsg: ch.msg, profile: pr, life: lf, add: ad.form, addMsg: ad.msg,
       addCard: ad.card, seed: ad.seed, tracks: [], mounts: mo.ui, mountsMsg: mo.msg
     };
-    if (!S.timer) poll(false);
-    else draw();
+    if (!S.timer) {
+      // Plan 049: an SSE `progress` push re-reads now, or on the next show() while hidden.
+      if (window.EWBus) window.EWBus.on('progress', function () {
+        if (C.pollPaused(S.panel, document)) S.last = null;
+        else poll(true);
+      });
+      poll(false);
+    } else draw();
   }
 
   function show() { poll(false); }

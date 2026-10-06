@@ -90,7 +90,7 @@
     S.last = now;
     // One timer, re-armed after every poll: polls stay >= POLL_MS apart.
     clearTimeout(S.timer);
-    S.timer = setTimeout(function () { poll(true); }, POLL_MS);
+    S.timer = setTimeout(function () { if (!C.pollPaused(S.panel, document)) poll(true); }, POLL_MS);
     getJSON('/api/market/watch').then(function (d) {
       S.watch = d;
       S.watchErr = null;
@@ -103,6 +103,13 @@
       }).catch(function (e) { S.hotErr = e.message; }).then(draw);
     }
     if (S.sel) loadItem();
+  }
+
+  // Plan 049: an SSE `market` push (a watchlist write) re-reads now, or on the
+  // next show() while this tab is hidden.
+  function onBus() {
+    if (C.pollPaused(S.panel, document)) S.last = null;
+    else poll(true);
   }
 
   function loadItem() {
@@ -159,34 +166,73 @@
 
   // ---- render ----
 
+  // r = { it, tax } with `freshness` left out of `it`: its age_s changes on
+  // every GET and would rebuild every row. The pill, stale and sel classes are
+  // applied after the reconcile (paintWatchRow), kept rows included.
+  function watchRow(r) {
+    const it = r.it;
+    const row = el('div', 'ew-mrow ew-wrow');
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    row.appendChild(el('span', 'ew-mname', label(it)));
+    row.appendChild(priceEl(it.price));
+    row.appendChild(netEl(it));
+    const a = alertOf(it);
+    const badges = el('span', 'ew-badges');
+    badges.appendChild(el('span', a ? 'ew-badge ' + a : 'ew-badge', a || ''));
+    const pre = badgeEl(it);
+    if (pre) badges.appendChild(pre);
+    row.appendChild(badges);
+    row.ewPill = el('span', 'ew-pill');
+    row.appendChild(row.ewPill);
+    row.addEventListener('click', function () { choose(it); });
+    row.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') choose(it); });
+    return row;
+  }
+
+  function paintWatchRow(row, it) {
+    const p = C.marketPill(it.freshness);
+    row.className = 'ew-mrow ew-wrow' + (p.stale ? ' ew-stale' : '') + (key(it) === key(S.sel) ? ' sel' : '');
+    row.ewPill.className = 'ew-pill ' + p.cls;
+    row.ewPill.textContent = p.label;
+    if (p.error) row.ewPill.title = p.error;
+    else row.ewPill.removeAttribute('title');
+  }
+
+  // Plan 049: the list node persists and rows are keyed (C.reconcile), so a
+  // poll keeps focus and scroll on rows that did not change.
   function drawWatch(body) {
-    body.textContent = '';
     const items = S.watch && Array.isArray(S.watch.items) ? S.watch.items : null;
-    if (S.watchErr) note(body, 'ew-err', (items ? 'last data - ' : '') + S.watchErr);
-    if (!items) { if (!S.watchErr) note(body, 'ew-muted', 'loading...'); return; }
-    if (!items.length) { note(body, 'ew-muted', 'Watchlist empty - add an item id.'); return; }
-    const list = el('div', 'ew-list' + (S.watchErr ? ' ew-stale' : ''));
-    items.forEach(function (it) {
-      if (!it) return;
-      const p = C.marketPill(it.freshness);
-      const row = el('div', 'ew-mrow ew-wrow' + (p.stale ? ' ew-stale' : '') + (key(it) === key(S.sel) ? ' sel' : ''));
-      row.tabIndex = 0;
-      row.setAttribute('role', 'button');
-      row.appendChild(el('span', 'ew-mname', label(it)));
-      row.appendChild(priceEl(it.price));
-      row.appendChild(netEl(it));
-      const a = alertOf(it);
-      const badges = el('span', 'ew-badges');
-      badges.appendChild(el('span', a ? 'ew-badge ' + a : 'ew-badge', a || ''));
-      const pre = badgeEl(it);
-      if (pre) badges.appendChild(pre);
-      row.appendChild(badges);
-      row.appendChild(pillEl(it.freshness));
-      row.addEventListener('click', function () { choose(it); });
-      row.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') choose(it); });
-      list.appendChild(row);
+    let w = S.ui.wl;
+    if (!w || w.list.parentNode !== body) {
+      body.textContent = '';
+      w = S.ui.wl = { err: el('div', 'ew-err', ''), note: el('div', 'ew-muted', ''), list: el('div', 'ew-list') };
+      body.appendChild(w.err);
+      body.appendChild(w.note);
+      body.appendChild(w.list);
+    }
+    w.err.textContent = S.watchErr ? (items ? 'last data - ' : '') + S.watchErr : '';
+    w.err.hidden = !S.watchErr;
+    let hint = '';
+    if (!items) hint = S.watchErr ? '' : 'loading...';
+    else if (!items.length) hint = 'Watchlist empty - add an item id.';
+    w.note.textContent = hint;
+    w.note.hidden = !hint;
+    w.list.className = 'ew-list' + (S.watchErr ? ' ew-stale' : '');
+    w.list.hidden = !(items && items.length);
+    const tax = taxOpts();
+    const live = (items || []).filter(Boolean);
+    const rows = live.map(function (it) {
+      const rest = Object.assign({}, it);
+      delete rest.freshness;
+      return { it: rest, tax: tax };
     });
-    body.appendChild(list);
+    C.reconcile(w.list, rows, function (r) { return key(r.it); }, watchRow);
+    const byKey = {};
+    live.forEach(function (it) { if (!(key(it) in byKey)) byKey[key(it)] = it; });
+    Array.prototype.forEach.call(w.list.children, function (n) {
+      if (byKey[n.ewKey]) paintWatchRow(n, byKey[n.ewKey]);
+    });
   }
 
   function sparkline(history) {
@@ -421,6 +467,7 @@
   }
 
   function mount(panel) {
+    S.panel = panel;
     panel.classList.add('ew-market');
     const w = card('Watchlist');
     const it = card('Item detail');
@@ -432,8 +479,10 @@
     [w, it, fm, hot].forEach(function (c) { panel.appendChild(c.card); });
     S.ui = { watch: w.body, item: it.body, hot: hot.body, hotPill: hotPill, form: fm.form,
       calc: calc.update };
-    if (!S.timer) poll(false);
-    else draw();
+    if (!S.timer) {
+      if (window.EWBus) window.EWBus.on('market', onBus);
+      poll(false);
+    } else draw();
   }
 
   function show() { poll(false); }

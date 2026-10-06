@@ -66,10 +66,16 @@
     if (!force && !C.pollDue(S.last, now, POLL_MS)) { draw(); return; }
     S.last = now;
     clearTimeout(S.timer);
-    S.timer = setTimeout(function () { poll(true); }, POLL_MS);
+    S.timer = setTimeout(function () { if (!C.pollPaused(S.panel, document)) poll(true); }, POLL_MS);
     getJSON('/api/grind').then(accept, function (e) { S.err = e.message; }).then(draw)
       .then(function () { loadLoot(false); });
     loadRecs();
+  }
+
+  // Plan 049: an SSE `grind` push re-reads now, or on the next show() while hidden.
+  function onBus() {
+    if (C.pollPaused(S.panel, document)) S.last = null;
+    else poll(true);
   }
 
   // Plan 039: the loot list follows the running spot, else the picker.
@@ -412,56 +418,74 @@
     body.appendChild(box);
   }
 
+  // d = a C.buffRows row with left_s folded into `on`, so the ticking clock
+  // never changes the reconcile signature (plan 049); the time is set after.
+  function buffRow(row) {
+    const r = el('div', 'ew-brow' + (row.on ? ' on' : ''));
+    r.appendChild(el('span', 'ew-mname', row.name));
+    const left = el('span', 'ew-mprice', '-');
+    r.appendChild(left);
+    if (row.on) r.ewClock = left;
+    const min = el('input');
+    min.type = 'text';
+    min.inputMode = 'numeric';
+    min.maxLength = 5;
+    min.title = 'minutes (1-43200)';
+    min.value = S.buffMin[row.name.toLowerCase()] || String(row.minutes);
+    min.addEventListener('input', function () { S.buffMin[row.name.toLowerCase()] = min.value; });
+    r.appendChild(min);
+    const xp = el('input');
+    xp.type = 'text';
+    xp.inputMode = 'numeric';
+    xp.maxLength = 4;
+    xp.placeholder = 'xp%';
+    xp.title = 'XP bonus % (0-1000, optional; counted in the Leveling XP stack)';
+    xp.value = typeof row.xp_pct === 'number' ? String(row.xp_pct) : '';
+    r.appendChild(xp);
+    // Plan 018: a preset-named buff still on its pre-patch xp% (never rewritten).
+    if (row.xp_hint) {
+      const h = el('span', 'ew-muted', row.xp_hint);
+      h.title = 'the Lv 75 patch changed this buff; check its XP % in game';
+      r.appendChild(h);
+    }
+    const go = el('button', 'ew-btn ew-bbtn', row.on ? 're-arm' : 'arm');
+    go.type = 'button';
+    go.addEventListener('click', function () { arm(row, min, xp); });
+    r.appendChild(go);
+    const x = el('button', 'ew-tx', 'x');
+    x.type = 'button';
+    x.title = 'clear';
+    x.setAttribute('aria-label', 'clear buff');
+    x.disabled = row.id === null;
+    x.hidden = !row.on;
+    x.addEventListener('click', function () { if (row.id !== null) send({ clear_buff: row.id }, 'cleared'); });
+    r.appendChild(x);
+    return r;
+  }
+
   function drawBuffs(now) {
     const ui = S.ui;
     const rows = C.buffRows(S.data ? S.data.buffs : [], S.at, now);
-    ui.buffBody.textContent = '';
+    let f = ui.buffFrame;
+    if (!f || f.list.parentNode !== ui.buffBody) {
+      ui.buffBody.textContent = '';
+      f = ui.buffFrame = { err: el('div', 'ew-err', ''), list: el('div', 'ew-list'), presets: el('div') };
+      [f.err, f.list, f.presets].forEach(function (n) { ui.buffBody.appendChild(n); });
+    }
+    f.err.textContent = S.err && !S.data ? S.err : '';
+    f.err.hidden = !f.err.textContent;
+    f.list.className = 'ew-list' + (S.err ? ' ew-stale' : '');
+    C.reconcile(f.list, rows.map(function (row) {
+      return { id: row.id, name: row.name, on: row.left_s !== null, minutes: row.minutes,
+        xp_pct: row.xp_pct, xp_hint: row.xp_hint };
+    }), function (d) { return d.name.toLowerCase(); }, buffRow);
     ui.buffClocks = [];
-    if (S.err && !S.data) ui.buffBody.appendChild(el('div', 'ew-err', S.err));
-    const box = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
-    rows.forEach(function (row) {
-      const r = el('div', 'ew-brow' + (row.left_s === null ? '' : ' on'));
-      r.appendChild(el('span', 'ew-mname', row.name));
-      const left = el('span', 'ew-mprice', row.left_s === null ? '-' : C.fmtDuration(row.left_s * 1000));
-      r.appendChild(left);
-      if (row.left_s !== null) ui.buffClocks.push({ name: row.name, node: left });
-      const min = el('input');
-      min.type = 'text';
-      min.inputMode = 'numeric';
-      min.maxLength = 5;
-      min.title = 'minutes (1-43200)';
-      min.value = S.buffMin[row.name.toLowerCase()] || String(row.minutes);
-      min.addEventListener('input', function () { S.buffMin[row.name.toLowerCase()] = min.value; });
-      r.appendChild(min);
-      const xp = el('input');
-      xp.type = 'text';
-      xp.inputMode = 'numeric';
-      xp.maxLength = 4;
-      xp.placeholder = 'xp%';
-      xp.title = 'XP bonus % (0-1000, optional; counted in the Leveling XP stack)';
-      xp.value = typeof row.xp_pct === 'number' ? String(row.xp_pct) : '';
-      r.appendChild(xp);
-      // Plan 018: a preset-named buff still on its pre-patch xp% (never rewritten).
-      if (row.xp_hint) {
-        const h = el('span', 'ew-muted', row.xp_hint);
-        h.title = 'the Lv 75 patch changed this buff; check its XP % in game';
-        r.appendChild(h);
-      }
-      const go = el('button', 'ew-btn ew-bbtn', row.left_s === null ? 'arm' : 're-arm');
-      go.type = 'button';
-      go.addEventListener('click', function () { arm(row, min, xp); });
-      r.appendChild(go);
-      const x = el('button', 'ew-tx', 'x');
-      x.type = 'button';
-      x.title = 'clear';
-      x.setAttribute('aria-label', 'clear buff');
-      x.disabled = row.id === null;
-      x.hidden = row.left_s === null;
-      x.addEventListener('click', function () { if (row.id !== null) send({ clear_buff: row.id }, 'cleared'); });
-      r.appendChild(x);
-      box.appendChild(r);
+    rows.forEach(function (row, i) {
+      const n = f.list.children[i];
+      if (!n || !n.ewClock || row.left_s === null) return;
+      n.ewClock.textContent = C.fmtDuration(row.left_s * 1000);
+      ui.buffClocks.push({ name: row.name, node: n.ewClock });
     });
-    ui.buffBody.appendChild(box);
     drawPresets();
   }
 
@@ -469,6 +493,7 @@
   function drawPresets() {
     const ui = S.ui;
     const list = C.xpPresets(S.data);
+    ui.buffFrame.presets.textContent = '';
     if (!list.length) return;
     const f = el('form', 'ew-brow');
     const sel = el('select');
@@ -501,7 +526,7 @@
       if (!r.ok) { msg(r.error); return; }
       send(r.body, p.name + ' armed');
     });
-    ui.buffBody.appendChild(f);
+    ui.buffFrame.presets.appendChild(f);
   }
 
   // Plan 038 "Drop rate": active drop buffs against the caps (rate and amount
@@ -752,6 +777,7 @@
   }
 
   function mount(panel) {
+    S.panel = panel;
     panel.classList.add('ew-grind');
     const s = sessionCard();
     const w = recCard();
@@ -771,6 +797,7 @@
     S.lootSpot = undefined; // fresh loot box: the next loadLoot always fetches
     if (!S.timer) {
       setInterval(tick, 1000);
+      if (window.EWBus) window.EWBus.on('grind', onBus);
       poll(false);
     } else {
       draw();

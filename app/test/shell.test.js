@@ -52,7 +52,7 @@ test('dashboard re-checks /api/version on a timer and on SSE reconnect', () => {
   const d = read('dashboard/dashboard.js');
   assert.match(d, /getJSON\('\/api\/version'\)/);
   assert.match(d, /setInterval\(pollVersion, C\.VERSION_POLL_MS\)/);
-  assert.match(d, /onopen[\s\S]*?if \(reconnect\) pollVersion\(\)/);
+  assert.match(d, /onopen[\s\S]*?if \(reconnect\) \{\s*pollVersion\(\);/);
   assert.match(d, /C\.healthPill\(/);
   assert.doesNotMatch(d, /JSON\.stringify\(/, 'System tab renders cards, not a JSON blob');
   assert.match(d, /C\.sourceFreshness\(/);

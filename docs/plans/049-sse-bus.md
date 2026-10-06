@@ -28,3 +28,54 @@ within 3 rounds.
 ToS check: local server and dashboard only.
 
 Depends on: none.
+
+## As-built deviations
+
+Self-adjudicated in the build lane (2026-10-05); each line: decision /
+alternatives / why / reverses if.
+
+1. `leveling` gets no second, name-only event. Alt: emit both. Why: the plan
+   011 `leveling` event (full view) already fires on every leveling POST via
+   `LevelingService.seq`, and the overlay consumes that payload; a duplicate
+   would double every re-GET. The dashboard bus passes either payload shape
+   and modules re-GET on a non-view one. Reverses if: a leveling write stops
+   bumping `seq`.
+2. Domain event data is the JSON-encoded name (`data: "today"`), not a bare
+   word. Alt: bare text. Why: every other SSE frame is JSON, so one
+   `JSON.parse` path serves all. Reverses if: a non-JS consumer needs bare text.
+3. The server bumps a per-domain counter (`DomainBus`) only after a 200 POST;
+   each stream diffs its snapshot on the existing 0.25 s SSE tick. Alt: a
+   condition variable waking streams at once. Why: the tick loop already
+   exists; 0.25 s worst case is far inside the UX bar. Reverses if: a push
+   needs to beat 0.25 s.
+4. Hidden-tab pause covers every polled tab module (today, grind, game,
+   leveling, market, progress, events, deadeye, pets, inventory, bosses), not
+   only the five bus modules; Home keeps polling because its snapshots drive
+   the tab badges. A domain event on a hidden tab clears `last` so the next
+   `show()` re-reads. Window un-hide (`visibilitychange`) re-runs `show()`
+   for the active tab. Reverses if: badges move off the Home snapshots.
+5. The game card keeps a 60 s fallback poll (paused when hidden) instead of
+   no poll. Alt: SSE only. Why: a dropped stream would otherwise freeze the
+   card until reconnect. A stream reconnect re-emits every domain with null
+   data, so all bus modules re-GET what they missed. Reverses if: never needed
+   in practice (drop it then).
+6. `reconcile(container, rows, key, render)`: `render(row)` is a pure builder;
+   the row's JSON is its signature (unchanged -> node kept, changed -> rebuilt
+   in place). Per-GET or ticking values are kept out of the signature (market
+   `freshness` incl. `age_s`, plus the selection class; Today reset / event
+   countdowns; grind buff `left_s` folded into `on`) and written after the
+   reconcile through nodes stored on the row (refute round 1). Today's "This week" list was
+   adopted too. Alt: per-module patch functions. Why: one generic rule, no
+   per-field diff code. Reverses if: a row's JSON becomes too large to stringify
+   per poll.
+7. Gate fix outside scope: the plan 044 mount delete button in `progress.js`
+   lacked the plan 047 `aria-label` (density test red at base). Two legacy
+   source-pattern tests (`leveling.test.js`, `shell.test.js`) were updated to
+   the bus shape.
+8. Accepted minor (verifier round 1): a stream reconnect makes Today re-GET
+   twice (it listens to `today` and `events`). Why accepted: it only happens
+   on reconnect and costs two local GETs. Reverses if: reconnects become frequent.
+
+Verification: refute-rounds: 2/3. Round 1 REFUTE (market signature held
+`freshness.age_s`; fixed). Round 2 CONFIRM. Gates at round 2: ruff clean,
+pytest ~2199 passed, node 433/433.

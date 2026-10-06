@@ -22,6 +22,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -50,6 +51,10 @@ MAX_DEADEYE_POST_BYTES = 131072
 DRAIN_MAX_BYTES = 1 << 20
 POST_CAPS = {"/api/deadeye": MAX_DEADEYE_POST_BYTES}
 SSE_TICK_S = 0.25  # SSE wakes this often to notice a leveling change (plan 011)
+# Plan 049: a 200 POST on these routes pushes `event: <domain>` (data: the JSON
+# domain name); clients re-GET. /api/leveling keeps its plan 011 full-view event.
+POST_DOMAINS = {"/api/today": "today", "/api/grind": "grind", "/api/market/watch": "market",
+                "/api/progress": "progress", "/api/events": "events"}
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 
 TABS = [
@@ -67,6 +72,22 @@ TABS = [
 
 def _now_iso():
     return _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat()
+
+
+class DomainBus:
+    """Per-domain change counters (plan 049); each SSE stream diffs a snapshot."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._seq = {}
+
+    def bump(self, domain):
+        with self._lock:
+            self._seq[domain] = self._seq.get(domain, 0) + 1
+
+    def snapshot(self):
+        with self._lock:
+            return dict(self._seq)
 
 
 def read_commit(root=REPO_ROOT):
@@ -128,6 +149,7 @@ class EWServer(ThreadingHTTPServer):
         # Plan 030: the only writer of config/local.json (allowlisted keys only).
         self.settings = settings.Settings(config_path or CONFIG_PATH)
         self.sse_interval = sse_interval
+        self.bus = DomainBus()
         seed = config_market_watch() if market_seed is None else market_seed
         self.market = market.MarketService(market_client or market.ArshaClient(),
                                            market.Watchlist(self.store, seed=seed),
@@ -552,6 +574,8 @@ class Handler(BaseHTTPRequestHandler):
             return reply(400, {"error": str(e)})
         except ocr.OcrError as e:
             return reply(502, {"error": f"ocr failed: {e}"})
+        if rpath in POST_DOMAINS:
+            self.server.bus.bump(POST_DOMAINS[rpath])
         return reply(200, out)
 
     def _file(self, target):
@@ -570,8 +594,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        game, lev = self.server.game, self.server.leveling
-        seq, lseq = game.seq, lev.seq
+        game, lev, bus = self.server.game, self.server.leveling, self.server.bus
+        seq, lseq, dseq = game.seq, lev.seq, bus.snapshot()
         interval = self.server.sse_interval
         try:
             msg = json.dumps({"type": "heartbeat", "now": _now_iso()})
@@ -594,6 +618,10 @@ class Handler(BaseHTTPRequestHandler):
                         out.append(f"event: leveling\ndata: {json.dumps(lev.view())}\n\n")
                     except Exception:  # noqa: BLE001
                         pass
+                now_seq = bus.snapshot()
+                for d in sorted(k for k in now_seq if now_seq[k] != dseq.get(k)):
+                    out.append(f"event: {d}\ndata: {json.dumps(d)}\n\n")
+                dseq = now_seq
                 if not out and time.monotonic() >= quiet:
                     msg = json.dumps({"type": "heartbeat", "now": _now_iso()})
                     out.append(f"data: {msg}\n\n")

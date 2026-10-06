@@ -58,7 +58,7 @@
     if (!force && !C.pollDue(S.last, now, POLL_MS)) { draw(); return; }
     S.last = now;
     clearTimeout(S.timer);
-    S.timer = setTimeout(function () { poll(true); }, POLL_MS);
+    S.timer = setTimeout(function () { if (!C.pollPaused(S.panel, document)) poll(true); }, POLL_MS);
     getJSON('/api/events').then(accept, function (e) { S.err = e.message; }).then(draw);
   }
 
@@ -417,6 +417,7 @@
   }
 
   function mount(panel) {
+    S.panel = panel;
     panel.classList.add('ew-events');
     const a = addCard();
     const cp = card('Coupons');
@@ -434,6 +435,11 @@
     kindChanged();
     if (!S.timer) {
       setInterval(tick, 1000);
+      // Plan 049: an SSE `events` push re-reads now, or on the next show() while hidden.
+      if (window.EWBus) window.EWBus.on('events', function () {
+        if (C.pollPaused(S.panel, document)) S.last = null;
+        else poll(true);
+      });
       poll(false);
     } else {
       draw();

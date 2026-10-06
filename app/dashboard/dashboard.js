@@ -15,6 +15,9 @@
   const GEAR = String.fromCharCode(0x2699); // System icon tab (plan 047)
   // Health inputs for C.healthPill; sseOk stays null until the stream reports.
   const H = { version: null, health: null, sources: null, lastOkMs: null, sseOk: null, restarting: false };
+  // Plan 049: the one /events stream fans out here; modules subscribe in mount().
+  const bus = window.EWBus = C.createBus();
+  const DOMAINS = ['today', 'grind', 'game', 'leveling', 'market', 'progress', 'events'];
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -36,6 +39,8 @@
 
   // Plan 047: roving tabindex - only the selected tab is in the Tab order.
   function select(id, focus) {
+    if (id === undefined) id = active; // plan 049: re-show after the window un-hides
+    if (id === null) return;
     active = id;
     document.querySelectorAll('.ew-tab').forEach(function (b) {
       const on = b.dataset.tab === id;
@@ -223,6 +228,9 @@
     });
   }
 
+  // Named events carry a domain name (plan 049) or a full view (game, leveling);
+  // listeners get the parsed data or null. A reconnect re-emits every domain
+  // with null so each module re-GETs what it may have missed.
   function watchStream() {
     if (typeof EventSource !== 'function') return;
     const src = new EventSource(C.SERVER + '/events');
@@ -230,11 +238,22 @@
       const reconnect = H.sseOk === false;
       H.sseOk = true;
       H.lastOkMs = Date.now();
-      if (reconnect) pollVersion();
+      if (reconnect) {
+        pollVersion();
+        DOMAINS.forEach(function (d) { bus.emit(d, null); });
+      }
       paintPill();
     };
     src.onmessage = function () { H.lastOkMs = Date.now(); };
     src.onerror = function () { H.sseOk = false; paintPill(); };
+    DOMAINS.forEach(function (d) {
+      src.addEventListener(d, function (ev) {
+        H.lastOkMs = Date.now();
+        let data = null;
+        try { data = JSON.parse(ev.data); } catch (e) { data = null; }
+        bus.emit(d, data);
+      });
+    });
   }
 
   function load() {
@@ -263,6 +282,8 @@
   const rb = document.getElementById('server-restart');
   if (rb) rb.addEventListener('click', restart);
   document.addEventListener('keydown', onKey);
+  // Timers skip while hidden (C.pollPaused); coming back re-shows the tab.
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) select(); });
   load();
   watchStream();
   setInterval(pollVersion, C.VERSION_POLL_MS);

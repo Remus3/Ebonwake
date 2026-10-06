@@ -13,7 +13,7 @@
   const C = window.EWCore;
   const POLL_MS = 60000;
   const DUE_MIN_MS = 5000; // a window that flipped locally re-polls, throttled
-  const S = { data: null, at: 0, err: null, last: null, timer: null, ui: null, src: null, attempt: 0, dueAt: null };
+  const S = { data: null, at: 0, err: null, last: null, timer: null, ui: null, dueAt: null };
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -51,29 +51,20 @@
     if (!force && !C.pollDue(S.last, now, POLL_MS)) { draw(); return; }
     S.last = now;
     clearTimeout(S.timer);
-    S.timer = setTimeout(function () { poll(true); }, POLL_MS);
+    S.timer = setTimeout(function () {
+      if (!C.pollPaused(S.ui && S.ui.card, document)) poll(true);
+    }, POLL_MS);
     getJSON('/api/leveling').then(function (d) {
       if (!accept(d)) throw new Error('bad reply from server');
     }).catch(function (e) { S.err = e.message; }).then(draw);
   }
 
-  // SSE `leveling` carries the full GET body; a bad one just triggers a re-read.
-  function connect() {
-    if (typeof EventSource !== 'function') return;
-    const src = new EventSource(C.SERVER + '/events');
-    S.src = src;
-    src.onmessage = function () { S.attempt = 0; };
-    src.addEventListener('leveling', function (ev) {
-      let d = null;
-      try { d = JSON.parse(ev.data); } catch (e) { d = null; }
-      if (accept(d)) draw();
-      else poll(true);
-    });
-    src.onerror = function () {
-      src.close();
-      S.src = null;
-      setTimeout(connect, C.backoffMs(S.attempt++));
-    };
+  // SSE `leveling` (plan 049: via the dashboard bus) carries the full GET body;
+  // a bad or null one (a reconnect) re-reads now, or on the next show() while hidden.
+  function onLeveling(d) {
+    if (accept(d)) draw();
+    else if (C.pollPaused(S.ui && S.ui.card, document)) S.last = null;
+    else poll(true);
   }
 
   function msg(text) { if (S.ui) S.ui.msg.textContent = text; }
@@ -400,10 +391,10 @@
     panel.insertBefore(c, panel.children[1] || null);
     S.ui = ui;
     if (!S.timer) {
+      if (window.EWBus) window.EWBus.on('leveling', onLeveling);
       poll(false);
       setInterval(function () { if (S.ui && S.ui.card.isConnected) drawLive(Date.now()); }, 1000);
     } else draw();
-    if (!S.src) connect();
   }
 
   function show() { poll(false); }
