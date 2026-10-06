@@ -2319,10 +2319,77 @@
   // Exact shape check for POST /api/ocr bodies (main-process IPC guard): a bare
   // file name as the watcher lists it - never a path. The server checks the list.
   function validOcrBody(body) {
-    if (!exact(body, ['file'])) return false;
-    const f = body.file;
+    if (exact(body, ['loot'])) {
+      const l = body.loot;
+      return exact(l, ['shot', 'spot']) && validShotName(l.shot) &&
+        typeof l.spot === 'string' && OCR_SPOT_RE.test(l.spot);
+    }
+    return exact(body, ['file']) && validShotName(body.file);
+  }
+
+  function validShotName(f) {
     return typeof f === 'string' && f.trim().length > 0 && f.length <= OCR_NAME_MAX &&
       !/[\u0000-\u001f\u007f\\/:]/.test(f) && f !== '.' && f !== '..';
+  }
+
+  // ---- OCR loot import (plan 040) ----
+  // POST /api/ocr {loot: {shot, spot}} -> {shot, spot, text, rows: [{name,
+  // count, confidence}], unmatched}. Rows only pre-fill the Grind loot counts;
+  // the operator checks them and logs with Stop + log as usual.
+
+  const OCR_SPOT_RE = /^[a-z0-9-]{1,40}$/;   // server grind ID_RE
+  const OCR_LOW_CONF = 1;                    // anything short of an exact name read is flagged
+  const OCR_UNMATCHED_MAX = 50;
+
+  function normalizeLootOcr(d) {
+    if (!plainObject(d)) return null;
+    const rows = [];
+    const seen = [];
+    (Array.isArray(d.rows) ? d.rows : []).forEach(function (r) {
+      if (!plainObject(r) || !validName(r.name)) return;
+      const n = r.name.toLowerCase();
+      if (seen.indexOf(n) >= 0) return;
+      seen.push(n);
+      const count = Number.isInteger(r.count) && inRange(r.count, LOOT_COUNT) ? r.count : null;
+      const conf = isNum(r.confidence) && r.confidence >= 0 && r.confidence <= 1 ? r.confidence : 0;
+      rows.push({ name: r.name, count: count, confidence: conf });
+    });
+    const unmatched = (Array.isArray(d.unmatched) ? d.unmatched : [])
+      .filter(function (t) { return typeof t === 'string' && t.length > 0; })
+      .slice(0, OCR_UNMATCHED_MAX).map(function (t) { return t.slice(0, 200); });
+    return { shot: typeof d.shot === 'string' ? d.shot : '', rows: rows, unmatched: unmatched };
+  }
+
+  // Rows -> {counts: {itemName: 'digits'}, low: [itemName], filled, missing}
+  // keyed by the spot's own item names (case-insensitive match), so the counts
+  // land in the existing loot inputs. A row without a count or an item the
+  // list no longer has is reported, never invented.
+  function lootImportCounts(rows, itemNames) {
+    const byLower = {};
+    (Array.isArray(itemNames) ? itemNames : []).forEach(function (n) {
+      if (typeof n === 'string') byLower[n.toLowerCase()] = n;
+    });
+    const out = { counts: {}, low: [], filled: 0, missing: [] };
+    (Array.isArray(rows) ? rows : []).forEach(function (r) {
+      const name = r && typeof r.name === 'string' ? byLower[r.name.toLowerCase()] : undefined;
+      if (name === undefined || r.count === null || !Number.isInteger(r.count)) {
+        if (r && typeof r.name === 'string') out.missing.push(r.name);
+        return;
+      }
+      out.counts[name] = String(r.count);
+      out.filled += 1;
+      if (!(r.confidence >= OCR_LOW_CONF)) out.low.push(name);
+    });
+    return out;
+  }
+
+  function lootImportText(shot, imp, unmatched) {
+    let t = imp.filled ? 'filled ' + imp.filled + ' from ' + shot + ' - check, then Stop + log'
+      : 'no loot counts read from ' + shot;
+    if (imp.low.length) t += '; check ? rows';
+    if (imp.missing.length) t += '; no count: ' + imp.missing.join(', ');
+    if (unmatched && unmatched.length) t += '; ' + unmatched.length + ' line(s) not on this list';
+    return t;
   }
 
   function normalizeOcr(d) {
@@ -3533,6 +3600,9 @@
     ocrBuffBody: ocrBuffBody,
     ocrSilverInput: ocrSilverInput,
     ocrBuffLabel: ocrBuffLabel,
+    normalizeLootOcr: normalizeLootOcr,
+    lootImportCounts: lootImportCounts,
+    lootImportText: lootImportText,
     lastDailyReset: lastDailyReset,
     lastWeeklyReset: lastWeeklyReset,
     validResetRule: validResetRule,

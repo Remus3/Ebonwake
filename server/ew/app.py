@@ -197,7 +197,9 @@ class EWServer(ThreadingHTTPServer):
         self.game = game_watch
         if ocr_cache_dir is None:  # beside the store, so a test store keeps OCR in tmp too
             ocr_cache_dir = Path(store_root).parent / "ocr" if store_root else RUNTIME / "ocr"
-        self.ocr = ocr.OcrService(self.game, ocr_cache_dir, runner=ocr_runner)
+        # Plan 040: loot import matches against the spot's grind loot list.
+        self.ocr = ocr.OcrService(self.game, ocr_cache_dir, runner=ocr_runner,
+                                  loot_names=self.grind.loot_names)
         if game_poll:  # off by default so tests never probe processes; main() turns it on
             self.game.start()
 

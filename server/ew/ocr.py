@@ -26,7 +26,7 @@ import sys
 import threading
 from pathlib import Path
 
-from .grind import MAX_BUFF_MINUTES, MAX_SILVER, SEED_BUFFS
+from .grind import MAX_BUFF_MINUTES, MAX_LOOT_COUNT, MAX_SILVER, SEED_BUFFS
 from .store import atomic_write_json
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -614,22 +614,172 @@ def extract(doc):
             "buffs": extract_buffs(doc["lines"])}
 
 
+# -- plan 040: loot-window import ------------------------------------------------
+# A loot window / acquisition-log line is a loot-table name plus a count: "x123"
+# anywhere (x, X or the multiplication sign; inside an x-tagged count O/o read
+# as 0 and l/I as 1), else a leading "123" / "2x", else a trailing "123". Counts
+# use the plan 016 digit groups (comma, dot or a comma read as a space). A line
+# without a count takes a pure-count line on its row or just below when the OCR
+# gave geometry. Names match at a normalised edit distance <= LOOT_MATCH_MAX over
+# word windows of the line (one word more or less than the name), closest wins.
+
+LOOT_MATCH_MAX = 0.25
+MAX_UNMATCHED = 50
+_DIG = "[0-9OoIl]"
+_GROUPED = r"\d{1,3}(?: ?[,.] ?\d{3}| \d{3})+|\d+"
+_GROUPED_X = rf"{_DIG}{{1,3}}(?: ?[,.] ?{_DIG}{{3}}| {_DIG}{{3}})+|{_DIG}+"
+_TIMES = "[xX" + chr(0xD7) + "]"  # chr: the source stays ASCII
+LOOT_X = re.compile(rf"(?<![A-Za-z0-9]){_TIMES}\s*({_GROUPED_X})(?![\w])")
+LOOT_LEAD = re.compile(rf"^\W*({_GROUPED})\s*(?:{_TIMES}(?![A-Za-z0-9]))?\s+(?=\S)")
+LOOT_TAIL = re.compile(rf"(?<![\w.,])({_GROUPED})\s*$")
+_OCR_DIGIT = str.maketrans("OoIl", "0011")
+
+
+def name_distance(a, b):
+    """Levenshtein distance of a and b over the longer length (0.0 .. 1.0)."""
+    if a == b:
+        return 0
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1] / max(len(a), len(b), 1)
+
+
+def _loot_count(text):
+    """(count or None, text with the count removed). A count of 0 or over the
+    grind cap is no count; a line that is only a number gives (n, "")."""
+    for rx in (LOOT_X, LOOT_LEAD, LOOT_TAIL):
+        m = rx.search(text)
+        if not m:
+            continue
+        raw = m.group(1).translate(_OCR_DIGIT)
+        if not any(ch.isdigit() for ch in m.group(1)):
+            continue
+        n = int(re.sub(r"[^0-9]", "", raw))
+        rest = text[:m.start()] + " " + text[m.end():]
+        return (n if 1 <= n <= MAX_LOOT_COUNT else None), rest
+    return None, text
+
+
+def _best_name(rest, names):
+    """(name, distance) of the closest loot name in `rest`, or (None, None)."""
+    words = _norm(rest).split()
+    best = (None, None)
+    if not words:
+        return best
+    for name, norm in names:
+        nw = len(norm.split())
+        d = min((name_distance(" ".join(words[i:i + k]), norm)
+                 for k in {max(1, nw - 1), nw, nw + 1} if k <= len(words)
+                 for i in range(len(words) - k + 1)), default=None)
+        if d is None or d > LOOT_MATCH_MAX:
+            continue
+        if best[1] is None or d < best[1] or (d == best[1] and len(norm) > len(best[2])):
+            best = (name, d, norm)
+    return best[:2]
+
+
+def _loot_names(names):
+    out, seen = [], set()
+    for n in names if isinstance(names, (list, tuple)) else []:
+        norm = _norm(n).strip() if isinstance(n, str) else ""
+        if norm and norm not in seen:
+            seen.add(norm)
+            out.append((n.strip(), norm))
+    return out
+
+
+def _loot_lines(text_lines):
+    """(lines, has_geometry): plain strings or {text, x, y, w, h} dicts."""
+    raw = text_lines if isinstance(text_lines, list) else []
+    geo = bool(raw) and all(isinstance(t, dict) for t in raw)
+    lines = _lines([{"text": t} if isinstance(t, str) else t for t in raw[:MAX_LINES]])
+    return lines, geo and all(ln["h"] > 0 for ln in lines)
+
+
+def _fill_counts(lines, parsed, pure, hits):
+    """Give name hits without a count a pure-count line, each count used once.
+    First every hit's own row (nearest x). Then each left-over count goes to
+    the NEAREST name line above it (refute r2), and only if that name still has
+    no count, so a count printed beside or under one name never reaches the
+    name above it."""
+    used = set()
+    for h in hits:
+        if h[2] is None:
+            a = lines[h[0]]
+            cands = [j for j in pure if j not in used and _same_row(a, lines[j])]
+            if cands:
+                j = min(cands, key=lambda j: abs(lines[j]["x"] - a["x"]))
+                used.add(j)
+                h[2] = parsed[j][0]
+    for j in sorted(pure - used, key=lambda j: lines[j]["y"]):
+        c = lines[j]
+        above = [h for h in hits if not _same_row(lines[h[0]], c) and _below(lines[h[0]], c)]
+        if not above:
+            continue
+        h = max(above, key=lambda h: (lines[h[0]]["y"], -abs(lines[h[0]]["x"] - c["x"])))
+        if h[2] is None:
+            h[2] = parsed[j][0]
+
+
+def extract_loot(text_lines, known_names):
+    """OCR lines + the spot's loot names -> {rows: [{name, count, confidence}],
+    unmatched: [line text with a count but no loot name]}. The same name on
+    several lines (acquisition log) sums; confidence (1 - distance) keeps the
+    lowest. Suggestions only: nothing is stored here."""
+    names = _loot_names(known_names)
+    lines, geo = _loot_lines(text_lines)
+    parsed = [_loot_count(ln["text"]) for ln in lines]
+    pure = {i for i, (n, rest) in enumerate(parsed) if n is not None and not _norm(rest).strip()}
+    hits, unmatched = [], []
+    for i, ln in enumerate(lines):
+        if i in pure:
+            continue
+        count, rest = parsed[i]
+        name, d = _best_name(rest, names) if names else (None, None)
+        if name is None:
+            if count is not None and re.search("[A-Za-z]", rest) and len(unmatched) < MAX_UNMATCHED:
+                unmatched.append(ln["text"])
+            continue
+        hits.append([i, name, count, round(1 - d, 2)])
+    if geo:
+        _fill_counts(lines, parsed, pure, hits)
+    rows = {}
+    for _, name, count, conf in hits:
+        row = rows.get(name)
+        if row is None:
+            rows[name] = {"name": name, "count": count, "confidence": conf}
+            continue
+        if count is not None:
+            row["count"] = min(MAX_LOOT_COUNT, (row["count"] or 0) + count)
+        row["confidence"] = min(row["confidence"], conf)
+    return {"rows": list(rows.values()), "unmatched": unmatched}
+
+
+def parse_loot(text_lines, known_names):
+    """[{name, count, confidence}] for the loot names read in `text_lines`."""
+    return extract_loot(text_lines, known_names)["rows"]
+
+
 # -- service ---------------------------------------------------------------------
 
 class OcrService:
     """POST /api/ocr: OCR a watcher-listed screenshot, cached per file."""
 
-    def __init__(self, game, cache_dir, runner=None):
+    def __init__(self, game, cache_dir, runner=None, loot_names=None):
         self.game = game
         self.cache_dir = Path(cache_dir)
         self.runner = runner if runner is not None else (
             lambda p: run_auto(p, self.cache_dir / "prep"))
+        # Plan 040: `loot_names(spot) -> [name]` (grind loot list); ValueError
+        # for an unknown spot.
+        self.loot_names = loot_names
         self._lock = threading.Lock()  # one powershell at a time
 
-    def _listed(self, body):
-        if not isinstance(body, dict) or set(body) != {"file"}:
-            raise ValueError('body must be {"file": name}')
-        name = body["file"]
+    def _listed(self, name):
         if not isinstance(name, str) or not name:
             raise ValueError("file must be a screenshot name")
         if self.game.shot_dir is None:
@@ -662,7 +812,31 @@ class OcrService:
                 pass
 
     def read(self, body):
-        shot = self._listed(body)
+        """`{"file": name}` -> {text, silver, buffs}; plan 040 `{"loot": {shot,
+        spot}}` -> {shot, spot, text, rows, unmatched}. Both only report."""
+        if isinstance(body, dict) and set(body) == {"loot"}:
+            return self._read_loot(body["loot"])
+        if not isinstance(body, dict) or set(body) != {"file"}:
+            raise ValueError('body must be {"file": name} or {"loot": {"shot": name, "spot": id}}')
+        return extract(self._doc(self._listed(body["file"])))
+
+    def _read_loot(self, arg):
+        if not isinstance(arg, dict) or set(arg) != {"shot", "spot"}:
+            raise ValueError('loot must be {"shot": name, "spot": id}')
+        if self.loot_names is None:
+            raise ValueError("loot import is not available")
+        if not isinstance(arg["spot"], str):
+            raise ValueError("spot must be a grind spot id")
+        names = self.loot_names(arg["spot"])
+        if not names:
+            raise ValueError("this spot has no loot items; add them in the Grind tab first")
+        shot = self._listed(arg["shot"])
+        doc = self._doc(shot)
+        out = extract_loot(doc["lines"], names)
+        return {"shot": shot["name"], "spot": arg["spot"], "text": doc["text"],
+                "rows": out["rows"], "unmatched": out["unmatched"]}
+
+    def _doc(self, shot):
         cpath = self.cache_dir / f"{self._key(shot)}.json"
         with self._lock:
             doc = self._cached(cpath)
@@ -674,4 +848,4 @@ class OcrService:
                     self._prune()
                 except OSError:
                     pass
-        return extract(doc)
+        return doc

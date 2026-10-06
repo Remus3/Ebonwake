@@ -808,6 +808,13 @@ class GrindService:
                 "verified": entry["verified"] if entry else None, "items": items,
                 "tax": t, "error": self.loot_error}
 
+    def loot_names(self, spot):
+        """Plan 040: the spot's loot item names (table + operator) for the OCR
+        loot import; ValueError for an unknown spot."""
+        doc = self._load()
+        self._spot_id(doc, spot)
+        return [it["name"] for it in self._items(doc, spot)]
+
     def loot_item(self, arg):
         """`{spot, name, marketable, id?, vendor_price?}`: add or replace (same
         name, case-insensitive) an operator item on a spot's loot list."""

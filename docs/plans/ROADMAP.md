@@ -44,7 +44,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 037 | Shopping list from the enhancement plan: materials x arsha prices, can-afford-by | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 038 | Drop-buff cap calculator (300/400/500 % caps, rate vs amount) + Blessing of Agris ROI | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 039 | Loot-valued grind log: per-spot loot tables, tax-correct silver/h, sell-vs-vendor | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
-| 040 | OCR loot-window import: operator screenshot -> item counts for the grind log | [ ] open |
+| 040 | OCR loot-window import: operator screenshot -> item counts for the grind log | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 041 | Profile history: hourly BDO-REST-API snapshots, trend sparklines, auto level sample | [ ] open |
 | 042 | Lifeskill / energy / contribution card from the profile API | [ ] open |
 | 043 | Pet roster: 5 slots, tier, talents, special-skill coverage, exchange planner | [ ] open |
