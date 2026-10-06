@@ -118,6 +118,10 @@ SPEC.update({
     # Plan 062: login opens / exit closes the grind log; exit grace in seconds.
     "play.auto_session": (_is_bool, True),
     "play.grace_s": (lambda v: _is_int(v) and 60 <= v <= 600, 120),
+    # Plan 063: auto-OCR of screenshots taken while logged in.
+    "ocr.auto": (_is_bool, True),
+    "ocr.auto_commit_min": (_num_in(0.75, 0.99), 0.9),
+    "ocr.daily_cap": (lambda v: _is_int(v) and 0 <= v <= 1000, 120),
 })
 
 
