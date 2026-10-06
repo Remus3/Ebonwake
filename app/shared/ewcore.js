@@ -2848,6 +2848,168 @@
     }).filter(Boolean);
   }
 
+  // ---- Mounts (plan 044) ----
+  // Formatters over GET /api/mounts: {mounts: [{id, name, kind, tier, level,
+  // gender, skills}], materials: [{key, name, have, need, done}], fern: {have,
+  // need, left, per_day, days}, failures, odds: {next_pct, expected, by: {50,
+  // 90, 99}, guaranteed_in}, t10, unlocks, kinds, data_error}. Operator-typed
+  // data plus a sourced rules file; nothing comes from the game.
+
+  const MOUNT_KINDS = ['horse', 'donkey', 'camel', 'elephant'];
+  const MOUNT_GENDERS = ['male', 'female'];
+  const MOUNT_ID = /^[a-z0-9-]{1,40}$/;
+  const MOUNT_MAT_KEY = /^[a-z][a-z_]{0,39}$/;
+  const MOUNT_NAME_MAX = 40;
+  const MOUNT_SKILLS_MAX = 40;
+  const MOUNT_LEVEL = [1, 30];
+  const MOUNT_TIER = [1, 10];
+  const MOUNT_MAT = [0, 99999];
+  const MOUNT_FAILS = [0, 1000];
+  const MOUNT_RATE_MAX = 100;
+  const MOUNT_FIELDS = ['name', 'kind', 'tier', 'level', 'gender', 'skills'];
+
+  function validMountFields(v, required) {
+    if (!plainObject(v) || !onlyKeys(v, MOUNT_FIELDS)) return false;
+    if (!required.every(function (k) { return v[k] !== undefined; })) return false;
+    if (v.name !== undefined && !validAscii(v.name, MOUNT_NAME_MAX)) return false;
+    if (v.kind !== undefined && MOUNT_KINDS.indexOf(v.kind) < 0) return false;
+    if (v.tier !== undefined && v.tier !== null && !inRange(v.tier, MOUNT_TIER)) return false;
+    if (v.level !== undefined && !inRange(v.level, MOUNT_LEVEL)) return false;
+    if (v.gender !== undefined && v.gender !== null && MOUNT_GENDERS.indexOf(v.gender) < 0) return false;
+    if (v.skills !== undefined && !(Array.isArray(v.skills) && v.skills.length <= MOUNT_SKILLS_MAX &&
+      v.skills.every(function (s) { return validAscii(s, MOUNT_NAME_MAX); }))) return false;
+    return true;
+  }
+
+  // POST /api/mounts body: exactly one of add|edit|delete|materials|fern_rate|failures.
+  function validMountsBody(body) {
+    if (!plainObject(body)) return false;
+    const keys = Object.keys(body);
+    if (keys.length !== 1) return false;
+    const v = body[keys[0]];
+    switch (keys[0]) {
+      case 'add': return validMountFields(v, ['name', 'kind']);
+      case 'edit': {
+        if (!plainObject(v) || typeof v.id !== 'string' || !MOUNT_ID.test(v.id)) return false;
+        const rest = Object.assign({}, v);
+        delete rest.id;
+        return Object.keys(rest).length > 0 && validMountFields(rest, []);
+      }
+      case 'delete': return typeof v === 'string' && MOUNT_ID.test(v);
+      case 'materials': {
+        if (!plainObject(v)) return false;
+        const k = Object.keys(v);
+        return k.length > 0 && k.length <= 8 && k.every(function (x) {
+          return MOUNT_MAT_KEY.test(x) && inRange(v[x], MOUNT_MAT);
+        });
+      }
+      case 'fern_rate': return v === null || (isNum(v) && v > 0 && v <= MOUNT_RATE_MAX);
+      case 'failures': return inRange(v, MOUNT_FAILS);
+      default: return false;
+    }
+  }
+
+  // "Snow - horse T9 Lv 27 F" (skills listed separately).
+  function mountLabel(m) {
+    if (!plainObject(m) || typeof m.name !== 'string') return '';
+    const parts = [m.name, '-', MOUNT_KINDS.indexOf(m.kind) >= 0 ? m.kind : '?'];
+    if (inRange(m.tier, MOUNT_TIER)) parts.push('T' + m.tier);
+    if (inRange(m.level, MOUNT_LEVEL)) parts.push('Lv ' + m.level);
+    if (m.gender === 'male') parts.push('M');
+    if (m.gender === 'female') parts.push('F');
+    return parts.join(' ');
+  }
+
+  // "materials 63/100 fern roots, ~10 days at 4/day"; "" when no fern row.
+  function mountsFernLine(view) {
+    const f = plainObject(view) && plainObject(view.fern) ? view.fern : null;
+    if (!f || !isNum(f.have) || !isNum(f.need)) return '';
+    const head = 'materials ' + f.have + '/' + f.need + ' fern roots';
+    if (f.left === 0) return head + ', done';
+    if (!isNum(f.per_day) || !isNum(f.days)) return head + ', type a daily rate for days to go';
+    return head + ', ~' + f.days + ' day' + (f.days === 1 ? '' : 's') + ' at ' + f.per_day + '/day';
+  }
+
+  // "next try 3.4% | 50% by 21, 90% by 61, 99% by 105 | sure by 486"; "" without odds.
+  function mountsOddsLine(view) {
+    const o = plainObject(view) && plainObject(view.odds) ? view.odds : null;
+    if (!o || !isNum(o.next_pct)) return '';
+    const parts = ['next try ' + o.next_pct + '%'];
+    const by = plainObject(o.by) ? o.by : {};
+    const b = ['50', '90', '99'].filter(function (k) { return isNum(by[k]); })
+      .map(function (k) { return k + '% by ' + by[k]; });
+    if (b.length) parts.push(b.join(', '));
+    if (isNum(o.guaranteed_in)) parts.push('sure by ' + o.guaranteed_in);
+    return parts.join(' | ');
+  }
+
+  function mountInt(s, r) {
+    const t = String(s === undefined || s === null ? '' : s).trim();
+    if (!/^\d+$/.test(t)) return null;
+    const n = Number(t);
+    return n >= r[0] && n <= r[1] ? n : null;
+  }
+
+  // Add-mount form strings -> {ok, body: {add}} | {ok: false, error}.
+  // Blank tier / gender = unknown (null); blank level = 1; skills comma-separated.
+  function parseMountForm(f) {
+    const v = plainObject(f) ? f : {};
+    const name = String(v.name === undefined ? '' : v.name).trim();
+    if (!validAscii(name, MOUNT_NAME_MAX)) return { ok: false, error: 'name: 1-40 plain characters' };
+    const kind = MOUNT_KINDS.indexOf(v.kind) >= 0 ? v.kind : null;
+    if (!kind) return { ok: false, error: 'pick a kind' };
+    const add = { name: name, kind: kind };
+    const tierS = String(v.tier === undefined ? '' : v.tier).trim();
+    if (tierS) {
+      const t = mountInt(tierS, MOUNT_TIER);
+      if (t === null) return { ok: false, error: 'tier: 1-10 or blank' };
+      add.tier = t;
+    }
+    const lvS = String(v.level === undefined ? '' : v.level).trim();
+    if (lvS) {
+      const l = mountInt(lvS, MOUNT_LEVEL);
+      if (l === null) return { ok: false, error: 'level: 1-30' };
+      add.level = l;
+    }
+    if (v.gender) {
+      if (MOUNT_GENDERS.indexOf(v.gender) < 0) return { ok: false, error: 'gender: male, female or blank' };
+      add.gender = v.gender;
+    }
+    const skills = String(v.skills === undefined ? '' : v.skills).split(',')
+      .map(function (s) { return s.trim(); }).filter(Boolean);
+    if (skills.length > MOUNT_SKILLS_MAX || !skills.every(function (s) { return validAscii(s, MOUNT_NAME_MAX); })) {
+      return { ok: false, error: 'skills: up to 40 comma-separated names' };
+    }
+    if (skills.length) add.skills = skills;
+    return { ok: true, body: { add: add } };
+  }
+
+  // Materials form {key: string} -> {ok, body: {materials}}; blank keys are skipped.
+  function parseMaterialsForm(f) {
+    const v = plainObject(f) ? f : {};
+    const out = {};
+    const keys = Object.keys(v).filter(function (k) { return MOUNT_MAT_KEY.test(k); });
+    for (let i = 0; i < keys.length; i++) {
+      const s = String(v[keys[i]] === undefined ? '' : v[keys[i]]).trim();
+      if (!s) continue;
+      const n = mountInt(s, MOUNT_MAT);
+      if (n === null) return { ok: false, error: keys[i].replace(/_/g, ' ') + ': whole number 0-99999' };
+      out[keys[i]] = n;
+    }
+    if (!Object.keys(out).length) return { ok: false, error: 'type at least one count' };
+    return { ok: true, body: { materials: out } };
+  }
+
+  // Fern roots per day: blank = clear (null); else a number in (0, 100].
+  function parseFernRate(s) {
+    const t = String(s === undefined || s === null ? '' : s).trim();
+    if (!t) return { ok: true, body: { fern_rate: null } };
+    if (!/^\d+(\.\d{1,2})?$/.test(t) || !(Number(t) > 0 && Number(t) <= MOUNT_RATE_MAX)) {
+      return { ok: false, error: 'fern roots/day: a number above 0, up to 100' };
+    }
+    return { ok: true, body: { fern_rate: Number(t) } };
+  }
+
   // ---- Home / Now (plan 025) ----
   // One glance screen composed from the existing GET payloads. snapshots:
   // {today, grind, leveling, progress, events, market (GET /api/market/watch),
@@ -3297,7 +3459,7 @@
     '/api/market/watch': validWatchBody, '/api/today': validTodayBody, '/api/progress': validProgressBody,
     '/api/grind': validGrindBody, '/api/events': validEventsBody, '/api/deadeye': validDeadeyeBody,
     '/api/ocr': validOcrBody, '/api/leveling': validLevelingBody, '/api/settings': validSettingsBody,
-    '/api/bosses': validBossesBody
+    '/api/bosses': validBossesBody, '/api/mounts': validMountsBody
   };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
@@ -3349,7 +3511,8 @@
   const POST_LABELS = {
     '/api/market/watch': 'Market watch', '/api/today': 'Today', '/api/progress': 'Progress',
     '/api/grind': 'Grind', '/api/events': 'Events', '/api/deadeye': 'Deadeye', '/api/ocr': 'OCR',
-    '/api/leveling': 'Leveling', '/api/settings': 'Settings', '/api/bosses': 'World bosses'
+    '/api/leveling': 'Leveling', '/api/settings': 'Settings', '/api/bosses': 'World bosses',
+    '/api/mounts': 'Mounts'
   };
 
   // One POST result (the ew:post bridge reply) -> one toast.
@@ -3738,6 +3901,14 @@
     ovServerRowHidden: ovServerRowHidden,
     validPost: validPost,
     POST_ROUTES: POST_ROUTES,
+    MOUNT_KINDS: MOUNT_KINDS,
+    validMountsBody: validMountsBody,
+    mountLabel: mountLabel,
+    mountsFernLine: mountsFernLine,
+    mountsOddsLine: mountsOddsLine,
+    parseMountForm: parseMountForm,
+    parseMaterialsForm: parseMaterialsForm,
+    parseFernRate: parseFernRate,
     THEMES: THEMES,
     SETTINGS_GROUPS: SETTINGS_GROUPS,
     SETTINGS_KEYS: SETTINGS_KEYS,

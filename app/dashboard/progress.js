@@ -8,13 +8,17 @@
    highlighted with a claim mark (claiming itself stays the operator's act in
    game), next 3 open objectives, the full list, and an add-objective row.
    Plan 034: the Add track card lists sourced seed tracks (POST track_seed);
-   seeded steps show level / AP / DP gate chips and a `verify` badge. */
+   seeded steps show level / AP / DP gate chips and a `verify` badge.
+   Plan 044: a Mounts card (GET/POST /api/mounts): mount list (tier, level,
+   gender, skills), T10 material counts with the fern-roots days-to-go line,
+   the operator's fern/day rate, and the breed pity odds from the failure count. */
 (function () {
   'use strict';
   const C = window.EWCore;
   const POLL_MS = 60000;
   const KIND_LABEL = { quest: 'quest', season: 'season', gear: 'gear' };
-  const S = { data: null, err: null, last: null, timer: null, ui: null, pending: {}, dirty: false, editing: null };
+  const S = { data: null, err: null, last: null, timer: null, ui: null, pending: {}, dirty: false, editing: null,
+    mounts: null, mountsErr: null };
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -73,6 +77,32 @@
     clearTimeout(S.timer);
     S.timer = setTimeout(function () { poll(true); }, POLL_MS);
     getJSON('/api/progress').then(accept, function (e) { S.err = e.message; }).then(function () { draw(); });
+    getJSON('/api/mounts').then(acceptMounts, function (e) { S.mountsErr = e.message; }).then(drawMounts);
+  }
+
+  function acceptMounts(data) {
+    if (data && Array.isArray(data.mounts)) {
+      S.mounts = data;
+      S.mountsErr = null;
+      return true;
+    }
+    return false;
+  }
+
+  // Plan 044: every mounts write answers with the full GET body.
+  function sendMounts(body, okText) {
+    const b = bridge();
+    if (!b) { msg('mountsMsg', 'saving needs the Ebonwake app window'); return Promise.resolve(false); }
+    msg('mountsMsg', 'saving...');
+    return window.EWToast.via(b).post('/api/mounts', body).then(function (res) {
+      if (res && res.ok && acceptMounts(res.data)) {
+        msg('mountsMsg', okText);
+        drawMounts();
+        return true;
+      }
+      msg('mountsMsg', 'failed: ' + ((res && res.error) || 'unknown error'));
+      return false;
+    }, function (e) { msg('mountsMsg', 'failed: ' + (e && e.message || e)); return false; });
   }
 
   function msg(where, text) { if (S.ui) S.ui[where].textContent = text; }
@@ -499,6 +529,122 @@
     });
   }
 
+  // ---- mounts (plan 044) ----
+
+  function removeMount(m, btn) {
+    if (btn.dataset.armed !== '1') {
+      btn.dataset.armed = '1';
+      btn.textContent = 'sure?';
+      setTimeout(function () { btn.dataset.armed = ''; btn.textContent = 'x'; }, 3000);
+      return;
+    }
+    sendMounts({ delete: m.id }, 'removed');
+  }
+
+  function saveMaterials() {
+    const ui = S.ui.mounts;
+    const f = {};
+    Object.keys(ui.mats).forEach(function (k) { f[k] = ui.mats[k].value; });
+    const r = C.parseMaterialsForm(f);
+    const rate = C.parseFernRate(ui.rate.value);
+    if (!r.ok) { msg('mountsMsg', r.error); return; }
+    if (!rate.ok) { msg('mountsMsg', rate.error); return; }
+    const was = S.mounts && S.mounts.fern ? S.mounts.fern.per_day : null;
+    sendMounts(r.body, 'saved').then(function (ok) {
+      if (!ok) return;
+      if ((was === undefined ? null : was) === rate.body.fern_rate) { ui.dirty = false; drawMounts(); return; }
+      sendMounts(rate.body, 'saved').then(function (ok2) { if (ok2) { ui.dirty = false; drawMounts(); } });
+    });
+  }
+
+  function addMount() {
+    const a = S.ui.mounts.add;
+    const r = C.parseMountForm({ name: a.name.value, kind: a.kind.value, tier: a.tier.value,
+      level: a.level.value, gender: a.gender.value, skills: a.skills.value });
+    if (!r.ok) { msg('mountsMsg', r.error); return; }
+    sendMounts(r.body, 'added').then(function (ok) {
+      if (ok) { a.name.value = ''; a.tier.value = ''; a.level.value = ''; a.skills.value = ''; }
+    });
+  }
+
+  function setFailures(n) {
+    sendMounts({ failures: n }, n ? 'failure logged' : 'pity reset');
+  }
+
+  function drawMounts() {
+    const ui = S.ui && S.ui.mounts;
+    if (!ui || !S.ui.panel.isConnected) return;
+    const v = S.mounts;
+    ui.status.textContent = S.mountsErr ? (v ? 'last data - ' : '') + S.mountsErr :
+      (v && v.data_error ? 'mount data: ' + v.data_error : '');
+    ui.fern.textContent = C.mountsFernLine(v);
+    ui.odds.textContent = C.mountsOddsLine(v);
+    const mats = v && Array.isArray(v.materials) ? v.materials : [];
+    const t10 = v && v.t10 ? v.t10 : null;
+    const ready = t10 && t10.ready ? t10.ready : {};
+    ui.pill.className = 'ew-pill ' + (ready.materials && ready.parents ? 'ok' : 'unknown');
+    ui.pill.textContent = 'T10 ' + mats.filter(function (m) { return m.done; }).length + '/' + mats.length;
+    ui.pill.title = t10 ? 'T10 breed: materials ' + (ready.materials ? 'ready' : 'short') +
+      ', T' + t10.parent_tier + ' Lv ' + t10.parent_level + ' pair ' + (ready.parents ? 'ready' : 'missing') +
+      ' (' + t10.parents_note + ')' : 'no T10 data';
+    // Material inputs are built once per key set and never refilled mid-typing.
+    const sig = mats.map(function (m) { return m.key; }).join(',');
+    if (ui.matSig !== sig) {
+      ui.matSig = sig;
+      ui.matBox.textContent = '';
+      ui.mats = {};
+      mats.forEach(function (m) {
+        const i = el('input');
+        i.type = 'text';
+        i.inputMode = 'numeric';
+        i.maxLength = 5;
+        i.autocomplete = 'off';
+        i.addEventListener('input', function () { ui.dirty = true; });
+        const lab = el('label', null);
+        const name = el('span', 'ew-muted', m.name + ' /' + m.need);
+        name.title = (m.note ? m.note + '; ' : '') + (m.verified ? 'verified ' + m.verified : 'unverified');
+        lab.appendChild(name);
+        lab.appendChild(i);
+        ui.matBox.appendChild(lab);
+        ui.mats[m.key] = i;
+      });
+    }
+    if (!ui.dirty) {
+      mats.forEach(function (m) { if (ui.mats[m.key]) ui.mats[m.key].value = String(m.have); });
+      const rate = v && v.fern ? v.fern.per_day : null;
+      ui.rate.value = typeof rate === 'number' ? String(rate) : '';
+    }
+    const fails = v && typeof v.failures === 'number' ? v.failures : 0;
+    ui.fails.textContent = 'failed T10 attempts: ' + fails;
+    ui.failReset.disabled = !v || fails === 0;
+    ui.failAdd.disabled = !v || !!v.data_error;
+    ui.list.textContent = '';
+    const rows = v && Array.isArray(v.mounts) ? v.mounts : [];
+    if (!rows.length) ui.list.appendChild(el('div', 'ew-muted', v ? 'No mounts yet.' : 'loading...'));
+    rows.forEach(function (m) {
+      const r = el('div', 'ew-trow');
+      const name = el('span', 'ew-mname', C.mountLabel(m));
+      const skills = Array.isArray(m.skills) ? m.skills : [];
+      if (skills.length) name.title = skills.join(', ');
+      r.appendChild(name);
+      const meta = el('span', 'ew-tmeta');
+      if (skills.length) meta.appendChild(el('span', 'ew-muted', skills.length + ' skill' + (skills.length === 1 ? '' : 's')));
+      const x = el('button', 'ew-tx', 'x');
+      x.type = 'button';
+      x.title = 'remove mount (click twice)';
+      x.addEventListener('click', function () { removeMount(m, x); });
+      meta.appendChild(x);
+      r.appendChild(meta);
+      ui.list.appendChild(r);
+    });
+    ui.unlocks.textContent = '';
+    (v && Array.isArray(v.unlocks) ? v.unlocks : []).forEach(function (u) {
+      const d = el('div', 'ew-muted', u.name + ': Lv ' + u.min_level + '+, ' + u.how);
+      d.title = 'source ' + u.source + (u.verified ? ', verified ' + u.verified : ', unverified');
+      ui.unlocks.appendChild(d);
+    });
+  }
+
   // While an objective edit form is open, background redraws (poll, saves
   // elsewhere) leave the track cards alone so typing is never clobbered;
   // opening, cancelling or saving the edit redraws with force.
@@ -508,6 +654,7 @@
     drawCharacter();
     drawProfile();
     drawSeeds();
+    drawMounts();
     if (!S.editing || force === true) drawTracks();
   }
 
@@ -626,17 +773,114 @@
     return { card: c, form: f, msg: m, seed: { select: select, btn: sbtn } };
   }
 
+  function textInput(max, ph) {
+    const i = el('input');
+    i.type = 'text';
+    i.maxLength = max;
+    i.autocomplete = 'off';
+    if (ph) i.placeholder = ph;
+    return i;
+  }
+
+  function selectOf(values, blank) {
+    const s = el('select');
+    if (blank !== undefined) {
+      const o = el('option', null, blank);
+      o.value = '';
+      s.appendChild(o);
+    }
+    values.forEach(function (v) {
+      const o = el('option', null, v);
+      o.value = v;
+      s.appendChild(o);
+    });
+    return s;
+  }
+
+  // Plan 044: Mounts card (materials + fern days, pity odds, mount list, add form).
+  function mountsCard() {
+    const c = el('section', 'ew-card ew-mcard ew-mounts');
+    const h = el('h2', null, 'Mounts');
+    const pill = el('span', 'ew-pill unknown', 'T10 ?');
+    h.appendChild(pill);
+    c.appendChild(h);
+    const body = el('div', 'ew-cbody');
+    const ui = { pill: pill, mats: {}, matSig: null, dirty: false };
+    ui.status = el('div', 'ew-err', '');
+    body.appendChild(ui.status);
+    ui.fern = el('div', 'ew-num', '');
+    body.appendChild(ui.fern);
+    ui.odds = el('div', 'ew-muted', '');
+    ui.odds.title = 'T10 breed: 3% base, +0.2% per failure (sourced; re-check in game)';
+    body.appendChild(ui.odds);
+    const mform = el('form', 'ew-form ew-cform');
+    ui.matBox = el('div', 'ew-form');
+    mform.appendChild(ui.matBox);
+    ui.rate = textInput(6, 'per day');
+    ui.rate.inputMode = 'decimal';
+    ui.rate.addEventListener('input', function () { ui.dirty = true; });
+    field(mform, 'fern roots/day', ui.rate, 'fern_rate');
+    const mbtns = el('div', 'ew-btns');
+    const msave = el('button', 'ew-btn', 'Save');
+    msave.type = 'submit';
+    mbtns.appendChild(msave);
+    mform.appendChild(mbtns);
+    mform.addEventListener('submit', function (ev) { ev.preventDefault(); saveMaterials(); });
+    body.appendChild(mform);
+    const frow = el('div', 'ew-stats');
+    ui.fails = el('span', 'ew-muted', '');
+    frow.appendChild(ui.fails);
+    ui.failAdd = el('button', 'ew-tx', '+1 fail');
+    ui.failAdd.type = 'button';
+    ui.failAdd.title = 'log one failed T10 breed attempt (raises the pity)';
+    ui.failAdd.addEventListener('click', function () {
+      setFailures((S.mounts && typeof S.mounts.failures === 'number' ? S.mounts.failures : 0) + 1);
+    });
+    frow.appendChild(ui.failAdd);
+    ui.failReset = el('button', 'ew-tx', 'reset');
+    ui.failReset.type = 'button';
+    ui.failReset.title = 'T10 bred: reset the failure count';
+    ui.failReset.addEventListener('click', function () { setFailures(0); });
+    frow.appendChild(ui.failReset);
+    body.appendChild(frow);
+    ui.list = el('div', 'ew-list');
+    body.appendChild(ui.list);
+    const d = el('details', 'ew-objadd');
+    d.appendChild(el('summary', 'ew-muted', 'add mount'));
+    const aform = el('form', 'ew-form');
+    const a = {
+      name: textInput(40, 'name'), kind: selectOf(C.MOUNT_KINDS), tier: textInput(2, 'tier'),
+      level: textInput(2, 'level'), gender: selectOf(['male', 'female'], 'gender ?'),
+      skills: textInput(400, 'skills, comma-separated')
+    };
+    [a.name, a.kind, a.tier, a.level, a.gender, a.skills].forEach(function (i) { aform.appendChild(i); });
+    const asave = el('button', 'ew-btn', 'Add');
+    asave.type = 'submit';
+    aform.appendChild(asave);
+    aform.addEventListener('submit', function (ev) { ev.preventDefault(); addMount(); });
+    d.appendChild(aform);
+    body.appendChild(d);
+    ui.add = a;
+    ui.unlocks = el('div', 'ew-list');
+    body.appendChild(ui.unlocks);
+    const m = el('div', 'ew-muted ew-msg', '');
+    body.appendChild(m);
+    c.appendChild(body);
+    return { card: c, ui: ui, msg: m };
+  }
+
   function mount(panel) {
     panel.classList.add('ew-progress');
     const ch = characterCard();
     const pr = profileCard();
+    const mo = mountsCard();
     const ad = addCard();
-    [ch, pr, ad].forEach(function (c) { panel.appendChild(c.card); });
+    [ch, pr, mo, ad].forEach(function (c) { panel.appendChild(c.card); });
     S.dirty = false;
     S.editing = null;
     S.ui = {
       panel: panel, char: ch.form, charMsg: ch.msg, profile: pr, add: ad.form, addMsg: ad.msg,
-      addCard: ad.card, seed: ad.seed, tracks: []
+      addCard: ad.card, seed: ad.seed, tracks: [], mounts: mo.ui, mountsMsg: mo.msg
     };
     if (!S.timer) poll(false);
     else draw();
