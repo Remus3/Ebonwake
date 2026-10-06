@@ -1147,6 +1147,50 @@
     });
   }
 
+  // ---- Life & CP card (plan 042) ----
+  // /api/progress `lifeskill` {status, character, skills: [{name, rank}] |
+  // "hidden", energy: n | "hidden", cp: {value, next: {cp, label, verified},
+  // gap, reached} | "hidden"} -> {state: ok | none, character, rows: [label,
+  // text], skills: [[name, rank]], skillsText}. Privacy-hidden fields read
+  // "hidden (privacy)"; an unverified milestone carries " (verify)".
+  const PRIVACY_HIDDEN = 'hidden (privacy)';
+  const LIFESKILL_TRENDS = ['energy', 'contribution'];
+
+  function lifeskillView(card) {
+    if (!plainObject(card) || card.status !== 'ok') {
+      return { state: 'none', character: null, rows: [], skills: [], skillsText: '' };
+    }
+    const stat = function (v) { return v === 'hidden' ? PRIVACY_HIDDEN : isNum(v) ? String(v) : '-'; };
+    const rows = [['Energy', stat(card.energy)]];
+    const cp = card.cp;
+    if (plainObject(cp) && isNum(cp.value)) {
+      rows.push(['CP', String(cp.value)]);
+      const n = cp.next;
+      if (plainObject(n) && isNum(n.cp) && isNum(cp.gap) && plainText(n.label)) {
+        rows.push(['Next CP', n.cp + ' (+' + cp.gap + ') ' + n.label + (n.verified === false ? ' (verify)' : '')]);
+      } else {
+        rows.push(['Next CP', 'all milestones reached']);
+      }
+    } else {
+      rows.push(['CP', stat(cp)]);
+    }
+    const skills = Array.isArray(card.skills) ? card.skills.filter(function (s) {
+      return plainObject(s) && plainText(s.name) && plainText(s.rank);
+    }).map(function (s) { return [String(s.name), String(s.rank)]; }) : [];
+    const skillsText = card.skills === 'hidden' ? PRIVACY_HIDDEN : skills.length ? '' : '-';
+    return { state: 'ok', character: plainText(card.character), rows: rows, skills: skills, skillsText: skillsText };
+  }
+
+  // Plan 041 history rows split between the cards: energy / CP on Life & CP,
+  // the rest (level, GS) on Profile.
+  function lifeskillTrends(body) {
+    return historyRows(body).filter(function (r) { return LIFESKILL_TRENDS.indexOf(r.field) >= 0; });
+  }
+
+  function profileTrends(body) {
+    return historyRows(body).filter(function (r) { return LIFESKILL_TRENDS.indexOf(r.field) < 0; });
+  }
+
   // ---- Grind (plan 005) ----
   // Elapsed clocks and buff countdowns run locally between polls: from the
   // absolute stamps when parseable, else from the server's seconds minus the
@@ -3891,6 +3935,9 @@
     fmtLevelLine: fmtLevelLine,
     historyRows: historyRows,
     PROFILE_HISTORY_PATH: PROFILE_HISTORY_PATH,
+    lifeskillView: lifeskillView,
+    lifeskillTrends: lifeskillTrends,
+    profileTrends: profileTrends,
     DEADLINE_STATES: DEADLINE_STATES,
     deadlineBrief: deadlineBrief,
     fmtMonthDay: fmtMonthDay,

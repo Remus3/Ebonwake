@@ -254,12 +254,40 @@
       dl.appendChild(el('span', 'ew-mname', r[1]));
     });
     body.appendChild(dl);
-    drawTrends(body);
+    // Energy / CP trends live on the Life & CP card (plan 042).
+    drawTrends(body, C.profileTrends(S.hist));
   }
 
-  // Plan 041: level / GS / energy / CP over the last days of hourly snapshots.
-  function drawTrends(body) {
-    const rows = C.historyRows(S.hist).filter(function (r) { return r.points.length; });
+  // Plan 042: Life & CP card - energy, CP with the next sourced milestone,
+  // life skill ranks as the API gives them, energy / CP trends (plan 041).
+  function drawLife() {
+    const ui = S.ui.life;
+    const body = ui.body;
+    body.textContent = '';
+    if (!S.data) {
+      body.appendChild(el('div', S.err ? 'ew-err' : 'ew-muted', S.err || 'loading...'));
+      return;
+    }
+    const v = C.lifeskillView(S.data.lifeskill);
+    ui.sub.textContent = v.character || '';
+    if (v.state !== 'ok') {
+      body.appendChild(el('div', 'ew-muted', 'No profile snapshot yet (needs profile.family and one refresh).'));
+      return;
+    }
+    const dl = el('div', 'ew-kv');
+    v.rows.concat(v.skillsText ? [['Life skills', v.skillsText]] : v.skills).forEach(function (r) {
+      dl.appendChild(el('span', 'ew-muted', r[0]));
+      dl.appendChild(el('span', 'ew-mname', r[1]));
+    });
+    body.appendChild(dl);
+    const err = S.data.lifeskill && typeof S.data.lifeskill.error === 'string' ? S.data.lifeskill.error : '';
+    if (err) body.appendChild(el('div', 'ew-err', 'CP milestones: ' + err));
+    drawTrends(body, C.lifeskillTrends(S.hist));
+  }
+
+  // Plan 041: sparklines over the last days of hourly snapshots.
+  function drawTrends(body, all) {
+    const rows = all.filter(function (r) { return r.points.length; });
     if (!rows.length) return;
     const box = el('div', 'ew-trends');
     rows.forEach(function (r) {
@@ -535,6 +563,7 @@
     if (!ui || !ui.panel.isConnected) return;
     drawCharacter();
     drawProfile();
+    drawLife();
     drawSeeds();
     if (!S.editing || force === true) drawTracks();
   }
@@ -607,6 +636,17 @@
     return { card: c, pill: pill, body: body };
   }
 
+  function lifeCard() {
+    const c = el('section', 'ew-card ew-mcard ew-life');
+    const h = el('h2', null, 'Life & CP');
+    const sub = el('span', 'ew-muted', '');
+    h.appendChild(sub);
+    c.appendChild(h);
+    const body = el('div', 'ew-cbody');
+    c.appendChild(body);
+    return { card: c, sub: sub, body: body };
+  }
+
   function addCard() {
     const c = el('section', 'ew-card ew-mcard');
     c.appendChild(el('h2', null, 'Add track'));
@@ -658,12 +698,13 @@
     panel.classList.add('ew-progress');
     const ch = characterCard();
     const pr = profileCard();
+    const lf = lifeCard();
     const ad = addCard();
-    [ch, pr, ad].forEach(function (c) { panel.appendChild(c.card); });
+    [ch, pr, lf, ad].forEach(function (c) { panel.appendChild(c.card); });
     S.dirty = false;
     S.editing = null;
     S.ui = {
-      panel: panel, char: ch.form, charMsg: ch.msg, profile: pr, add: ad.form, addMsg: ad.msg,
+      panel: panel, char: ch.form, charMsg: ch.msg, profile: pr, life: lf, add: ad.form, addMsg: ad.msg,
       addCard: ad.card, seed: ad.seed, tracks: []
     };
     if (!S.timer) poll(false);
