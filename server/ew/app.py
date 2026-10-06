@@ -8,7 +8,8 @@ assets, browser fallback),
 adds its `suggested` coupon block),
 /api/deadeye (plan 007; /api/deadeye/enhance GET plan 035; /api/deadeye/shopping GET plan 037), /api/game (plan 008), /api/leveling (plan 011),
 /api/spots (plan 012, GET only), /api/bosses (plan 031), /api/settings (plan 030), /api/pets
-(plan 043), /api/inventory (plan 045), /api/mounts (plan 044), and POST
+(plan 043), /api/inventory (plan 045), /api/mounts (plan 044), /api/summary (plan 046),
+and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
 /api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings + /api/pets +
 /api/inventory + /api/mounts behind one shared guard.
@@ -30,7 +31,7 @@ from urllib.parse import parse_qs
 
 from . import (__version__, bosses, coupons, deadeye, enhance, events, gamewatch, grind,
                inventory, itemnames, leveling, market, mounts, ocr, pets, ports, progress,
-               settings, shopping, single, spots, today, weekly)
+               settings, shopping, single, spots, summary, today, weekly)
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -215,6 +216,12 @@ class EWServer(ThreadingHTTPServer):
             cfg = {} if game_cfg is None else game_cfg
             game_watch = gamewatch.GameWatch.from_config(cfg)
         self.game = game_watch
+        # Plan 046: game exit -> play window recorded + grind.pending_stop (never a stop).
+        self.summary = summary.SummaryService(self.store, self.grind,
+                                              clock=grind_clock or time.time)
+        listeners = getattr(self.game, "listeners", None)
+        if isinstance(listeners, list):
+            listeners.append(self.summary.on_game)
         if ocr_cache_dir is None:  # beside the store, so a test store keeps OCR in tmp too
             ocr_cache_dir = Path(store_root).parent / "ocr" if store_root else RUNTIME / "ocr"
         # Plan 040: loot import matches against the spot's grind loot list.
@@ -367,6 +374,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.inventory.view())
         if path == "/api/mounts":
             return self._send(200, self.server.mounts.view())
+        if path == "/api/summary":
+            return self._send(200, self.server.summary.view())
         if path == "/events":
             return self._sse()
         if path == "/":  # plan 020: redirect so relative asset paths resolve
@@ -409,10 +418,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post_grind(self, body):
         ops = {"start", "stop", "log", "delete", "add_spot", "buff", "clear_buff",
-               "drop_toggle", "drop_override", "loot_item", "loot_forget"}
+               "drop_toggle", "drop_override", "loot_item", "loot_forget", "keep"}
         if len(body) != 1 or not (ops & set(body)):
             raise ValueError("body must be one of {start|stop|log|delete|add_spot|buff|"
-                             "clear_buff|drop_toggle|drop_override|loot_item|loot_forget: ...}")
+                             "clear_buff|drop_toggle|drop_override|loot_item|loot_forget|"
+                             "keep: ...}")
         (op, arg), = body.items()
         return getattr(self.server.grind, op)(arg)
 

@@ -136,10 +136,15 @@ def _clean_item(it):
         and CODE_RE.match(code) else None
     url = it.get("url")
     url = url if isinstance(url, str) and len(url) <= MAX_URL and URL_RE.match(url) else None
-    return {"id": it["id"], "kind": it["kind"], "title": it["title"], "code": code,
-            "rewards": _str_or_none(it.get("rewards"), MAX_REWARDS),
-            "starts": _iso_or_none(it.get("starts")), "ends": _iso_or_none(it.get("ends")),
-            "url": url, "done": it.get("done") is True}
+    out = {"id": it["id"], "kind": it["kind"], "title": it["title"], "code": code,
+           "rewards": _str_or_none(it.get("rewards"), MAX_REWARDS),
+           "starts": _iso_or_none(it.get("starts")), "ends": _iso_or_none(it.get("ends")),
+           "url": url, "done": it.get("done") is True}
+    # Plan 046: when a done item was claimed (session summary); absent before 046.
+    done_at = _iso_or_none(it.get("done_at")) if out["done"] else None
+    if done_at is not None:
+        out["done_at"] = done_at
+    return out
 
 
 def _num(iid):
@@ -345,7 +350,12 @@ class EventsService:
         _item_id(arg["id"])
         with self._lock:
             doc = self._load()
-            self._find(doc, arg["id"])["done"] = arg["done"]
+            it = self._find(doc, arg["id"])
+            if arg["done"] and not it["done"]:
+                it["done_at"] = _iso(self._now())
+            elif not arg["done"]:
+                it.pop("done_at", None)
+            it["done"] = arg["done"]
             self._save(doc)
             return self.view()
 

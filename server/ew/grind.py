@@ -529,6 +529,7 @@ class GrindService:
         spots = [{"id": s["id"], "name": s["name"]} for s in lst("spots", _clean_named)]
         buffs = [{"id": b["id"], "name": b["name"],
                   "ends": _iso_or_none(b.get("ends")),
+                  "armed": _iso_or_none(b.get("armed")),  # plan 046 summary window
                   "xp_pct": b.get("xp_pct") if _ok_int(b.get("xp_pct"), *XP_PCT_RANGE) else None}
                  for b in lst("buffs", _clean_named)]
         sessions = lst("sessions", _clean_session)
@@ -542,9 +543,17 @@ class GrindService:
         nxt = max(nxt, top) if _ok_int(nxt, 1, 10 ** 9 - 1) else top
         drop_on, overrides = self._clean_drops(doc.get("drop_on"), doc.get("drop_overrides"))
         loot_items = _clean_loot_items(doc.get("loot_items"), {s["id"] for s in spots})
+        # Plan 046: a pending stop belongs to the session it was raised for; a
+        # stale one (session stopped or replaced) is dropped on read.
+        pend, pending = doc.get("pending_stop"), None
+        if (active is not None and isinstance(pend, dict)
+                and pend.get("started") == active["started"]):
+            at = _iso_or_none(pend.get("at"))
+            if at is not None and _parse_iso(at) >= _parse_iso(active["started"]):
+                pending = {"at": at, "started": active["started"]}
         return {"spots": spots, "sessions": sessions, "active": active, "buffs": buffs,
                 "next_sid": nxt, "drop_on": drop_on, "drop_overrides": overrides,
-                "loot_items": loot_items}
+                "loot_items": loot_items, "pending_stop": pending}
 
     # -- drop buffs (plan 038) -------------------------------------------------
 
@@ -895,9 +904,14 @@ class GrindService:
                     "patched": patched, "notes": p["notes"], "source": p["source"],
                     "verified": p["verified"]} for p in self.presets]
         drops, roi = self._drops_view(doc, buffs, spots, now)
+        pend = doc["pending_stop"]
+        if pend is not None:
+            secs = (_parse_iso(pend["at"]) - _parse_iso(pend["started"])).total_seconds()
+            pend = dict(pend, spot=doc["active"]["spot"],
+                        minutes=min(MAX_MINUTES, max(1, int(secs // 60))))
         return {"now": _iso(now), "active": active, "sessions": sessions, "spots": spots,
                 "buffs": buffs, "xp_presets": presets, "xp_presets_error": self.presets_error,
-                "drops": drops, "agris_roi": roi}
+                "drops": drops, "agris_roi": roi, "pending_stop": pend}
 
     def _patched(self):
         """True once an XP epoch has started (refute r1 minor 1); without an
@@ -945,23 +959,79 @@ class GrindService:
         return _fields(arg, what, keys + ("loot",) if has else keys), has
 
     def stop(self, arg):
-        """`{silver, trash, loot?}`; minutes from active.started, clamped to
+        """`{silver, trash, loot?, at_exit?}`; minutes from active.started to now
+        (plan 046 `at_exit: true`: to the pending game-exit time), clamped to
         1..MAX_MINUTES. Loot is priced before the lock (market reads may block)."""
+        at_exit = isinstance(arg, dict) and "at_exit" in arg
+        if at_exit:
+            if arg["at_exit"] is not True:
+                raise ValueError("at_exit must be true")
+            arg = {k: v for k, v in arg.items() if k != "at_exit"}
         arg, has_loot = self._with_loot(arg, "stop", ("silver", "trash"))
         silver, trash = self._amounts(arg)
         doc = self._load()
         act = doc["active"]
         if act is None:
             raise ValueError("no active session")
+        if at_exit and doc["pending_stop"] is None:
+            raise ValueError("no pending game-exit stop")
         valued = self._resolve_loot(doc, act["spot"], arg["loot"]) if has_loot else None
         with self._lock:
             doc = self._load()
             if doc["active"] != act:
                 raise ValueError("the active session changed; try again")
-            secs = (self._now() - _parse_iso(act["started"])).total_seconds()
+            end = self._now()
+            if at_exit:
+                if doc["pending_stop"] is None:
+                    raise ValueError("no pending game-exit stop")
+                end = _parse_iso(doc["pending_stop"]["at"])
+            secs = (end - _parse_iso(act["started"])).total_seconds()
             minutes = min(MAX_MINUTES, max(1, int(secs // 60)))
             self._add_session(doc, act["spot"], act["started"], minutes, silver, trash, valued)
             doc["active"] = None
+            doc["pending_stop"] = None
+            self._save(doc)
+        return self.view()
+
+    # -- plan 046: game-exit pending stop -------------------------------------
+
+    def mark_pending_stop(self, at):
+        """Game exited at `at` (ISO) with a session open: flag it, never stop it.
+        Returns False (no write) without an active session, when one is already
+        pending, or when `at` is before the session started."""
+        when = _iso_or_none(at)
+        if when is None:
+            raise ValueError("pending stop needs an ISO time")
+        with self._lock:
+            doc = self._load()
+            act = doc["active"]
+            if (act is None or doc["pending_stop"] is not None
+                    or _parse_iso(when) < _parse_iso(act["started"])):
+                return False
+            doc["pending_stop"] = {"at": when, "started": act["started"]}
+            self._save(doc)
+        return True
+
+    def clear_pending_stop(self):
+        """The game came back up: a pending stop no longer describes the
+        session (the next exit raises a fresh one). Returns whether one was set."""
+        with self._lock:
+            doc = self._load()
+            if doc["pending_stop"] is None:
+                return False
+            doc["pending_stop"] = None
+            self._save(doc)
+        return True
+
+    def keep(self, arg):
+        """`{"keep": true}`: dismiss the pending stop; the session keeps running."""
+        if arg is not True:
+            raise ValueError("keep must be true")
+        with self._lock:
+            doc = self._load()
+            if doc["pending_stop"] is None:
+                raise ValueError("no pending game-exit stop")
+            doc["pending_stop"] = None
             self._save(doc)
         return self.view()
 
@@ -1005,10 +1075,11 @@ class GrindService:
         xp = _int(arg["xp_pct"], "xp_pct", *XP_PCT_RANGE) if has_xp else None
         with self._lock:
             doc = self._load()
+            armed = _iso(self._now())
             ends = _iso(self._now() + _dt.timedelta(minutes=minutes))
             for b in doc["buffs"]:
                 if b["name"].lower() == name.lower():
-                    b["ends"] = ends
+                    b["ends"], b["armed"] = ends, armed
                     if has_xp:
                         b["xp_pct"] = xp
                     break
@@ -1016,7 +1087,8 @@ class GrindService:
                 if len(doc["buffs"]) >= MAX_BUFFS:
                     raise ValueError(f"at most {MAX_BUFFS} buffs")
                 bid = _unique(slug(name), {b["id"] for b in doc["buffs"]})
-                doc["buffs"].append({"id": bid, "name": name, "ends": ends, "xp_pct": xp})
+                doc["buffs"].append({"id": bid, "name": name, "ends": ends, "xp_pct": xp,
+                                     "armed": armed})
             self._save(doc)
         return self.view()
 
@@ -1026,7 +1098,7 @@ class GrindService:
             doc = self._load()
             for b in doc["buffs"]:
                 if b["id"] == bid:
-                    b["ends"] = None
+                    b["ends"] = b["armed"] = None
                     break
             else:
                 raise ValueError(f"unknown buff: {bid}")

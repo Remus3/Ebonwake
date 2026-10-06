@@ -1586,7 +1586,17 @@
     if (k === 'start' || k === 'add_spot') return validName(v);
     if (k === 'delete') return validRef(v, SESSION_ID_RE);
     if (k === 'clear_buff') return validRef(v, BUFF_ID_RE);
-    if (k === 'stop') return withLoot(v, ['silver', 'trash']) && validLoot(v);
+    if (k === 'stop') {
+      // Plan 046: at_exit true ends the session at the pending game-exit time.
+      if (plainObject(v) && Object.prototype.hasOwnProperty.call(v, 'at_exit')) {
+        if (v.at_exit !== true) return false;
+        const rest = {};
+        Object.keys(v).forEach(function (x) { if (x !== 'at_exit') rest[x] = v[x]; });
+        return withLoot(rest, ['silver', 'trash']) && validLoot(rest);
+      }
+      return withLoot(v, ['silver', 'trash']) && validLoot(v);
+    }
+    if (k === 'keep') return v === true;
     if (k === 'log') {
       return withLoot(v, ['spot', 'minutes', 'silver', 'trash']) && validName(v.spot) &&
         inRange(v.minutes, MINUTES) && validLoot(v);
@@ -3388,6 +3398,69 @@
     return nowCard('session', 'Grind session', 'grind', rows, 'no session - log a grind to see silver/h');
   }
 
+  // ---- Session-end summary (plan 046) ----
+  // GET /api/grind pending_stop {at, started, spot, minutes} (game exited with
+  // a session open; never auto-stopped) and GET /api/summary {session, day,
+  // week} windows, each {since, until, grind, xp, buffs, dailies, events, empty}.
+
+  const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
+
+  function pendingStop(grind) {
+    const p = plainObject(grind) ? grind.pending_stop : null;
+    if (!plainObject(p) || !plainObject(grind.active)) return null;
+    if (typeof p.at !== 'string' || !ISO_RE.test(p.at) || !isNum(p.minutes) || p.minutes < 1) return null;
+    return { at: p.at, spot: typeof p.spot === 'string' ? p.spot : grind.active.spot, minutes: p.minutes };
+  }
+
+  function pendingStopText(p, spots, nowMs) {
+    if (!p) return '';
+    const ago = Date.parse(p.at);
+    const since = isNum(ago) && isNum(nowMs) ? ' (' + fmtDuration(nowMs - ago) + ' ago)' : '';
+    return 'Game exited' + since + ' while ' + spotName(spots, p.spot) + ' was running. Stop at the exit time (' +
+      fmtDuration(p.minutes * 60000) + ') or keep it running?';
+  }
+
+  function sumList(v) { return Array.isArray(v) ? v : []; }
+
+  // Rows [{label, value}] for one summary window; [] for a bad or empty one.
+  function summaryRows(s) {
+    if (!plainObject(s) || s.empty === true || !plainObject(s.grind)) return [];
+    const g = s.grind;
+    const rows = [];
+    if (isNum(g.sessions) && g.sessions > 0) {
+      rows.push({ label: 'grind', value: g.sessions + (g.sessions === 1 ? ' session, ' : ' sessions, ') +
+        fmtDuration((isNum(g.minutes) ? g.minutes : 0) * 60000) });
+      rows.push({ label: 'silver', value: fmtSilver(g.silver) + ' (' + fmtSilver(g.silver_per_h) + '/h)' });
+      const top = sumList(g.spots).filter(plainObject)[0];
+      if (top && typeof top.name === 'string') {
+        rows.push({ label: 'best spot', value: top.name + ' ' + fmtSilver(top.silver_per_h) + '/h' });
+      }
+    }
+    if (plainObject(s.xp) && isNum(s.xp.gained_pct)) {
+      const to = plainObject(s.xp.to) ? s.xp.to : {};
+      rows.push({ label: 'XP', value: '+' + (Math.round(s.xp.gained_pct * 10) / 10) + '%' +
+        (isNum(to.level) ? ' (now Lv ' + to.level + ')' : '') });
+    }
+    const names = function (v, k) {
+      return sumList(v).filter(function (r) { return plainObject(r) && typeof r[k] === 'string'; })
+        .map(function (r) { return r[k]; });
+    };
+    const buffs = names(s.buffs, 'name');
+    if (buffs.length) rows.push({ label: 'buffs', value: buffs.join(', ') });
+    const dailies = names(s.dailies, 'title');
+    if (dailies.length) rows.push({ label: 'dailies', value: dailies.length + ' ticked' });
+    const evs = names(s.events, 'title');
+    if (evs.length) rows.push({ label: 'events', value: evs.length + ' claimed' });
+    return rows;
+  }
+
+  // Home: the last game session's summary when present.
+  function nowSummary(sum) {
+    const s = plainObject(sum) ? sum.session : null;
+    const rows = summaryRows(s).map(function (r) { return nowRow(r.label, r.value); });
+    return nowCard('summary', 'Last session', 'grind', rows, 'no game session recorded yet');
+  }
+
   function nowLeveling(d, at, now) {
     const el = sinceFetch(at, now);
     const rows = [];
@@ -3465,6 +3538,7 @@
       if (plainObject(s.events.suggested)) cards.push(nowCoupons(s.events));
     }
     if (has('bosses', 'next')) cards.push(nowBosses(s.bosses, nowMs));
+    if (has('summary') && plainObject(s.summary.session)) cards.push(nowSummary(s.summary));
     return cards;
   }
 
@@ -4300,6 +4374,13 @@
   const GAME_UP = ['running', 'logged_in', 'disconnected'];
 
   function gameHits(prev, next, now) {
+    // Plan 046: the server's grind.pending_stop is the exit signal; its time
+    // keys the hit (same as game.since), so the transition path below dedupes.
+    const p = plainObject(next.grind) ? pendingStop(next.grind) : null;
+    if (p) {
+      return [hit('gameExit:' + Date.parse(p.at), 'Game exited',
+        'A grind session is still running - stop it at the exit time in the Grind tab')];
+    }
     const a = prev ? normalizeGame(prev.game) : null;
     const b = normalizeGame(next.game);
     if (!a || !b || GAME_UP.indexOf(a.state) < 0 || b.state !== 'not_running') return [];
@@ -4572,6 +4653,10 @@
     deadlineLine: deadlineLine,
     deadlineAlert: deadlineAlert,
     composeNow: composeNow,
+    pendingStop: pendingStop,
+    pendingStopText: pendingStopText,
+    summaryRows: summaryRows,
+    nowSummary: nowSummary,
     eventsThisWeek: eventsThisWeek,
     countText: countText,
     tabBadges: tabBadges,

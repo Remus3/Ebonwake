@@ -207,6 +207,8 @@ html, body {
 /* Grind tab (plan 005): rows scroll inside their card; hidden must beat flex. */
 .ew-grind [hidden], .ew-ov-row[hidden] { display: none; }
 .ew-gsess { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.ew-gended { border: 1px solid currentColor; border-radius: 4px; padding: 6px 8px; margin-bottom: 6px; }
+.ew-gended[hidden] { display: none; }
 .ew-grow {
   display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; align-items: center;
   gap: 6px; padding: 2px 4px; border-radius: var(--ew-radius);
