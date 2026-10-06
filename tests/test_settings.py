@@ -158,7 +158,8 @@ def test_round_trip_on_the_example_config(tmp_path):
     raw = EXAMPLE.read_bytes()
     p.write_bytes(raw)
     s = settings.Settings(p)
-    s.apply({"set": {k: v for k, v in settings.defaults().items() if k != "profile.family"}})
+    s.apply({"set": {k: v for k, v in settings.defaults().items()
+                     if k not in ("profile.family", "profile.base_url")}})
     s.apply({"set": {"overlay.anchor": {"x": 40, "y": 300}, "market.fame_pct": 1.5,
                      "profile.family": "Somebody", "coupons.check": False}})
     text, orig = p.read_text(), raw.decode()
