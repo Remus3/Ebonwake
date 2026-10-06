@@ -4279,6 +4279,65 @@
     return out;
   }
 
+  // Plan 067: context-aware overlay. The server derives the context (game
+  // state, clock, notices) and sends {context, active, widgets, hidden, auto,
+  // maint_at} on GET /api/overlay/context and SSE `overlay_context`; the
+  // overlay re-renders in place (rows shown / hidden / reordered, no window
+  // recreate). `maintenance` is a countdown line, not a settings widget.
+  const OVERLAY_MODES = ['auto', 'pin', 'block'];
+  const OVERLAY_WIDGETS = WIDGETS.concat(['maintenance']);
+  const OVERLAY_ROWS = {
+    grindSession: ['ov-grind-row'], grindBuff: ['ov-buff-row'], eventsSoon: ['ov-events-row'],
+    leveling: ['ov-leveling-row'], season: ['ov-season-row'], marketTicker: ['ov-ticker-row'],
+    worldBoss: ['ov-boss-row', 'ov-boss-next-row'], dice: ['ov-dice-row'], maintenance: ['ov-maint-row']
+  };
+
+  // Payload -> {context, active, hidden, auto, maintAt (ms|null), widgets
+  // {name: bool}, order [names]} or null when the body is not a context.
+  function overlayContext(d) {
+    if (!plainObject(d) || typeof d.context !== 'string' || !Array.isArray(d.widgets)) return null;
+    const order = [];
+    d.widgets.forEach(function (w) {
+      if (typeof w === 'string' && OVERLAY_WIDGETS.indexOf(w) >= 0 && order.indexOf(w) < 0) order.push(w);
+    });
+    const widgets = {};
+    OVERLAY_WIDGETS.forEach(function (k) { widgets[k] = order.indexOf(k) >= 0; });
+    const t = typeof d.maint_at === 'string' ? Date.parse(d.maint_at) : NaN;
+    return {
+      context: d.context,
+      active: Array.isArray(d.active) ? d.active.filter(function (c) { return typeof c === 'string'; }) : [d.context],
+      hidden: d.hidden === true,
+      auto: d.auto !== false,
+      maintAt: isFinite(t) ? t : null,
+      widgets: widgets,
+      order: order
+    };
+  }
+
+  // Widgets that turn on going from `prev` to `next` ({name: bool}); the
+  // overlay loads their data at once instead of waiting for the next poll.
+  function widgetsTurnedOn(prev, next) {
+    return OVERLAY_WIDGETS.filter(function (k) { return !!(next && next[k]) && !(prev && prev[k]); });
+  }
+
+  // Row ids in display order: shown widgets in the context's order, then the
+  // rest (hidden) in the default order. appendChild moves nodes, so applying
+  // this list reorders the rows in place.
+  function overlayRowOrder(order) {
+    const names = (Array.isArray(order) ? order : []).filter(function (w) { return OVERLAY_ROWS[w]; });
+    OVERLAY_WIDGETS.forEach(function (w) { if (names.indexOf(w) < 0) names.push(w); });
+    const out = [];
+    names.forEach(function (w) { OVERLAY_ROWS[w].forEach(function (id) { out.push(id); }); });
+    return out;
+  }
+
+  // Maintenance countdown line: 'in 42m' / 'now' / '' (none).
+  function maintLine(maintAt, now) {
+    if (!isNum(maintAt)) return '';
+    const left = Math.floor((maintAt - now) / 1000);
+    return left > 0 ? 'in ' + fmtLeft(left) : 'now';
+  }
+
   // Overlay placement and legibility (plan 022). Config overlay.anchor is a
   // named anchor or a work-area-relative {x, y}; display an index (null =
   // primary); scale 0.8-1.6; opacity 0.5-0.95. Default middle-left, off BDO's
@@ -4459,8 +4518,14 @@
       { key: 'overlay.anchor', label: 'Anchor', type: 'anchor', options: OVERLAY_ANCHORS },
       { key: 'overlay.display', label: 'Display (blank = primary)', type: 'display' },
       { key: 'overlay.scale', label: 'Scale', type: 'number', min: OVERLAY_SCALE[0], max: OVERLAY_SCALE[1], step: 0.05 },
-      { key: 'overlay.opacity', label: 'Opacity', type: 'number', min: OVERLAY_OPACITY[0], max: OVERLAY_OPACITY[1], step: 0.05 }
-    ]) },
+      { key: 'overlay.opacity', label: 'Opacity', type: 'number', min: OVERLAY_OPACITY[0], max: OVERLAY_OPACITY[1], step: 0.05 },
+      // Plan 067: widgets by context (the booleans above apply when auto is off);
+      // per widget pin (always shown) or block (never shown) on top.
+      { key: 'overlay.auto', label: 'Widgets by context (in game, idle, boss / reset / maintenance soon)', type: 'bool' },
+      { key: 'overlay.idle_min', label: 'Idle after, minutes (5-240)', type: 'number', min: 5, max: 240, step: 1, int: true }
+    ]).concat(WIDGETS.map(function (w) {
+      return { key: 'overlay.mode.' + w, label: 'Context mode: ' + w, type: 'enum', options: OVERLAY_MODES };
+    })) },
     { id: 'hotkeys', title: 'Hotkeys', fields: [
       { key: 'hotkeys.toggleOverlay', label: 'Toggle overlay', type: 'hotkey' },
       { key: 'hotkeys.showDashboard', label: 'Show dashboard', type: 'hotkey' }
@@ -4600,7 +4665,9 @@
   // What the app must redo after a save, from the server's `changed` list.
   function settingsEffects(changed) {
     const ks = Array.isArray(changed) ? changed : [];
-    const has = function (p) { return ks.some(function (k) { return typeof k === 'string' && k.indexOf(p) === 0; }); };
+    // Plan 067: context keys reach the overlay live over SSE (no recreate).
+    const live = function (k) { return k === 'overlay.auto' || k === 'overlay.idle_min' || k.indexOf('overlay.mode.') === 0; };
+    const has = function (p) { return ks.some(function (k) { return typeof k === 'string' && k.indexOf(p) === 0 && !live(k); }); };
     return { overlay: has('overlay.'), shell: has('hotkeys.') || has('ui.scale'), theme: has('ui.theme') };
   }
 
@@ -6085,6 +6152,13 @@
     overlayWidgets: overlayWidgets,
     widgetsQuery: widgetsQuery,
     widgetsFromQuery: widgetsFromQuery,
+    OVERLAY_MODES: OVERLAY_MODES,
+    OVERLAY_WIDGETS: OVERLAY_WIDGETS,
+    OVERLAY_ROWS: OVERLAY_ROWS,
+    overlayContext: overlayContext,
+    widgetsTurnedOn: widgetsTurnedOn,
+    overlayRowOrder: overlayRowOrder,
+    maintLine: maintLine,
     OVERLAY_ANCHORS: OVERLAY_ANCHORS,
     OVERLAY_SIZE: OVERLAY_SIZE,
     overlayConfig: overlayConfig,
