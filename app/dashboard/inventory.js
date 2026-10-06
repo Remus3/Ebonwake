@@ -198,6 +198,8 @@
     ui.rules.textContent = wh && wh.source ? 'Warehouse ' + wh.base_vt + ' VT, +' + wh.fame_vt +
       ' with family fame, ' + wh.transfer_vt + ' VT per transfer (official wiki, verified ' + wh.verified + ').' : '';
     ui.rules.title = wh && wh.source ? String(wh.source) : '';
+    const open = wh && window.EWToast && window.EWToast.linkButton(wh.source); // plan 057
+    if (open) { ui.rules.appendChild(document.createTextNode(' ')); ui.rules.appendChild(open); }
     drawSourceOptions();
     fillPlanner(force === true);
   }

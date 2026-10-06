@@ -61,7 +61,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 054 | Cooking / alchemy margin calculator: operator recipes, input/output prices, net after tax | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 055 | Jetina boss-crystal planner + Caphras cost calculator | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 056 | Black Spirit's Adventure dice timer from logged-in time (overlay) | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
-| 057 | Deadeye notes autosave + safe open-in-browser for source links | [ ] open |
+| 057 | Deadeye notes autosave + safe open-in-browser for source links | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 058 | Loop resolves its own merge conflicts: re-dispatch a resolve lane | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 
 Deep dive + UX audit 2026-10-05 session 4 (research 0003-0005): plans 019-057,

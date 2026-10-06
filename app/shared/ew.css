@@ -294,6 +294,8 @@ html, body {
 .ew-dtools .ew-btn:disabled { opacity: .5; cursor: default; }
 .ew-dupd { flex: 1; text-align: right; }
 .ew-ddirty { color: var(--fk-status-warn); font-size: 12px; }
+.ew-drestore { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; flex-wrap: wrap; }
+.ew-drestore[hidden] { display: none; }
 .ew-over { color: var(--fk-status-bad); }
 .ew-deditor {
   flex: 1; min-height: 0; resize: none; box-sizing: border-box; width: 100%;

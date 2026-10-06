@@ -3,7 +3,7 @@
    hooks, injects into or sends input to the game. Hotkeys use globalShortcut only. */
 'use strict';
 
-const { app, BrowserWindow, Menu, Notification, Tray, globalShortcut, ipcMain, nativeImage, screen } = require('electron');
+const { app, BrowserWindow, Menu, Notification, Tray, dialog, globalShortcut, ipcMain, nativeImage, screen, shell } = require('electron');
 const selftest = require('./selftest');
 const childProcess = require('child_process');
 const fs = require('fs');
@@ -57,6 +57,16 @@ function createDashboard() {
   // The dashboard (and its preload bridge) never leaves its own file page.
   dashboard.webContents.on('will-navigate', function (e) { e.preventDefault(); });
   dashboard.webContents.setWindowOpenHandler(function () { return { action: 'deny' }; });
+  // Plan 057: the Deadeye tab blocks unload while a note is unsaved (its
+  // draft is already in localStorage); Electron would cancel silently, so ask.
+  dashboard.webContents.on('will-prevent-unload', function (e) {
+    const choice = dialog.showMessageBoxSync(dashboard, {
+      type: 'question', buttons: ['Leave', 'Stay'], defaultId: 1, cancelId: 1, noLink: true,
+      title: 'Ebonwake', message: 'Unsaved Deadeye notes.',
+      detail: 'The draft is kept locally and offered back next time. Leave anyway?'
+    });
+    if (choice === 0) e.preventDefault();
+  });
   // Plan 030: settings ui.scale is the dashboard zoom (0.9-1.3).
   dashboard.webContents.on('did-finish-load', function () {
     if (dashboard) dashboard.webContents.setZoomFactor(core.uiScale(readConfig()));
@@ -295,6 +305,22 @@ ipcMain.handle('ew:notify', function (event, n) {
   note.on('click', showDashboard);
   note.show();
   notifyShown++;
+  return { ok: true };
+});
+
+// Plan 057: a source link opens in the operator's browser. Only the dashboard
+// may ask, exactly {url}, https on core.EXTERNAL_HOSTS only, at most 6 a
+// minute; the normalized href is what opens. The dashboard never navigates.
+const openLimit = core.rateLimiter(core.OPEN_RATE.max, core.OPEN_RATE.windowMs);
+ipcMain.handle('ew:open-external', async function (event, body) {
+  if (!dashboard || event.sender !== dashboard.webContents) return { ok: false, error: 'not allowed' };
+  if (!core.validOpenExternal(body)) return { ok: false, error: 'link not allowed' };
+  if (!openLimit.allow(Date.now())) return { ok: false, error: 'rate limited' };
+  try {
+    await shell.openExternal(core.externalUrl(body.url));
+  } catch (e) {
+    return { ok: false, error: 'could not open the browser' };
+  }
   return { ok: true };
 });
 

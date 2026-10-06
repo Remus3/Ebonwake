@@ -65,8 +65,9 @@ test('appCommit is read-only; restart is one allowlisted, sender-checked IPC', (
   assert.match(pre, /appCommit: function \(\) \{ return APP_COMMIT; \}/);
   assert.match(pre, /ipcRenderer\.invoke\('ew:restart-server'\)/);
   // plan 030 adds the two payload-free settings reloads (settings.test.js).
-  assert.strictEqual((pre.match(/ipcRenderer\.\w+\(/g) || []).length, 5,
-    'post + restart + notify + 2 reloads only');
+  // plan 057 adds ew:open-external (allowlisted https links).
+  assert.strictEqual((pre.match(/ipcRenderer\.\w+\(/g) || []).length, 6,
+    'post + restart + notify + 2 reloads + open-external only');
   assert.match(m, /rev-parse', '--short', 'HEAD'/);
   assert.match(m, /windowsHide: true/);
   assert.match(m, /additionalArguments: \['--ew-app-commit=' \+ APP_COMMIT[,\]]/);
@@ -83,13 +84,13 @@ test('ew:notify is the one new allowlisted channel: sender-checked, validated, r
   const m = read('main.js');
   const channels = (pre.match(/ipcRenderer\.\w+\('([^']+)'/g) || []).map((s) => s.replace(/^.*'([^']+)'$/, '$1')).sort();
   // plan 030 adds the two payload-free settings reloads (settings.test.js).
-  assert.deepStrictEqual(channels, ['ew:notify', 'ew:post', 'ew:reload-overlay', 'ew:reload-shell',
-    'ew:restart-server']);
+  assert.deepStrictEqual(channels, ['ew:notify', 'ew:open-external', 'ew:post', 'ew:reload-overlay',
+    'ew:reload-shell', 'ew:restart-server']);
   assert.match(pre, /notify: function \(n\) \{ return ipcRenderer\.invoke\('ew:notify', n\); \}/);
   assert.match(pre, /notifyPrefs: function \(\) \{ return NOTIFY_ARG; \}/);
   const mainChannels = (m.match(/ipcMain\.(handle|on)\('([^']+)'/g) || []).map((s) => s.replace(/^.*'([^']+)'$/, '$1')).sort();
-  assert.deepStrictEqual(mainChannels, ['ew:notify', 'ew:overlay-size', 'ew:post', 'ew:reload-overlay',
-    'ew:reload-shell', 'ew:restart-server']);
+  assert.deepStrictEqual(mainChannels, ['ew:notify', 'ew:open-external', 'ew:overlay-size', 'ew:post',
+    'ew:reload-overlay', 'ew:reload-shell', 'ew:restart-server']);
   const h = m.slice(m.indexOf("ipcMain.handle('ew:notify'"), m.indexOf("ipcMain.handle('ew:notify'") + 900);
   assert.match(h, /event\.sender !== dashboard\.webContents/);
   assert.match(h, /core\.validNotify\(n\)/);
@@ -120,4 +121,106 @@ test('dashboard: toast region, every POST through EWToast.via(...).post, toast.j
   assert.match(t, /C\.notifyRules\(/);
   assert.match(t, /ledger\.take\(/);
   assert.match(read('dashboard/today.js'), /S\.rowErr\[/);
+});
+
+// ---- Plan 057 ----
+
+test('externalUrl: https on the fixed allowlist only', () => {
+  const C = require('../shared/ewcore');
+  const AT = String.fromCharCode(64);
+  assert.deepStrictEqual(C.EXTERNAL_HOSTS, ['naeu.playblackdesert.com', 'www.naeu.playblackdesert.com',
+    'www.blackdesertfoundry.com', 'api.arsha.io', 'github.com']);
+  assert.ok(Object.isFrozen(C.EXTERNAL_HOSTS));
+  const ok = [
+    'https://www.naeu.playblackdesert.com/en-US/Wiki?wikiNo=83',
+    'https://naeu.playblackdesert.com/en-US/News/Notice',
+    'https://www.blackdesertfoundry.com/pets-guide/',
+    'https://api.arsha.io/v2/na/GetWorldMarketHotList',
+    'https://github.com/',
+    'https://GITHUB.com/x#frag'
+  ];
+  for (const u of ok) assert.ok(C.externalUrl(u), u);
+  assert.strictEqual(C.externalUrl('https://GITHUB.com/x#frag'), 'https://github.com/x#frag');
+  const bad = [
+    'http://www.blackdesertfoundry.com/pets-guide/',
+    'javascript:alert(1)',
+    'JavaScript://github.com/%0aalert(1)',
+    'file:///tmp/x',
+    'data:text/html,x',
+    // credentials in the URL (built up so the leak sweep sees no address shape)
+    'https://user:pw' + AT + 'github.com/',
+    'https://user' + AT + 'github.com/',
+    'https://:pw' + AT + 'github.com/',
+    'https://evil.com/',
+    'https://github.com.evil.com/',
+    'https://evilgithub.com/',
+    'https://bdocodex.com/us/item/16001/',
+    'https://github.com:8443/',
+    'https://127.0.0.1:8940/api/health',
+    'https:github.com',
+    '//github.com/',
+    'github.com',
+    ' https://github.com/',
+    'https://github.com/a b',
+    'https://github.com/\n',
+    'https://github.com/' + 'a'.repeat(2048),
+    '', null, undefined, 42, {}, ['https://github.com/']
+  ];
+  for (const u of bad) assert.strictEqual(C.externalUrl(u), null, String(u));
+});
+
+test('validOpenExternal: exactly {url} with an allowlisted url', () => {
+  const C = require('../shared/ewcore');
+  assert.ok(C.validOpenExternal({ url: 'https://github.com/' }));
+  assert.ok(!C.validOpenExternal({ url: 'http://github.com/' }));
+  assert.ok(!C.validOpenExternal({ url: 'https://github.com/', x: 1 }));
+  assert.ok(!C.validOpenExternal('https://github.com/'));
+  assert.ok(!C.validOpenExternal(null));
+  assert.ok(!C.validOpenExternal([]));
+});
+
+test('ew:open-external: sender-checked, validated, rate-limited, shell.openExternal only', () => {
+  const pre = read('preload.js');
+  const m = read('main.js');
+  assert.match(pre, /openExternal: function \(url\) \{ return ipcRenderer\.invoke\('ew:open-external', \{ url: url \}\); \}/);
+  const at = m.indexOf("ipcMain.handle('ew:open-external'");
+  assert.ok(at > 0);
+  const h = m.slice(at, at + 700);
+  assert.match(h, /event\.sender !== dashboard\.webContents/);
+  assert.match(h, /core\.validOpenExternal\(body\)/);
+  assert.match(h, /openLimit\.allow\(Date\.now\(\)\)/);
+  assert.match(h, /shell\.openExternal\(core\.externalUrl\(body\.url\)\)/);
+  assert.strictEqual((m.match(/shell\.openExternal\(/g) || []).length, 1, 'one openExternal site');
+  // In-app navigation stays blocked.
+  assert.match(m, /dashboard\.webContents\.on\('will-navigate', function \(e\) \{ e\.preventDefault\(\); \}\)/);
+  assert.match(m, /dashboard\.webContents\.setWindowOpenHandler\(function \(\) \{ return \{ action: 'deny' \}; \}\)/);
+  assert.doesNotMatch(read('overlay/preload.js'), /open-external/);
+});
+
+test('linkButton: shared open button in toast.js, only for allowlisted urls', () => {
+  const t = read('dashboard/toast.js');
+  assert.match(t, /function linkButton\(url\)/);
+  assert.match(t, /if \(!C\.externalUrl\(url\)\) return null;/);
+  assert.match(t, /\.openExternal\(url\)/);
+  assert.match(t, /linkButton: linkButton/);
+  const ev = read('dashboard/events.js');
+  const src = ev.slice(ev.indexOf('function drawSources'));
+  assert.match(src.slice(0, 1500), /window\.EWToast\.linkButton\(s\.url\)/);
+  for (const f of ['progress.js', 'pets.js', 'inventory.js']) {
+    assert.match(read('dashboard/' + f), /window\.EWToast\.linkButton\(/, f + ' source link');
+  }
+  for (const f of fs.readdirSync(path.join(APP, 'dashboard')).filter((x) => x.endsWith('.js'))) {
+    const s = read('dashboard/' + f);
+    assert.doesNotMatch(s, /window\.open\(|location\.href\s*=|\.href\s*=/, f + ' navigates');
+    if (f !== 'toast.js') assert.doesNotMatch(s, /ewApi\.openExternal/, f + ' bypasses linkButton');
+  }
+});
+
+test('main: an unload the dashboard blocks (unsaved note) asks before leaving', () => {
+  const m = read('main.js');
+  const at = m.indexOf("dashboard.webContents.on('will-prevent-unload'");
+  assert.ok(at > 0);
+  const h = m.slice(at, at + 700);
+  assert.match(h, /dialog\.showMessageBoxSync\(/);
+  assert.match(h, /e\.preventDefault\(\)/);
 });

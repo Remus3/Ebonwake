@@ -213,6 +213,8 @@
       if (!r || typeof r.text !== 'string' || !r.text) return;
       const n = el('div', 'ew-muted', pair[0] + ': ' + r.text);
       n.title = 'source ' + String(r.source || '?') + ', verified ' + String(r.verified || '?');
+      const open = window.EWToast && window.EWToast.linkButton(r.source); // plan 057
+      if (open) { n.appendChild(document.createTextNode(' ')); n.appendChild(open); }
       rules.push(n);
     });
     lines(ui.rules, rules, '');
