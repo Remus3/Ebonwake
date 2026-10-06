@@ -1123,6 +1123,30 @@
     return rows;
   }
 
+  // ---- Profile history (plan 041) ----
+  // GET /api/progress/history body {days, character, series: {field: {points:
+  // [{at, v}], first, last, delta}}} -> one row per card field: {field, label,
+  // points: [[ms, v]] for sparkPath, text: "62 (+1)" | "640" | "-"}.
+  const HISTORY_FIELDS = [['level', 'Level'], ['gs', 'GS'], ['energy', 'Energy'], ['contribution', 'CP']];
+  const PROFILE_HISTORY_DAYS = 30;
+  const PROFILE_HISTORY_PATH = '/api/progress/history?field=' +
+    HISTORY_FIELDS.map(function (f) { return f[0]; }).join(',') + '&days=' + PROFILE_HISTORY_DAYS;
+
+  function historyRows(body) {
+    const series = plainObject(body) && plainObject(body.series) ? body.series : {};
+    return HISTORY_FIELDS.map(function (f) {
+      const s = plainObject(series[f[0]]) ? series[f[0]] : {};
+      const points = (Array.isArray(s.points) ? s.points : []).map(function (p) {
+        const t = plainObject(p) && typeof p.at === 'string' ? Date.parse(p.at) : NaN;
+        return plainObject(p) && isFinite(t) && isNum(p.v) ? [t, p.v] : null;
+      }).filter(function (p) { return p !== null; });
+      const last = points.length ? points[points.length - 1][1] : null;
+      const delta = points.length ? last - points[0][1] : 0;
+      const text = last === null ? '-' : String(last) + (delta ? ' (' + (delta > 0 ? '+' : '') + delta + ')' : '');
+      return { field: f[0], label: f[1], points: points, text: text };
+    });
+  }
+
   // ---- Grind (plan 005) ----
   // Elapsed clocks and buff countdowns run locally between polls: from the
   // absolute stamps when parseable, else from the server's seconds minus the
@@ -2606,6 +2630,8 @@
       source: typeof e.source === 'string' ? e.source : '', verified: e.verified === true, tracked: e.tracked === true };
   }
 
+  const LEVEL_SOURCES = ['typed', 'profile'];
+
   function normalizeLeveling(d) {
     if (!plainObject(d) || !Array.isArray(d.milestones)) return null;
     const hot = plainObject(d.hot) ? d.hot : {};
@@ -2613,7 +2639,9 @@
     return {
       now: typeof d.now === 'string' ? d.now : null,
       level: inRange(d.level, LEVEL) ? d.level : null,
+      // Plan 041: pct is null when a profile marker raised the level.
       pct: validXpPct(d.pct) ? d.pct : null,
+      level_source: LEVEL_SOURCES.indexOf(d.level_source) >= 0 ? d.level_source : null,
       rate_pct_h: isNum(d.rate_pct_h) && d.rate_pct_h > 0 ? d.rate_pct_h : null,
       eta_next_s: isNum(d.eta_next_s) ? d.eta_next_s : null,
       next_milestone: inRange(d.next_milestone, LEVEL) ? d.next_milestone : null,
@@ -2727,12 +2755,23 @@
     return { active: active, next: next, stack: Math.max(0, total), due: due };
   }
 
+  // Plan 041: "Lv 52 37.5%" for a typed sample (`exact` keeps every decimal),
+  // "Lv 61 (profile)" when a profile marker raised the level (XP percent of
+  // that level unknown). Never prints null.
+  function fmtLevelLine(d, exact) {
+    if (!plainObject(d) || !inRange(d.level, LEVEL)) return 'no XP sample yet';
+    if (validXpPct(d.pct)) {
+      return 'Lv ' + d.level + ' ' + (exact ? String(d.pct) : (Math.floor(d.pct * 10) / 10).toFixed(1)) + '%';
+    }
+    return 'Lv ' + d.level + (d.level_source === 'profile' ? ' (profile)' : '');
+  }
+
   // Overlay one-liner: "Lv 52 37.5% | 4.1 %/h | ETA 15h12m | HOT 1h03m +50%".
   function levelingLine(body, fetchedMs, now) {
     const d = normalizeLeveling(body);
-    if (!d || d.level === null || d.pct === null) return 'no XP sample yet';
+    if (!d || d.level === null) return 'no XP sample yet';
     const el = sinceFetch(fetchedMs, now);
-    const parts = ['Lv ' + d.level + ' ' + (Math.floor(d.pct * 10) / 10).toFixed(1) + '%'];
+    const parts = [fmtLevelLine(d)];
     parts.push(d.rate_pct_h === null ? '- %/h' : fmtRate(d.rate_pct_h));
     parts.push('ETA ' + (d.eta_next_s === null ? '-' : fmtEta(d.eta_next_s - el)));
     const h = hotLive(d.hot, d.xp_stack_pct, fetchedMs, now);
@@ -3713,6 +3752,9 @@
     normalizeLeveling: normalizeLeveling,
     hotLive: hotLive,
     levelingLine: levelingLine,
+    fmtLevelLine: fmtLevelLine,
+    historyRows: historyRows,
+    PROFILE_HISTORY_PATH: PROFILE_HISTORY_PATH,
     DEADLINE_STATES: DEADLINE_STATES,
     deadlineBrief: deadlineBrief,
     fmtMonthDay: fmtMonthDay,

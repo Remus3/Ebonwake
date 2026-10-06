@@ -111,8 +111,7 @@
       return;
     }
     const since = Math.max(0, (now - S.at) / 1000);
-    ui.lvl.textContent = d.level === null ? 'no XP sample yet' :
-      'Lv ' + d.level + '  ' + d.pct + '%';
+    ui.lvl.textContent = C.fmtLevelLine(d, true);
     ui.rate.textContent = C.fmtRate(d.rate_pct_h);
     ui.eta.textContent = d.eta_next_s === null ? '-' : C.fmtEta(d.eta_next_s - since);
     ui.mile.textContent = d.next_milestone === null ? '-' : 'Lv ' + d.next_milestone +
@@ -192,7 +191,9 @@
       const r = el('div', 'ew-lrow' + (s.pre_patch === true ? ' ew-stale' : ''));
       r.appendChild(el('span', 'ew-muted ew-gnum', s.ts.slice(5, 16).replace('T', ' ')));
       r.appendChild(el('span', 'ew-mprice ew-gnum', 'Lv ' + s.level));
-      r.appendChild(el('span', 'ew-mprice ew-gnum', s.pct + '%'));
+      // Plan 041: a server-written profile marker has no XP percent.
+      r.appendChild(s.source === 'profile' ? el('span', 'ew-muted', '(profile)') :
+        el('span', 'ew-mprice ew-gnum', s.pct + '%'));
       if (s.pre_patch === true) r.appendChild(el('span', 'ew-muted', 'pre-patch'));
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';

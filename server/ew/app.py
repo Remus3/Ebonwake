@@ -140,16 +140,25 @@ class EWServer(ThreadingHTTPServer):
                                     cache_dir=mc.cache_dir / "utildb"),
             clock=mc.clock)
         self.today = today.TodayService(self.store, clock=today_clock or time.time)
+        cfg = profile_cfg
+        if cfg is None:  # an injected client (tests) never reads config/local.json
+            cfg = progress.config_profile(REPO_ROOT) if profile_client is None else {}
         if profile_client is None:
-            cfg = progress.config_profile(REPO_ROOT) if profile_cfg is None else profile_cfg
             family = progress.family_from_config(cfg)
             if family is not None:
                 profile_client = progress.ProfileClient(family, base_url=cfg.get("base_url"))
         # Season level objectives auto-tick from the newest XP sample (plan 013);
         # plan 023: the newest started XP epoch flags bracket tables to re-verify.
+        # Plan 041: each profile refresh appends to the history beside the store;
+        # a main-level rise adds a plan 011 marker unless profile.auto_level is false.
         self.progress = progress.ProgressService(
             self.store, profile_client, level=lambda: self.leveling.current_level(),
-            epoch=lambda: self.leveling.active_epoch())
+            epoch=lambda: self.leveling.active_epoch(),
+            history=progress.ProfileHistory(
+                (Path(store_root).parent if store_root else RUNTIME) / "profile_history.jsonl",
+                clock=getattr(profile_client, "clock", time.time)),
+            on_level=lambda lvl: self.leveling.profile_marker(lvl),
+            auto_level=cfg.get("auto_level", True))
         # Plan 018: buff presets follow the newest started XP epoch.
         # Plan 039: loot priced from the cached arsha sublist, taxed per plan 027.
         self.grind = grind.GrindService(
@@ -297,6 +306,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.today_view())
         if path == "/api/progress":
             return self._send(200, self.server.progress.view())
+        if path == "/api/progress/history":
+            try:
+                return self._send(200, self.server.progress.history_view(parse_qs(query)))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
         if path == "/api/grind":
             return self._send(200, self.server.grind.view())
         if path == "/api/grind/loot":

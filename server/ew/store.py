@@ -11,11 +11,14 @@ _LOCK = threading.Lock()
 
 
 def atomic_write_json(path, data):
+    atomic_write_text(path, json.dumps(data, indent=1, sort_keys=True) + "\n")
+
+
+def atomic_write_text(path, text):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(data, indent=1, sort_keys=True) + "\n", encoding="utf-8",
-                   newline="\n")
+    tmp.write_text(text, encoding="utf-8", newline="\n")
     # Windows refuses a replace while another handle reads the target
     # (PermissionError); readers hold handles for microseconds, so retry briefly.
     for attempt in range(20):
