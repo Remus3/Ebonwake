@@ -349,6 +349,7 @@ html.ew-overlay, html.ew-overlay body { background: transparent; height: auto; o
 .ew-ov-val.ew-mname { flex: 0 1 auto; }
 /* hidden must beat .ew-dot's inline-block (the header server dot). */
 .ew-ov [hidden] { display: none; }
+.ew-ov[hidden] { display: none; } /* plan 067: game closed hides the panel */
 .ew-ov-row .ew-stale { color: var(--fk-text-muted); }
 .ew-ov-row .ew-mname { min-width: 0; }
 .ew-ov-head { margin-bottom: 2px; }

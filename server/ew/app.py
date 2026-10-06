@@ -10,7 +10,8 @@ adds its `suggested` coupon block),
 /api/deadeye/calc GET plan 055), /api/game (plan 008), /api/leveling (plan 011),
 /api/spots (plan 012, GET only), /api/bosses (plan 031), /api/settings (plan 030), /api/pets
 (plan 043), /api/inventory (plan 045), /api/mounts (plan 044), /api/summary (plan 046),
-/api/onboarding (plan 051), /api/crafting (plan 054), /api/imperial (plan 053), and POST
+/api/onboarding (plan 051), /api/crafting (plan 054), /api/imperial (plan 053),
+/api/overlay/context (plan 067; SSE `overlay_context` on change), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
 /api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings + /api/pets +
 /api/inventory + /api/mounts + /api/onboarding + /api/crafting + /api/imperial behind one
@@ -32,8 +33,8 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import (__version__, bosses, coupons, crafting, deadeye, enhance, eventnotices, events,
-               gamewatch, grind, imperial, inventory, itemnames, leveling, market, mounts, ocr, onboarding, pets,
+from . import (__version__, bosses, context, coupons, crafting, deadeye, enhance, eventnotices,
+               events, gamewatch, grind, imperial, inventory, maint, itemnames, leveling, market, mounts, ocr, onboarding, pets,
                ports,
                playsession, progress, settings, shopping, single, spots, summary, today,
                weekly, xpbooks)
@@ -145,7 +146,7 @@ class EWServer(ThreadingHTTPServer):
                  deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
                  ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
                  coupon_client=None, coupon_spawn=None, bosses_clock=None,
-                 config_path=None, notice_client=None, notice_spawn=None):
+                 config_path=None, notice_client=None, notice_spawn=None, context_clock=None):
         super().__init__(addr, Handler)
         self.started = _now_iso()
         self.commit = commit
@@ -275,11 +276,22 @@ class EWServer(ThreadingHTTPServer):
             self.store, self.grind, self.summary, config=self._play_config,
             clock=grind_clock or time.time, on_change=lambda: self.bus.bump("grind"))
         self.grind.play = self.play.state
+        # Plan 067: overlay widgets chosen by context (game state, clock, notices).
+        self.context = context.ContextService(
+            clock=context_clock or time.time, game=self.game.view,
+            settings=lambda: self.settings.view()["settings"],
+            boss_at=lambda now: (bosses.next_spawns(now, 1, self.bosses.table) or [{}])[0].get(
+                "at_utc"),
+            maint_window=lambda now: maint.next_window(
+                now, maint.slot(self.settings.view()["settings"]["events.maintenance_start_utc"]),
+                self.notices.maint_notices()),
+            reset_at=today.next_daily_reset, hot=self.leveling.hot_active)
         listeners = getattr(self.game, "listeners", None)
         if isinstance(listeners, list):
             listeners.append(self.summary.on_game)
             listeners.append(self.dice.on_game)
             listeners.append(self.play.on_game)
+            listeners.append(lambda prev, new, at: self.context.invalidate())
         pollers = getattr(self.game, "pollers", None)
         if isinstance(pollers, list):
             pollers.append(self.play.tick)
@@ -437,6 +449,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.leveling.view())
         if path == "/api/bosses":
             return self._send(200, self.server.bosses.view())
+        if path == "/api/overlay/context":
+            return self._send(200, self.server.context.view())
         if path == "/api/spots":
             try:
                 return self._send(200, self.server.spots.view(parse_qs(query)))
@@ -558,6 +572,7 @@ class Handler(BaseHTTPRequestHandler):
             s = out["settings"]
             self.server.market.settings = market.settings_from(
                 {"market": {"vp": s["market.vp"], "fame_pct": s["market.fame_pct"]}})
+        self.server.context.invalidate()  # plan 067: pins / blocks / auto apply live
         return out
 
     def _post_ocr(self, body):
@@ -710,7 +725,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         game, lev, bus, play = self.server.game, self.server.leveling, self.server.bus, \
             self.server.play
+        ctx = self.server.context
         seq, lseq, dseq, pseq = game.seq, lev.seq, bus.snapshot(), play.seq
+        csig = context.signature(ctx.view())
         interval = self.server.sse_interval
         try:
             msg = json.dumps({"type": "heartbeat", "now": _now_iso()})
@@ -738,6 +755,10 @@ class Handler(BaseHTTPRequestHandler):
                     ev = play.event()
                     if ev is not None:
                         out.append(f"event: play_session\ndata: {json.dumps(ev)}\n\n")
+                cview = ctx.view()  # plan 067: cached CACHE_S; pushed only on change
+                if context.signature(cview) != csig:
+                    csig = context.signature(cview)
+                    out.append(f"event: overlay_context\ndata: {json.dumps(cview)}\n\n")
                 now_seq = bus.snapshot()
                 for d in sorted(k for k in now_seq if now_seq[k] != dseq.get(k)):
                     out.append(f"event: {d}\ndata: {json.dumps(d)}\n\n")
@@ -759,7 +780,7 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                 deadeye_clock=None, game_watch=None, game_cfg=None, game_poll=False,
                 ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
                 coupon_client=None, coupon_spawn=None, bosses_clock=None,
-                config_path=None, notice_client=None, notice_spawn=None):
+                config_path=None, notice_client=None, notice_spawn=None, context_clock=None):
     return EWServer(("127.0.0.1", port), store_root=store_root, commit=commit,
                     sse_interval=sse_interval, market_client=market_client,
                     market_seed=market_seed, today_clock=today_clock,
@@ -770,7 +791,8 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                     ocr_cache_dir=ocr_cache_dir, leveling_clock=leveling_clock,
                     coupon_client=coupon_client, coupon_spawn=coupon_spawn,
                     bosses_clock=bosses_clock, config_path=config_path,
-                    notice_client=notice_client, notice_spawn=notice_spawn)
+                    notice_client=notice_client, notice_spawn=notice_spawn,
+                    context_clock=context_clock)
 
 
 def main(argv=None, probe=None):
