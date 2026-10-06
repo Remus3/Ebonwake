@@ -82,6 +82,8 @@ html, body {
 .ew-mprice { font-family: var(--ew-mono); }
 .ew-stale { color: var(--fk-text-muted); opacity: .7; }
 .ew-err { color: var(--fk-status-bad); font-size: 12px; margin-bottom: 4px; }
+.ew-drift { color: var(--fk-status-warn); font-size: 12px; margin-bottom: 4px; } /* plan 072 */
+.ew-drift ul { margin: 2px 0 0 16px; padding: 0; }
 .ew-badge { font-size: 12px; text-transform: uppercase; }
 .ew-badge.below { color: var(--fk-status-ok); }
 .ew-badge.above { color: var(--fk-status-warn); }
