@@ -1915,6 +1915,8 @@
     if (k === 'delete_step') return validRef(v, STEP_ID_RE);
     if (k === 'step_done') return exact(v, ['id', 'done']) && validRef(v.id, STEP_ID_RE) && typeof v.done === 'boolean';
     if (k === 'move_step') return exact(v, ['id', 'dir']) && validRef(v.id, STEP_ID_RE) && (v.dir === -1 || v.dir === 1);
+    if (k === 'shop_set') return validShopSet(v);
+    if (k === 'shop_step') return validShopStep(v);
     if (k === 'add_step') {
       return plainObject(v) && onlyKeys(v, ['item', 'current', 'target', 'note']) &&
         'item' in v && 'current' in v && 'target' in v && stepFieldsOk(v);
@@ -2142,6 +2144,90 @@
     const unk = (Array.isArray(b.unknown) ? b.unknown : []).filter(plainObject).map(function (u) { return u.family + ' ' + u.level; });
     return { bank: bank, agris: agris, advice: advice, budget: budget,
       unknown: unk.length ? 'no chance data (not counted): ' + unk.join(', ') : '' };
+  }
+
+  // ---- Shopping list (plan 037) ----
+  // GET /api/deadeye/shopping -> {lines: [{id, name, qty, expected, unit, total,
+  // preorder, watched, note}], total, priced_total, missing_prices,
+  // can_afford_by, afford: {need, silver_per_h, hours_per_day, per_day, days,
+  // reason}, steps, families, settings: {silver_on_hand, hours_per_day}}.
+  // Cached read-only prices; "watch" only edits EW's own watchlist.
+
+  const SHOP_MAX_SILVER = 1e15;
+  const SHOP_MAX_HOURS = 24;
+  // GEAR_FAMILY_RE: shared with the plan 036 stacks block above.
+
+  function validShopSet(v) {
+    if (!plainObject(v) || !Object.keys(v).length || !onlyKeys(v, ['silver_on_hand', 'hours_per_day'])) return false;
+    if ('silver_on_hand' in v && !(isInt(v.silver_on_hand, 0) && v.silver_on_hand <= SHOP_MAX_SILVER)) return false;
+    return !('hours_per_day' in v) || (isNum(v.hours_per_day) && v.hours_per_day > 0 && v.hours_per_day <= SHOP_MAX_HOURS);
+  }
+
+  function validShopStep(v) {
+    if (!plainObject(v) || !onlyKeys(v, ['id', 'family', 'fs', 'crons']) || Object.keys(v).length < 2) return false;
+    if (!validRef(v.id, STEP_ID_RE)) return false;
+    if ('family' in v && v.family !== null && !(typeof v.family === 'string' && GEAR_FAMILY_RE.test(v.family))) return false;
+    if ('fs' in v && !(isInt(v.fs, 0) && v.fs <= ENHANCE_MAX_FS)) return false;
+    return !('crons' in v) || typeof v.crons === 'boolean';
+  }
+
+  // Settings form strings -> {shop_set} body, or an error for the operator.
+  // Silver accepts digits with optional , separators.
+  function parseShopForm(form) {
+    const f = form || {};
+    const silver = String(f.silver === undefined || f.silver === null ? '' : f.silver).trim().replace(/,/g, '');
+    const hours = String(f.hours === undefined || f.hours === null ? '' : f.hours).trim();
+    const body = {};
+    if (silver !== '') {
+      const n = /^[0-9]{1,16}$/.test(silver) ? Number(silver) : NaN;
+      if (!(n <= SHOP_MAX_SILVER)) return { ok: false, error: 'silver on hand: a whole number 0-' + fmtSilver(SHOP_MAX_SILVER) };
+      body.silver_on_hand = n;
+    }
+    if (hours !== '') {
+      const h = /^[0-9]{1,2}(\.[0-9]{1,2})?$/.test(hours) ? Number(hours) : NaN;
+      if (!(h > 0 && h <= SHOP_MAX_HOURS)) return { ok: false, error: 'hours per day: a number above 0, up to 24' };
+      body.hours_per_day = h;
+    }
+    if (!Object.keys(body).length) return { ok: false, error: 'enter silver on hand or hours per day' };
+    return { ok: true, body: { shop_set: body } };
+  }
+
+  // One shopping line -> display strings; any missing number shows '-'.
+  function fmtShopLine(ln) {
+    const o = plainObject(ln) ? ln : {};
+    const pre = { capped: 'pre-order (capped)', no_stock: 'pre-order (no stock)' };
+    return {
+      name: typeof o.name === 'string' && o.name ? o.name : (isInt(o.id, 0) ? '#' + o.id : '-'),
+      qty: isInt(o.qty, 0) ? fmtSilver(o.qty) : '-',
+      unit: isNum(o.unit) ? fmtSilver(o.unit) : '-',
+      total: isNum(o.total) ? fmtSilver(o.total) : '-',
+      preorder: pre[o.preorder] || '',
+      note: typeof o.note === 'string' ? o.note : ''
+    };
+  }
+
+  // The list's summary -> {total, afford} strings.
+  function fmtShopping(b) {
+    const o = plainObject(b) ? b : {};
+    const a = plainObject(o.afford) ? o.afford : {};
+    const missing = Array.isArray(o.missing_prices) ? o.missing_prices.length : 0;
+    let total = isNum(o.total) ? fmtSilver(o.total) : '-';
+    if (!isNum(o.total) && missing) {
+      total = (isNum(o.priced_total) && o.priced_total > 0 ? '>= ' + fmtSilver(o.priced_total) + ' ' : '') +
+        '(' + missing + ' unpriced)';
+    }
+    let afford;
+    if (typeof o.can_afford_by === 'string' && a.days === 0) afford = 'covered by silver on hand';
+    else if (typeof o.can_afford_by === 'string') {
+      afford = 'can afford by ' + o.can_afford_by + ' (' + a.days + ' d at ' + fmtSilver(a.silver_per_h) +
+        '/h x ' + a.hours_per_day + ' h/day)';
+    } else afford = 'can afford by: - ' + (typeof a.reason === 'string' && a.reason ? '(' + a.reason + ')' : '');
+    return { total: total, afford: afford.trim() };
+  }
+
+  // "watch" button -> plan 002 POST /api/market/watch body (EW's own list only).
+  function shopWatchBody(id) {
+    return isInt(id, 1) ? { add: { id: id, sid: 0 } } : null;
   }
 
   // ---- Game state (plan 008) ----
@@ -3539,6 +3625,10 @@
     parseAgrisForm: parseAgrisForm,
     parseCronsForm: parseCronsForm,
     fmtStacks: fmtStacks,
+    parseShopForm: parseShopForm,
+    fmtShopLine: fmtShopLine,
+    fmtShopping: fmtShopping,
+    shopWatchBody: shopWatchBody,
     validLevelingBody: validLevelingBody,
     parseSampleForm: parseSampleForm,
     parseHotForm: parseHotForm,
