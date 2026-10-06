@@ -258,6 +258,8 @@ class AutoOcr:
         self._windows = []                # [[start, end|None]] logged_in spans, epoch s
         self._queue = []                  # [(key, shot)]
         self._busy = threading.Lock()     # one OCR at a time
+        self._ok_at = None                # plan 073: last good read / last failure
+        self._err = None                  # (message, at)
         self._stop = threading.Event()
         self._thread = None
 
@@ -374,8 +376,12 @@ class AutoOcr:
             return
         try:
             doc = self.reader.doc(shot["name"])
-        except (ocr.OcrError, ValueError, OSError):
+        except (ocr.OcrError, ValueError, OSError) as e:
+            with self._lock:
+                self._err = (str(e)[:200], self.clock())
             return  # an unreadable shot is skipped; Read re-runs it on demand
+        with self._lock:
+            self._ok_at = self.clock()
         fields = []
         s = silver_field(doc, last=self._last_silver())
         if s is not None:
@@ -621,6 +627,14 @@ class AutoOcr:
         return {"enabled": enabled, "commit_min": mn, "daily_cap": cap, "today": d["count"],
                 "pending": pending, "review": review, "commits": commits,
                 "silver": self._last_silver(), "silver_h": self._silver_h()}
+
+    def health(self):
+        """Plan 073 signal inputs: last good read, last failure, queue depth."""
+        enabled = self._cfg()[0]
+        with self._lock:
+            err = self._err
+            return {"enabled": enabled, "ok_at": self._ok_at, "pending": len(self._queue),
+                    "error": err[0] if err else None, "error_at": err[1] if err else None}
 
     def _silver_h(self):
         """Plan 066: silver/h between OCR silver samples in one play session."""

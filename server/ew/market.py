@@ -608,6 +608,23 @@ class MarketService:
         sub = self._cached_sub(item_id, sid)
         return {"price": price_of(sub), "preorder": preorder_state(sub)}
 
+    def health(self):
+        """Plan 073: {watched, ok_at, blocked} over the watched items only - the
+        newest good sublist fetch (epoch) and the watched keys (any endpoint)
+        whose last attempt failed (Imperva blocks included); a "being fetched"
+        answer is not a block. Never fetches."""
+        watched = {f"_{w['id']}_{w['sid']}" for w in self.watchlist.items()}
+        ok_at = None
+        for suffix in watched:
+            cached = self.client._cached("sublist" + suffix)
+            at = cached["fetched_at"] if cached else None
+            if at is not None and (ok_at is None or at > ok_at):
+                ok_at = at
+        blocked = sum(1 for k, e in self.client._backoffs().items()
+                      if isinstance(e, dict) and not e.get("pending")
+                      and k.partition("_")[2] and "_" + k.partition("_")[2] in watched)
+        return {"watched": len(watched), "ok_at": ok_at, "blocked": blocked}
+
     def source(self):
         """`/api/state` sources.market: {updated, ttl_s, status: ok|stale|error|none}."""
         ttl = TTL["sublist"]

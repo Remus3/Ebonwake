@@ -182,6 +182,7 @@ class GameWatch:
         self._offset = 0
         self._log_state = None  # last classified state of the current session
         self._last_event = None
+        self._line_at = None  # plan 073: clock time the tail last read a complete line
         self._shots = []
         self._stop = threading.Event()
         self._thread = None
@@ -207,6 +208,7 @@ class GameWatch:
             if log_dir != self.log_dir:
                 self._log_file, self._offset = None, 0
                 self._log_state, self._last_event = None, None
+                self._line_at = None
             self.log_dir = log_dir
             self.shot_dir = Path(documents_dir) / "ScreenShot" if documents_dir else None
 
@@ -230,6 +232,7 @@ class GameWatch:
         if name != self._log_file:
             self._log_file, self._offset = name, 0
             self._log_state, self._last_event = None, None
+            self._line_at = None  # plan 073: a new session's silence counts from its state
         path = self.log_dir / name
         try:
             with open(path, "rb") as f:  # read-only; default share mode never blocks the game
@@ -243,6 +246,8 @@ class GameWatch:
         skip = 2 if self._offset == 0 and raw.startswith(_BOM) else 0
         lines, used = split_lines(raw[skip:])
         self._offset += skip + used
+        if lines:  # plan 073: any complete line (classified or not) is a sign of life
+            self._line_at = self.clock()
         for line in lines:
             doc = parse_line(line)
             state = classify(doc["Log"]) if doc else None
@@ -356,6 +361,20 @@ class GameWatch:
                     "last_event": dict(self._last_event) if self._last_event else None,
                     "screenshots": [dict(s) for s in self._shots],
                     "configured": self.configured}
+
+    def health(self):
+        """Plan 073 signal inputs; never polls. Folder checks are stat-only."""
+        with self._lock:
+            state = self._state or ("not_running" if self.configured else "unconfigured")
+            log_dir, shot_dir = self.log_dir, self.shot_dir
+            out = {"state": state, "configured": self.configured, "line_at": self._line_at,
+                   "since": self._since, "polled_at": self._updated,
+                   "shots_configured": shot_dir is not None,
+                   "last_shot_at": max((t for t in (_parse(s["mtime"]) for s in self._shots)
+                                        if t is not None), default=None)}
+        out["log_dir_ok"] = log_dir is not None and log_dir.is_dir()
+        out["shots_dir_ok"] = shot_dir is not None and shot_dir.is_dir()
+        return out
 
     def source(self):
         """`/api/state` sources.game: {updated, status: <state>}; never polls."""

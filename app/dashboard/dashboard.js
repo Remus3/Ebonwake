@@ -3,7 +3,8 @@
    progress.js + leveling.js, grind.js, events.js, deadeye.js; game.js on System;
    settings.js, plan 030).
    Plan 020: the pill re-checks /api/version every 30 s (and on SSE reconnect),
-   flags a server older than the app, and the System tab shows data freshness. */
+   flags a server older than the app, and the System tab shows data freshness.
+   Plan 073: that card is now the signal health digest (/api/signals). */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -14,7 +15,8 @@
   let ticks = 0;
   const GEAR = String.fromCharCode(0x2699); // System icon tab (plan 047)
   // Health inputs for C.healthPill; sseOk stays null until the stream reports.
-  const H = { version: null, health: null, sources: null, lastOkMs: null, sseOk: null, restarting: false };
+  const H = { version: null, health: null, sources: null, signals: null, lastOkMs: null, sseOk: null,
+    restarting: false };
   // Plan 049: the one /events stream fans out here; modules subscribe in mount().
   const bus = window.EWBus = C.createBus();
   const DOMAINS = ['today', 'grind', 'game', 'leveling', 'market', 'progress', 'events', 'whatnow', 'ocr'];
@@ -124,7 +126,7 @@
         p.appendChild(card('Server', sv));
         const fr = el('div', 'ew-fresh');
         fr.id = 'sys-fresh';
-        p.appendChild(card('Data freshness', fr));
+        p.appendChild(card('Signal health', fr)); // plan 073: was "Data freshness"
         if (window.EWGame) window.EWGame.mount(p);
       } else {
         p.appendChild(card(t.title, el('p', 'ew-muted', 'Arrives in plan ' + (t.plan || '?') + '.')));
@@ -187,8 +189,22 @@
       });
     }
     const fr = document.getElementById('sys-fresh');
-    if (fr) {
+    if (fr && H.signals) {
+      // Plan 073: one row per signal with its fix hint; an older server
+      // (no /api/signals) keeps the plan 020 freshness pills below.
       fr.textContent = '';
+      fr.classList.add('ew-sig');
+      C.signalRows(H.signals).forEach(function (r) {
+        const row = el('div', 'ew-sigrow');
+        const p = el('span', 'ew-pill ' + r.cls, r.text);
+        if (r.detail) p.title = r.detail;
+        row.appendChild(p);
+        if (r.hint && r.level !== 'ok') row.appendChild(el('span', 'ew-muted', r.hint));
+        fr.appendChild(row);
+      });
+    } else if (fr) {
+      fr.textContent = '';
+      fr.classList.remove('ew-sig');
       const rows = C.sourceFreshness(H.sources, now);
       if (!rows.length) fr.appendChild(el('p', 'ew-muted', 'no source data yet'));
       rows.forEach(function (r) {
@@ -216,7 +232,8 @@
       H.lastOkMs = Date.now();
       return Promise.all([
         getJSON('/api/health').then(function (h) { H.health = h; }, function () { H.health = null; }),
-        getJSON('/api/state').then(function (s) { H.sources = s && s.sources; }, function () { /* keep last */ })
+        getJSON('/api/state').then(function (s) { H.sources = s && s.sources; }, function () { /* keep last */ }),
+        getJSON('/api/signals').then(function (s) { H.signals = s; }, function () { H.signals = null; })
       ]);
     }, function () { H.health = null; }).then(function () { paintPill(); paintSystem(); });
   }

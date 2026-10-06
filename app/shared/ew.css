@@ -146,6 +146,11 @@ html, body {
 .ew-adv label { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 6px; }
 /* System tab (plan 020): one freshness pill per /api/state source. */
 .ew-fresh { display: flex; flex-wrap: wrap; gap: 6px; align-content: flex-start; }
+/* Plan 073: the same card as a signal digest - one row per signal + its fix hint. */
+.ew-fresh.ew-sig { flex-direction: column; flex-wrap: nowrap; gap: 4px; }
+.ew-sigrow { display: flex; gap: 8px; align-items: baseline; font-size: 12px; }
+.ew-sigrow .ew-pill { flex: none; }
+.ew-hsig { margin: 0 0 6px; cursor: pointer; }
 
 /* Today tab (plan 003): checklists scroll inside their card (ew-mcard/ew-cbody). */
 .ew-tmeta { display: flex; gap: 6px; align-items: center; }
