@@ -39,7 +39,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 032 | World boss overlay widget + Today card + 5/15-min notification | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 033 | Weekly content planner gated by level and gear (Black Shrine, Atoraxxion, Jetina, LoML, Garmoth, Edania) | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 034 | Post-graduation gear roadmap track + graduation readiness + adventure-log seeds | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
-| 035 | Enhancement EV calculator: per-step chance tables, expected attempts and cost, Agris pity cap | [ ] open |
+| 035 | Enhancement EV calculator: per-step chance tables, expected attempts and cost, Agris pity cap | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 036 | Failstack bank + Agris pity tracker + cron budget | [ ] open |
 | 037 | Shopping list from the enhancement plan: materials x arsha prices, can-afford-by | [ ] open |
 | 038 | Drop-buff cap calculator (300/400/500 % caps, rate vs amount) + Blessing of Agris ROI | [ ] open |
