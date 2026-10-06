@@ -75,7 +75,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 068 | Auto-tick inferable checklist rows: login dailies, dice ready, boss-shot suggestion | [x] done 2026-10-06 (loop; refute 2/3 PASS) |
 | 069 | One "What now" card on Home + overlay: next best action ranked by urgency | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 070 | Prompt hygiene: stale-prompt expiry, dedupe, game-closed quiet, 15/5/1 alert ladder | [ ] open |
-| 071 | Self-curating market watch: seeded from shopping list / loot / recipes, thresholds from price bands | [ ] open |
+| 071 | Self-curating market watch: seeded from shopping list / loot / recipes, thresholds from price bands | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 072 | World boss schedule drift check against a public NA table (robots-gated, banner only) | [ ] open |
 | 073 | Signal health digest: per-signal liveness with one-line fix hints | [ ] open |
 

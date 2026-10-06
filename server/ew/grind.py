@@ -822,6 +822,26 @@ class GrindService:
                 "verified": entry["verified"] if entry else None, "items": items,
                 "tax": t, "error": self.loot_error}
 
+    def loot_candidates(self):
+        """Plan 071: marketable loot ids of the active spot, else the newest
+        session's spot, each with its count in that spot's newest loot-valued
+        session (1 when none). Never prices, so never fetches."""
+        doc = self._load()
+        act = doc["active"]
+        spot = act["spot"] if act else (doc["sessions"][-1]["spot"] if doc["sessions"] else None)
+        if spot not in {s["id"] for s in doc["spots"]}:
+            return {"spot": None, "items": []}
+        counts = {}
+        for ses in reversed(doc["sessions"]):
+            if ses["spot"] == spot and ses.get("loot"):
+                for it in ses["loot"]:
+                    if it.get("id") is not None:
+                        counts[it["id"]] = counts.get(it["id"], 0) + it["count"]
+                break
+        return {"spot": spot, "items": [
+            {"id": it["id"], "name": it["name"], "count": counts.get(it["id"], 1)}
+            for it in self._items(doc, spot) if it["marketable"] and it.get("id") is not None]}
+
     def loot_names(self, spot):
         """Plan 040: the spot's loot item names (table + operator) for the OCR
         loot import; ValueError for an unknown spot."""

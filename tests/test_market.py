@@ -66,7 +66,8 @@ def test_ttl_hit_then_miss(tmp_path):
 
 
 def test_ttls_per_endpoint():
-    assert market.TTL == {"sublist": 300, "orders": 120, "history": 3600, "hot": 600}
+    assert market.TTL == {"sublist": 300, "orders": 120, "history": 3600, "hot": 600,
+                          "search": 300}
 
 
 def test_cache_survives_new_client(tmp_path):

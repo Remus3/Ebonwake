@@ -183,6 +183,15 @@ test('watchAlert takes the server kind, else derives it', () => {
   assert.strictEqual(C.watchAlert(null), null);
 });
 
+test('autoWatchBadge marks plan 071 auto rows and names the band', () => {
+  assert.strictEqual(C.autoWatchBadge({ id: 1, below: 5 }), null);
+  assert.strictEqual(C.autoWatchBadge(null), null);
+  const b = C.autoWatchBadge({ auto: true, threshold: 'auto band', auto_band: { below: 1000, above: 25000 } });
+  assert.strictEqual(b.text, 'auto band');
+  assert.match(b.title, /below 1,000 \/ above 25,000/);
+  assert.strictEqual(C.autoWatchBadge({ auto: true, threshold: null, auto_band: null }).text, 'auto');
+});
+
 test('bandStrip places p20/p50/p80 and the price on one scale', () => {
   const b = { p20: 100, p50: 150, p80: 200, n: 30, basis: 'history', age_s: 7200 };
   const s = C.bandStrip(b, 50);

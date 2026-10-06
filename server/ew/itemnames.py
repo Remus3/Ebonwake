@@ -139,10 +139,12 @@ class NameIndex:
     # -- sources ----------------------------------------------------------
     def _scan_cache(self):
         found = {}
-        for pattern in ("sublist_*.json", "hot_*.json"):
+        for pattern in ("sublist_*.json", "hot_*.json", "search_*.json"):
             for p in sorted(self.market_cache_dir.glob(pattern)):
                 doc = read_json(p)
                 data = doc.get("data") if isinstance(doc, dict) else None
+                if isinstance(data, dict) and "rows" in data:  # plan 071 batch {ids, rows}
+                    data = data["rows"]
                 for obj in (data if isinstance(data, list) else [data]):
                     r = _row(obj, False)
                     if r:

@@ -20,10 +20,15 @@ from .httpcache import freshness as _freshness
 
 BASE = "https://api.arsha.io/v2/na/"
 TIMEOUT_S = 10
-TTL = {"sublist": 300, "orders": 120, "history": 3600, "hot": 600}
+TTL = {"sublist": 300, "orders": 120, "history": 3600, "hot": 600, "search": 300}
 ENDPOINT = {"sublist": "GetWorldMarketSubList", "orders": "GetBiddingInfoList",
-            "history": "GetMarketPriceInfo", "hot": "GetWorldMarketHotList"}
+            "history": "GetMarketPriceInfo", "hot": "GetWorldMarketHotList",
+            "search": "GetWorldMarketSearchList"}
 MAX_ID = 2 ** 31 - 1
+# Plan 071: one cache + backoff key for the batched watch-set search, whatever
+# the id set, so a blocked batch backs off as one request.
+SEARCH_KEY = "search_watch"
+MAX_REMOVED = 500  # remembered removed auto entries (plan 071)
 _DEFAULT_CACHE = Path(__file__).resolve().parents[2] / "ops" / "runtime" / "cache" / "market"
 
 
@@ -83,6 +88,51 @@ class ArshaClient(CachedClient):
     def get(self, kind, item_id=0, sid=0):
         return self.cached_get(self._key(kind, item_id, sid), TTL[kind],
                                lambda: self._download(kind, item_id, sid))
+
+    def _download_search(self, ids):
+        url = BASE + ENDPOINT["search"] + "?" + urllib.parse.urlencode(
+            {"ids": ",".join(str(i) for i in ids), "lang": "en"})
+        try:
+            raw = self.fetch(url, TIMEOUT_S)
+        except Pending:
+            raise
+        except Exception as e:  # HTTPError, URLError, timeout, OSError
+            raise UpstreamError(f"{type(e).__name__}: {e}") from e
+        try:
+            body = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+        except (ValueError, UnicodeDecodeError) as e:
+            raise UpstreamError(f"bad json: {e}") from e
+        if isinstance(body, dict) and "code" in body:
+            raise UpstreamError(f"arsha code {body.get('code')}: {body.get('message', '')}"[:200])
+        if isinstance(body, dict):
+            body = [body]
+        if not isinstance(body, list):
+            raise UpstreamError("bad shape")
+        return {"ids": ids,
+                "rows": [r for r in body if isinstance(r, dict) and _is_int(r.get("id"))]}
+
+    def search(self, ids):
+        """Plan 071: one GetWorldMarketSearchList GET for a batch of base ids
+        (sid 0). A cache for another id set is refetched (still behind the
+        shared backoff) and served stale meanwhile; data = {ids, rows}."""
+        ids = sorted({int(i) for i in ids})
+        cached = self._cached(SEARCH_KEY)
+        same = (cached is not None and isinstance(cached["data"], dict)
+                and cached["data"].get("ids") == ids)
+        res = self.cached_get(SEARCH_KEY, TTL["search"] if same else 0,
+                              lambda: self._download_search(ids))
+        return dict(res, ttl_s=TTL["search"])
+
+    def search_row(self, item_id):
+        """(row, peek result) for `item_id` from the batch cache, stale or not,
+        or (None, None); never fetches."""
+        res = self.peek(SEARCH_KEY, TTL["search"])
+        data = res["data"] if res else None
+        rows = data.get("rows") if isinstance(data, dict) else None
+        for r in rows if isinstance(rows, list) else []:
+            if isinstance(r, dict) and r.get("id") == item_id:
+                return r, res
+        return None, None
 
     def sublist(self, item_id, sid=0):
         return self.get("sublist", item_id, sid)
@@ -193,6 +243,25 @@ def alert_for(price, below, above, bands=None, p20=False):
     if _is_int(low) and price < low:
         return "below_p20"
     return None
+
+
+MIN_BAND_N = 5  # plan 071: fewer points than this is no band to alert on
+
+
+def band_thresholds(entry, bands):
+    """Plan 071: (below, above, source) for a watch entry. An auto entry's
+    missing threshold is its band's p20 (below) / p80 (above), source
+    `auto band`; a typed threshold always wins; manual entries are as stored."""
+    below, above = entry.get("below"), entry.get("above")
+    if entry.get("auto") is not True:
+        return below, above, None
+    ok = isinstance(bands, dict) and _is_int(bands.get("n")) and bands["n"] >= MIN_BAND_N
+    used = False
+    if ok and below is None and _is_int(bands.get("p20")):
+        below, used = bands["p20"], True
+    if ok and above is None and _is_int(bands.get("p80")):
+        above, used = bands["p80"], True
+    return below, above, "auto band" if used else None
 
 
 # -- plan 052: price bands -------------------------------------------------
@@ -355,6 +424,8 @@ class Watchlist:
             watch = self.items()
             for i, w in enumerate(watch):
                 if w["id"] == e["id"] and w["sid"] == e["sid"]:
+                    if w.get("auto") is True or w.get("auto_origin") is True:
+                        e["auto_origin"] = True  # plan 071: a later remove is remembered
                     watch[i] = e
                     break
             else:
@@ -362,11 +433,41 @@ class Watchlist:
             self._save(watch)
         return self.items()
 
+    def removed(self):
+        """Plan 071: ids of auto entries the operator removed (never re-added)."""
+        raw = self.store.get("market").get("auto_removed")
+        return [i for i in raw if _is_int(i)] if isinstance(raw, list) else []
+
     def remove(self, entry):
         e = validate_entry(entry, thresholds=False)
         with self._lock:
-            self._save([w for w in self.items()
-                        if not (w["id"] == e["id"] and w["sid"] == e["sid"])])
+            watch = self.items()
+            gone = [w for w in watch if w["id"] == e["id"] and w["sid"] == e["sid"]]
+            doc = dict(self.store.get("market"), watch=[w for w in watch if w not in gone])
+            removed = self.removed()
+            if (any(w.get("auto") is True or w.get("auto_origin") is True for w in gone)
+                    and e["id"] not in removed):
+                doc["auto_removed"] = (removed + [e["id"]])[-MAX_REMOVED:]
+            self.store.put("market", doc)
+        return self.items()
+
+    def curate(self, ranked_ids, cap):
+        """Plan 071: replace the auto entries with the first `cap` of
+        `ranked_ids` the operator has not removed; manual entries always stay
+        (one already watching an id fills that slot). Writes only on change."""
+        with self._lock:
+            watch = self.items()
+            removed = set(self.removed())
+            want = []
+            for i in ranked_ids:
+                if _is_int(i) and 0 <= i <= MAX_ID and i not in removed and i not in want:
+                    want.append(i)
+            manual = [w for w in watch if w.get("auto") is not True]
+            have = {(w["id"], w["sid"]) for w in manual}
+            new = manual + [{"id": i, "sid": 0, "below": None, "above": None, "auto": True}
+                            for i in want[:cap] if (i, 0) not in have]
+            if new != watch:
+                self._save(new)
         return self.items()
 
 
@@ -376,6 +477,7 @@ class MarketService:
         self.watchlist = watchlist
         self.settings = settings_from({"market": settings or {}})
         self._last = None  # freshness summary of the last watch refresh
+        self.curate = None  # plan 071: () -> None, run before each watch refresh
         self.samples = samples if samples is not None else PriceSamples(
             Path(client.cache_dir).parent / "market_samples.json", clock=client.clock)
 
@@ -399,26 +501,59 @@ class MarketService:
         return dict(self.settings, tax=r["tax"], vp_bonus=r["vp_bonus"],
                     fame_verified=r["fame_steps"]["verified"])
 
+    def _quote(self, w, batch, rows):
+        """(result, row) for one entry (plan 071): a fresh sublist cache (it
+        carries lastSoldPrice), else a fresh batch row, else plan 002's
+        per-item sublist (own cache + backoff), else a stale batch row."""
+        row = rows.get(w["id"]) if w["sid"] == 0 else None
+        if row is not None and not batch["stale"]:
+            sub = self.client.peek(self.client._key("sublist", w["id"], w["sid"]),
+                                   TTL["sublist"])
+            if sub and not sub["stale"] and price_of(sub["data"]) is not None:
+                return sub, sub["data"]
+            return batch, row
+        res = self.client.sublist(w["id"], w["sid"])
+        if res["data"] is None and row is not None:
+            return batch, row
+        return res, res["data"]
+
     def watch(self):
+        if self.curate is not None:  # plan 071 auto-watch; an extra, never fatal
+            try:
+                self.curate()
+            except Exception:  # noqa: BLE001
+                pass
         vp, fame = self.settings["vp"], self.settings["fame_pct"]
+        watch = self.watchlist.items()
+        base = [w["id"] for w in watch if w["sid"] == 0]
+        batch, rows = None, {}
+        if base:  # plan 071: one batched GET per refresh for every base id
+            batch = self.client.search(base)
+            data = batch["data"] if isinstance(batch["data"], dict) else {}
+            for r in data.get("rows") or []:
+                rows.setdefault(r["id"], r)
         items = []
-        for w in self.watchlist.items():
-            res = self.client.sublist(w["id"], w["sid"])
-            sub = res["data"] if isinstance(res["data"], dict) else {}
+        for w in watch:
+            res, sub = self._quote(w, batch, rows)
+            sub = sub if isinstance(sub, dict) else {}
             price = price_of(sub)
             if res["age_s"] is not None:  # one sample per refresh (plan 052)
                 self.samples.record(w["id"], w["sid"], self.client.clock() - res["age_s"], price)
             bands = self.bands(w["id"], w["sid"])
             p20 = w.get("p20") is True
-            items.append({"id": w["id"], "sid": w["sid"], "name": sub.get("name"),
-                          "price": price, "stock": sub.get("currentStock"),
-                          "trades": sub.get("totalTrades"), "below": w.get("below"),
-                          "above": w.get("above"),
-                          "alert": alert_for(price, w.get("below"), w.get("above"),
-                                             bands=bands, p20=p20),
-                          "net": net_proceeds(price, vp, fame),
-                          "preorder": preorder_state(sub),
-                          "freshness": _freshness(res), "p20": p20, "bands": bands})
+            below, above, band = band_thresholds(w, bands)
+            it = {"id": w["id"], "sid": w["sid"], "name": sub.get("name"),
+                  "price": price, "stock": sub.get("currentStock"),
+                  "trades": sub.get("totalTrades"), "below": w.get("below"),
+                  "above": w.get("above"),
+                  "alert": alert_for(price, below, above, bands=bands, p20=p20),
+                  "net": net_proceeds(price, vp, fame),
+                  "preorder": preorder_state(sub),
+                  "freshness": _freshness(res), "p20": p20, "bands": bands}
+            if w.get("auto") is True:  # plan 071; manual rows keep their shape
+                it.update(auto=True, threshold=band,
+                          auto_band={"below": below, "above": above} if band else None)
+            items.append(it)
         self._last = [it["freshness"] for it in items]
         return {"items": items, "tax": self.tax(), "updated": iso(self.client.clock())}
 
@@ -443,22 +578,34 @@ class MarketService:
     def cached_price(self, item_id, sid=0):
         """Price from the sublist cache, stale or not, or None; never fetches
         (plan 035 EV costs)."""
+        return price_of(self._cached_sub(item_id, sid))
+
+    def _cached_sub(self, item_id, sid=0):
+        """The newer priced row of the sublist cache and (sid 0) the plan 071
+        batch cache, stale or not; never fetches."""
         res = self.client.peek(self.client._key("sublist", item_id, sid), TTL["sublist"])
-        return price_of(res["data"]) if res else None
+        sub = res["data"] if res else None
+        if sid != 0:
+            return sub
+        row, bres = self.client.search_row(item_id)
+        if price_of(row) is None:
+            return sub
+        if price_of(sub) is None or bres["age_s"] < res["age_s"]:
+            return row
+        return sub
 
     def cached_prices(self, item_id, sid=0):
         """{base, last} from the sublist cache, stale or not (None when absent);
         never fetches (plan 053 imperial payout vs input cost)."""
-        res = self.client.peek(self.client._key("sublist", item_id, sid), TTL["sublist"])
-        sub = res["data"] if res and isinstance(res["data"], dict) else {}
+        sub = self._cached_sub(item_id, sid)
+        sub = sub if isinstance(sub, dict) else {}
         return {k: (v if _is_int(v) and v > 0 else None)
                 for k, v in (("base", sub.get("basePrice")), ("last", sub.get("lastSoldPrice")))}
 
     def cached_quote(self, item_id, sid=0):
         """{price, preorder} from the sublist cache, stale or not; never fetches
         (plan 037 shopping list)."""
-        res = self.client.peek(self.client._key("sublist", item_id, sid), TTL["sublist"])
-        sub = res["data"] if res else None
+        sub = self._cached_sub(item_id, sid)
         return {"price": price_of(sub), "preorder": preorder_state(sub)}
 
     def source(self):
