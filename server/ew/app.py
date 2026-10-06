@@ -340,10 +340,11 @@ class Handler(BaseHTTPRequestHandler):
         return getattr(self.server.progress, ops[op])(arg)
 
     def _post_grind(self, body):
-        ops = {"start", "stop", "log", "delete", "add_spot", "buff", "clear_buff"}
+        ops = {"start", "stop", "log", "delete", "add_spot", "buff", "clear_buff",
+               "drop_toggle", "drop_override"}
         if len(body) != 1 or not (ops & set(body)):
-            raise ValueError("body must be one of "
-                             "{start|stop|log|delete|add_spot|buff|clear_buff: ...}")
+            raise ValueError("body must be one of {start|stop|log|delete|add_spot|buff|"
+                             "clear_buff|drop_toggle|drop_override: ...}")
         (op, arg), = body.items()
         return getattr(self.server.grind, op)(arg)
 

@@ -10,7 +10,7 @@
   const POLL_MS = 60000;
   const S = {
     data: null, at: 0, err: null, last: null, timer: null, ui: null, busy: false,
-    spot: null, buffMin: {}, preset: undefined, presetMin: '',
+    spot: null, buffMin: {}, preset: undefined, presetMin: '', dropOpen: false,
     // Plan 012 "Where next": GET /api/spots, refetched with each grind poll.
     recs: null, recsErr: null, goal: 'xp', whatIf: { ap: '', dp: '', level: '' }
   };
@@ -335,6 +335,61 @@
     ui.buffBody.appendChild(f);
   }
 
+  // Plan 038 "Drop rate": active drop buffs against the caps (rate and amount
+  // apart), a wasted flag over cap, toggles for passive sources and the
+  // Blessing of Agris ROI line (hidden by the server once the scroll is gone).
+  function drawDrops() {
+    const ui = S.ui;
+    const body = ui.dropBody;
+    body.textContent = '';
+    if (!S.data) { ui.dropPill.textContent = '-'; body.appendChild(el('div', 'ew-muted', S.err ? S.err : 'loading...')); return; }
+    const v = C.dropView(S.data);
+    ui.dropPill.textContent = v.error ? 'error' : (v.wasted ? 'wasted' : 'ok');
+    ui.dropPill.className = 'ew-pill ' + (v.error ? 'bad' : (v.wasted ? 'warn' : 'ok'));
+    if (v.error) { body.appendChild(el('div', 'ew-err', 'drop table: ' + v.error)); return; }
+    const box = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
+    const head = el('div', 'ew-srow');
+    head.appendChild(el('span', 'ew-mname', 'drop rate'));
+    head.appendChild(el('span', v.wasted ? 'ew-mprice ew-err' : 'ew-mprice', v.line));
+    box.appendChild(head);
+    if (v.amount) box.appendChild(el('div', 'ew-muted', v.amount + ' (separate, not capped)'));
+    v.active.forEach(function (a) {
+      const r = el('div', 'ew-srow');
+      r.appendChild(el('span', 'ew-mname', a.name));
+      r.appendChild(el('span', 'ew-muted ew-gnum', a.via));
+      r.appendChild(el('span', 'ew-mprice', a.text));
+      box.appendChild(r);
+    });
+    if (!v.active.length) box.appendChild(el('div', 'ew-muted', 'no drop buff active - arm a timer or tick a source'));
+    if (v.roi) {
+      const roi = el('div', v.roi.worth ? 'ew-num' : 'ew-muted', v.roi.text);
+      roi.title = v.roi.dates;
+      box.appendChild(roi);
+      box.appendChild(el('div', 'ew-muted', v.roi.verdict + ' - ' + v.roi.dates));
+    }
+    body.appendChild(box);
+    const det = el('details', 'ew-ldet');
+    det.open = S.dropOpen;
+    det.addEventListener('toggle', function () { S.dropOpen = det.open; });
+    det.appendChild(el('summary', null, 'sources (tick passive ones)'));
+    v.toggles.forEach(function (t) {
+      const lab = el('label', 'ew-srow');
+      lab.title = t.title;
+      const cb = el('input');
+      cb.type = 'checkbox';
+      cb.checked = t.on;
+      cb.addEventListener('change', function () {
+        send({ drop_toggle: { id: t.id, on: cb.checked } }, t.name + (cb.checked ? ' on' : ' off'))
+          .then(function (ok) { if (!ok) drawDrops(); });
+      });
+      lab.appendChild(cb);
+      lab.appendChild(el('span', 'ew-mname', t.name + (t.timer ? ' (timer)' : '')));
+      lab.appendChild(el('span', 'ew-mprice', t.value + (t.unverified ? ' ?' : '') + (t.overridden ? ' *' : '')));
+      det.appendChild(lab);
+    });
+    body.appendChild(det);
+  }
+
   function recRow(r, unlock) {
     const b = el('button', 'ew-grow ew-rrow');
     b.type = 'button';
@@ -392,6 +447,7 @@
     drawLog();
     drawSpots();
     drawBuffs(Date.now());
+    drawDrops();
   }
 
   function clock(now) {
@@ -532,11 +588,13 @@
     p.pill.textContent = 'avg silver/h';
     const b = card('Buffs');
     b.pill.textContent = 'tap to arm';
-    [s, w, l, p, b].forEach(function (x) { panel.appendChild(x.card); });
+    const d = card('Drop rate');
+    [s, w, l, p, b, d].forEach(function (x) { panel.appendChild(x.card); });
     S.ui = {
       form: s.form, msg: s.msg, clock: s.clock, activeSpot: s.activeSpot, sessionErr: s.err,
       sessionPill: s.pill, recBody: w.body, recPill: w.pill,
-      logBody: l.body, logPill: l.pill, spotBody: p.body, buffBody: b.body, buffClocks: []
+      logBody: l.body, logPill: l.pill, spotBody: p.body, buffBody: b.body, buffClocks: [],
+      dropBody: d.body, dropPill: d.pill
     };
     if (!S.timer) {
       setInterval(tick, 1000);

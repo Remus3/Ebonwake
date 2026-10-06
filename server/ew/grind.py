@@ -9,6 +9,7 @@ import datetime as _dt
 import re
 import threading
 import time
+from fractions import Fraction
 
 from . import levels
 from .today import _iso, _parse_iso, slug
@@ -29,10 +30,187 @@ SID_RE = re.compile(r"^s[0-9]{1,9}$")
 SEED_BUFFS = ("XP scroll", "Drop rate scroll", "Hot Time", "Value Pack", "Old Moon book",
               "Kamasylve blessing")
 
+# Plan 038 drop buffs: every game number (caps, scroll price, dates) lives in
+# the data file; tests/test_grind.py fails on such a literal in this module.
+DROPS_FILE = levels.DATA_DIR / "drop_buffs.json"
+BYPASS = ("none", "to400", "to500")  # applied in this order, each to its own cap
+CAP_KEYS = ("base_pct", "bypass_pct", "beyond_pct")  # cap for BYPASS[i]
+DROP_PCT_RANGE = (0, 1000)
+CAP_RANGE = (0, 10000)
+PER_WEEK_RANGE = (0, 1000)
+AGRIS_BUFF_ID = "agris-scroll"
+CAPS_ID = "caps"
+SCROLL_ID = "agris_scroll"
+DROP_ROW_FIELDS = ("id", "name", "bypass", "source", "verified")
+DROP_ROW_OPTIONAL = ("aliases", "rate_pct", "amount_pct", "note")
+CAPS_FIELDS = CAP_KEYS + ("source", "verified")
+SCROLL_INTS = {"price_silver": (0, MAX_SILVER), "minutes": (1, MAX_MINUTES),
+               "per_week": PER_WEEK_RANGE}
+SCROLL_DATES = ("sale_until_utc", "removed_utc")
+SCROLL_FIELDS = tuple(SCROLL_INTS) + SCROLL_DATES + ("source", "verified")
+MAX_DROP_TEXT = 240
+
 
 def silver_per_hour(silver, minutes):
     """silver * 60 / minutes, floored to an int; 0 when minutes is 0."""
     return silver * 60 // minutes if minutes > 0 else 0
+
+
+# -- drop buffs (plan 038) -----------------------------------------------------
+
+def _ok_num(v, lo, hi):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi
+
+
+def _tidy(x):
+    """A sum of pct values: int when whole, else rounded to 2 places."""
+    x = round(x, 2)
+    return int(x) if x == int(x) else x
+
+
+def _date(v):
+    if not isinstance(v, str) or not levels.DATE_RE.match(v):
+        return None
+    try:
+        return _dt.date.fromisoformat(v)
+    except ValueError:
+        return None
+
+
+def _check_caps(caps):
+    vals = [caps.get(k) for k in CAP_KEYS]
+    if not all(_ok_int(v, *CAP_RANGE) for v in vals) or vals != sorted(vals):
+        raise ValueError("caps must be ints with base_pct <= bypass_pct <= beyond_pct")
+    return caps
+
+
+def _check_drop_value(kind, field, v):
+    """Validated override / data value for one field of a buff row, caps or scroll."""
+    if kind == "buff":
+        if field in ("rate_pct", "amount_pct") and _ok_num(v, *DROP_PCT_RANGE):
+            return v
+        if field == "bypass" and v in BYPASS:
+            return v
+    elif kind == "caps":
+        if field in CAP_KEYS and _ok_int(v, *CAP_RANGE):
+            return v
+    elif field in SCROLL_INTS and _ok_int(v, *SCROLL_INTS[field]):
+        return v
+    elif field in SCROLL_DATES and _date(v) is not None:
+        return v
+    raise ValueError(f"bad {kind} field {field}")
+
+
+def _check_sourced(row, what):
+    if not levels._ok_text(row.get("source"), MAX_DROP_TEXT):
+        raise ValueError(f"{what}: source required")
+    ver = row.get("verified")
+    if not (ver is False or _date(ver) is not None):
+        raise ValueError(f"{what}: verified must be a date or false")
+
+
+def _check_drop_row(r):
+    if (not isinstance(r, dict) or not set(DROP_ROW_FIELDS) <= set(r)
+            or not set(r) <= set(DROP_ROW_FIELDS + DROP_ROW_OPTIONAL)):
+        raise ValueError("drop buff row has wrong fields")
+    if not isinstance(r["id"], str) or not ID_RE.match(r["id"]):
+        raise ValueError(f"drop buff id: {r['id']!r}")
+    _name(r["name"])
+    aliases = r.get("aliases", [])
+    if not isinstance(aliases, list):
+        raise ValueError(f"{r['id']}: aliases must be a list")
+    for a in aliases:
+        _name(a)
+    _check_drop_value("buff", "bypass", r["bypass"])
+    if "rate_pct" not in r and "amount_pct" not in r:
+        raise ValueError(f"{r['id']}: rate_pct or amount_pct required")
+    for k in ("rate_pct", "amount_pct"):
+        if k in r:
+            _check_drop_value("buff", k, r[k])
+    _check_sourced(r, r["id"])
+    if r["verified"] is False and not levels._ok_text(r.get("note"), MAX_DROP_TEXT):
+        raise ValueError(f"{r['id']}: an unverified row needs a note")
+    if "note" in r and not levels._ok_text(r["note"], MAX_DROP_TEXT):
+        raise ValueError(f"{r['id']}: bad note")
+
+
+def load_drop_data(path=DROPS_FILE):
+    """{caps, agris_scroll, buffs} from the tracked file, or ValueError."""
+    data = levels._read(path, "drop buffs")
+    if not isinstance(data, dict) or set(data) != {"caps", SCROLL_ID, "buffs"}:
+        raise ValueError("drop buffs must be {caps, agris_scroll, buffs}")
+    caps, scroll, rows = data["caps"], data[SCROLL_ID], data["buffs"]
+    if not isinstance(caps, dict) or set(caps) != set(CAPS_FIELDS):
+        raise ValueError("caps has wrong fields")
+    _check_caps(caps)
+    _check_sourced(caps, "caps")
+    if not isinstance(scroll, dict) or set(scroll) != set(SCROLL_FIELDS):
+        raise ValueError("agris_scroll has wrong fields")
+    for k in tuple(SCROLL_INTS) + SCROLL_DATES:
+        _check_drop_value("scroll", k, scroll[k])
+    if _date(scroll["sale_until_utc"]) > _date(scroll["removed_utc"]):
+        raise ValueError("agris_scroll sale ends after removal")
+    _check_sourced(scroll, SCROLL_ID)
+    if not isinstance(rows, list):
+        raise ValueError("buffs must be a list")
+    seen = set()
+    for r in rows:
+        _check_drop_row(r)
+        keys = {r["id"]} | {n.lower() for n in [r["name"]] + r.get("aliases", [])}
+        if keys & seen:
+            raise ValueError(f"duplicate drop buff: {r['id']}")
+        seen |= keys
+    return data
+
+
+def drop_stack(active, caps):
+    """Sum active drop buffs against the caps row.
+
+    Normal sources stack to caps.base_pct; `to400` sources then add their own
+    value up to caps.bypass_pct and `to500` sources up to caps.beyond_pct (a
+    bypass never lifts wasted normal %). Item drop AMOUNT is summed apart and
+    never capped. cap_used is the highest cap any active rate source reaches.
+    """
+    total = capped = amount = 0
+    cap_used = caps[CAP_KEYS[0]]
+    for tier, key in zip(BYPASS, CAP_KEYS):
+        add = sum(r.get("rate_pct", 0) for r in active if r["bypass"] == tier)
+        if add:
+            cap_used = max(cap_used, caps[key])
+            total += add
+            capped = min(capped + add, max(capped, caps[key]))
+    amount = sum(r.get("amount_pct", 0) for r in active)
+    return {"rate_total": _tidy(total), "rate_capped": _tidy(capped),
+            "wasted": _tidy(total - capped), "amount_total": _tidy(amount),
+            "cap_used": cap_used, "over_cap": total > capped}
+
+
+def agris_roi(silver_h, scroll, rate_before, rate_after, now):
+    """Blessing of Agris value at `silver_h`, from the scroll row (after overrides).
+
+    Drop rate multiplies drops by (100 + rate) %, so the scroll's capped uplift
+    is worth gain = (after - before) / (100 + before) of the spot's silver for
+    its minutes. break_even_silver_h is the silver/h at which that pays the
+    price; None when the scroll adds nothing. hidden once removed_utc is reached.
+    """
+    gain = Fraction(rate_after - rate_before) / (100 + Fraction(rate_before))
+    hours = Fraction(scroll["minutes"], 60)
+    price = scroll["price_silver"]
+    be = int(price / (hours * gain)) if gain > 0 else None
+    today = now.date()
+    out = {"price_silver": price, "minutes": scroll["minutes"],
+           "per_week": scroll["per_week"], "sale_until_utc": scroll["sale_until_utc"],
+           "removed_utc": scroll["removed_utc"],
+           "on_sale": today <= _date(scroll["sale_until_utc"]),
+           "hidden": today >= _date(scroll["removed_utc"]),
+           "rate_before": _tidy(rate_before), "rate_after": _tidy(rate_after),
+           "gain_pct": _tidy(float(gain * 100)), "break_even_silver_h": be,
+           "silver_h": silver_h,
+           "gain_silver": None, "net_silver": None, "worth": None}
+    if silver_h is not None:
+        gs = int(silver_h * hours * gain)
+        out.update(gain_silver=gs, net_silver=gs - price, worth=be is not None and gs >= price)
+    return out
 
 
 # -- validation ----------------------------------------------------------------
@@ -112,9 +290,17 @@ class GrindService:
     minutes, silver, trash}] (oldest first), "active": {spot, started}|null,
     "buffs": [{id, name, ends, xp_pct?}], "next_sid": int, "updated": "<iso>"}."""
 
-    def __init__(self, store, clock=time.time, presets=None, epoch=None):
+    def __init__(self, store, clock=time.time, presets=None, epoch=None,
+                 drops_path=DROPS_FILE):
         self.store = store
         self.clock = clock
+        # Plan 038 drop-buff table (tracked data); a bad file degrades to an
+        # error on the card and refuses drop writes.
+        self.drops, self.drops_error = None, None
+        try:
+            self.drops = load_drop_data(drops_path)
+        except ValueError as e:
+            self.drops_error = str(e)
         # `epoch` returns the newest started XP epoch or None (plan 018): until
         # one has started the presets offer the pre-patch value and no hint shows.
         self.epoch = epoch
@@ -166,8 +352,154 @@ class GrindService:
         nxt = doc.get("next_sid")
         top = max((int(s["id"][1:]) for s in sessions), default=0) + 1
         nxt = max(nxt, top) if _ok_int(nxt, 1, 10 ** 9 - 1) else top
+        drop_on, overrides = self._clean_drops(doc.get("drop_on"), doc.get("drop_overrides"))
         return {"spots": spots, "sessions": sessions, "active": active, "buffs": buffs,
-                "next_sid": nxt}
+                "next_sid": nxt, "drop_on": drop_on, "drop_overrides": overrides}
+
+    # -- drop buffs (plan 038) -------------------------------------------------
+
+    def _drop_kind(self, rid):
+        if rid == CAPS_ID:
+            return "caps"
+        if rid == SCROLL_ID:
+            return "scroll"
+        if self.drops is not None and rid in {r["id"] for r in self.drops["buffs"]}:
+            return "buff"
+        return None
+
+    def _clean_drops(self, on, overrides):
+        """Stored toggles / overrides; without the data file they pass through
+        untouched so a broken file never wipes operator values."""
+        if self.drops is None:
+            return (on if isinstance(on, list) else [],
+                    overrides if isinstance(overrides, dict) else {})
+        out_on = []
+        for rid in on if isinstance(on, list) else []:
+            if isinstance(rid, str) and self._drop_kind(rid) == "buff" and rid not in out_on:
+                out_on.append(rid)
+        out = {}
+        for rid, fields in (overrides if isinstance(overrides, dict) else {}).items():
+            kind = self._drop_kind(rid)
+            if kind is None or not isinstance(fields, dict):
+                continue
+            keep = {}
+            for f, v in fields.items():
+                try:
+                    keep[f] = _check_drop_value(kind, f, v)
+                except ValueError:
+                    continue
+            if kind == "caps":  # one at a time; a value breaking the order is dropped
+                caps = {k: self.drops["caps"][k] for k in CAP_KEYS}
+                for f in list(keep):
+                    try:
+                        _check_caps(dict(caps, **{f: keep[f]}))
+                        caps[f] = keep[f]
+                    except ValueError:
+                        del keep[f]
+            if keep:
+                out[rid] = keep
+        return out_on, out
+
+    def _drop_effective(self, doc):
+        """(caps, scroll, rows) after the operator's overrides."""
+        ov = doc["drop_overrides"]
+        caps = dict(self.drops["caps"], **ov.get(CAPS_ID, {}))
+        scroll = dict(self.drops[SCROLL_ID], **ov.get(SCROLL_ID, {}))
+        rows = [dict(r, **ov.get(r["id"], {}), overridden=r["id"] in ov)
+                for r in self.drops["buffs"]]
+        return caps, scroll, rows
+
+    def _drops_view(self, doc, buffs, spots, now):
+        if self.drops is None:
+            return {"error": self.drops_error}, None
+        caps, scroll, rows = self._drop_effective(doc)
+        armed = {b["name"].lower() for b in buffs if b["left_s"] is not None}
+        on = set(doc["drop_on"])
+        active, out_rows = [], []
+        for r in rows:
+            names = {n.lower() for n in [r["name"]] + r.get("aliases", [])}
+            via = "timer" if names & armed else ("toggle" if r["id"] in on else None)
+            if via:
+                active.append(dict(r, via=via))
+            out_rows.append({"id": r["id"], "name": r["name"], "aliases": r.get("aliases", []),
+                             "rate_pct": r.get("rate_pct"), "amount_pct": r.get("amount_pct"),
+                             "bypass": r["bypass"], "source": r["source"],
+                             "verified": r["verified"], "note": r.get("note"),
+                             "on": r["id"] in on, "timer": bool(names & armed),
+                             "overridden": r["overridden"]})
+        drops = dict(drop_stack(active, caps), error=None,
+                     caps={k: caps[k] for k in CAP_KEYS},
+                     active=[{"id": a["id"], "name": a["name"], "via": a["via"],
+                              "rate_pct": a.get("rate_pct"),
+                              "amount_pct": a.get("amount_pct"), "bypass": a["bypass"]}
+                             for a in active],
+                     buffs=out_rows)
+        agris = next((r for r in rows if r["id"] == AGRIS_BUFF_ID), None)
+        if agris is None:
+            return drops, None
+        rest = [a for a in active if a["id"] != AGRIS_BUFF_ID]
+        before = drop_stack(rest, caps)["rate_capped"]
+        after = drop_stack(rest + [agris], caps)["rate_capped"]
+        # Plan 005 spot average: the running session's spot, else the newest logged one.
+        ref = doc["active"]["spot"] if doc["active"] else (
+            doc["sessions"][-1]["spot"] if doc["sessions"] else None)
+        spot = next((s for s in spots if s["id"] == ref and s["minutes"] > 0), None)
+        roi = agris_roi(spot["silver_per_h"] if spot else None, scroll, before, after, now)
+        roi["spot"] = spot["id"] if spot else None
+        roi["spot_name"] = spot["name"] if spot else None
+        return drops, roi
+
+    def _need_drops(self):
+        if self.drops is None:
+            raise ValueError(f"drop buff table unavailable: {self.drops_error}")
+
+    def drop_toggle(self, arg):
+        """`{id, on}`: a passive drop source (node, fame, night...) on or off."""
+        self._need_drops()
+        arg = _fields(arg, "drop_toggle", ("id", "on"))
+        if not isinstance(arg["id"], str) or self._drop_kind(arg["id"]) != "buff":
+            raise ValueError(f"unknown drop buff: {arg['id']}")
+        if not isinstance(arg["on"], bool):
+            raise ValueError("on must be true or false")
+        with self._lock:
+            doc = self._load()
+            on = [i for i in doc["drop_on"] if i != arg["id"]]
+            doc["drop_on"] = on + [arg["id"]] if arg["on"] else on
+            self._save(doc)
+        return self.view()
+
+    def drop_override(self, arg):
+        """`{id, field, value}`: operator value for a buff row's rate_pct /
+        amount_pct / bypass, a caps field or an agris_scroll field; value null
+        restores the tracked value."""
+        self._need_drops()
+        arg = _fields(arg, "drop_override", ("id", "field", "value"))
+        kind = self._drop_kind(arg["id"]) if isinstance(arg["id"], str) else None
+        if kind is None:
+            raise ValueError(f"unknown drop row: {arg['id']}")
+        field, value = arg["field"], arg["value"]
+        allowed = {"buff": ("rate_pct", "amount_pct", "bypass"), "caps": CAP_KEYS,
+                   "scroll": tuple(SCROLL_INTS) + SCROLL_DATES}[kind]
+        if field not in allowed:
+            raise ValueError(f"field must be one of {', '.join(allowed)}")
+        if value is not None:
+            _check_drop_value(kind, field, value)
+        with self._lock:
+            doc = self._load()
+            row = dict(doc["drop_overrides"].get(arg["id"], {}))
+            row.pop(field, None)
+            if value is not None:
+                row[field] = value
+            if kind == "caps":
+                _check_caps(dict(self.drops["caps"], **row))
+            ov = dict(doc["drop_overrides"])
+            if row:
+                ov[arg["id"]] = row
+            else:
+                ov.pop(arg["id"], None)
+            doc["drop_overrides"] = ov
+            self._save(doc)
+        return self.view()
 
     def _save(self, doc):
         doc["sessions"] = doc["sessions"][-MAX_SESSIONS:]
@@ -229,8 +561,10 @@ class GrindService:
                     "xp_pct": p["xp_pct"] if patched else p["pre_patch_xp_pct"],
                     "patched": patched, "notes": p["notes"], "source": p["source"],
                     "verified": p["verified"]} for p in self.presets]
+        drops, roi = self._drops_view(doc, buffs, spots, now)
         return {"now": _iso(now), "active": active, "sessions": sessions, "spots": spots,
-                "buffs": buffs, "xp_presets": presets, "xp_presets_error": self.presets_error}
+                "buffs": buffs, "xp_presets": presets, "xp_presets_error": self.presets_error,
+                "drops": drops, "agris_roi": roi}
 
     def _patched(self):
         """True once an XP epoch has started (refute r1 minor 1); without an

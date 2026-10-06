@@ -4,10 +4,13 @@ No network, no game client: everything is operator input plus a seed of buff
 names. The clock is injected so elapsed/left times are exact.
 """
 
+import ast
 import datetime as dt
 import http.client
 import json
+import re
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -426,3 +429,324 @@ def test_state_reports_grind_source(gsrv):
     _, doc, _ = _req(gsrv, "GET", "/api/state")
     assert doc["sources"]["grind"]["status"] == "ok"
     assert doc["sources"]["grind"]["updated"] == T0.isoformat()
+
+
+# --- plan 038: drop-buff caps + Blessing of Agris ROI -------------------------
+
+CAPS = {"base_pct": 300, "bypass_pct": 400, "beyond_pct": 500}
+SCROLL = {"price_silver": 1_000_000_000, "minutes": 60, "sale_until_utc": "2026-10-22",
+          "removed_utc": "2026-11-05", "per_week": 10}
+
+
+def _row(rid, rate=None, amount=None, bypass="none"):
+    r = {"id": rid, "name": rid, "bypass": bypass}
+    if rate is not None:
+        r["rate_pct"] = rate
+    if amount is not None:
+        r["amount_pct"] = amount
+    return r
+
+
+def test_drop_stack_under_cap():
+    out = grind.drop_stack([_row("a", 100), _row("b", 50)], CAPS)
+    assert out["rate_total"] == 150 and out["rate_capped"] == 150
+    assert out["wasted"] == 0 and out["cap_used"] == 300 and out["over_cap"] is False
+
+
+def test_drop_stack_base_cap_wasted():
+    out = grind.drop_stack([_row("a", 100), _row("b", 100), _row("c", 100), _row("d", 50)], CAPS)
+    assert out["rate_total"] == 350 and out["rate_capped"] == 300
+    assert out["wasted"] == 50 and out["over_cap"] is True and out["cap_used"] == 300
+
+
+def test_drop_stack_bypass_order():
+    # 350 normal capped to 300, then +130 bypass sources up to 400, then +50 Agris to 500.
+    rows = [_row("a", 200), _row("b", 150), _row("arsha", 50, bypass="to400"),
+            _row("castle", 50, bypass="to400"), _row("earth", 20, bypass="to400"),
+            _row("node", 10, bypass="to400")]
+    out = grind.drop_stack(rows, CAPS)
+    assert out["rate_capped"] == 400 and out["cap_used"] == 400
+    assert out["rate_total"] == 480 and out["wasted"] == 80
+    out = grind.drop_stack(rows + [_row("agris", 50, bypass="to500")], CAPS)
+    assert out["rate_capped"] == 450 and out["cap_used"] == 500 and out["wasted"] == 80
+
+
+def test_drop_stack_bypass_never_lifts_normal_sources():
+    # Bypass sources only add their own value; they do not unlock wasted normal %.
+    out = grind.drop_stack([_row("a", 400), _row("node", 10, bypass="to400")], CAPS)
+    assert out["rate_capped"] == 310 and out["wasted"] == 100
+
+
+def test_drop_stack_agris_alone_from_low_base():
+    out = grind.drop_stack([_row("a", 100), _row("agris", 50, bypass="to500")], CAPS)
+    assert out["rate_capped"] == 150 and out["wasted"] == 0
+
+
+def test_drop_stack_amount_kept_separate():
+    out = grind.drop_stack([_row("scroll", 100, 50), _row("fever", None, 50),
+                            _row("x", 300)], CAPS)
+    assert out["amount_total"] == 100
+    assert out["rate_total"] == 400 and out["rate_capped"] == 300  # amount never capped
+    assert grind.drop_stack([], CAPS) == {"rate_total": 0, "rate_capped": 0, "wasted": 0,
+                                          "amount_total": 0, "cap_used": 300,
+                                          "over_cap": False}
+
+
+def test_drop_stack_caps_come_from_the_row():
+    out = grind.drop_stack([_row("a", 260), _row("b", 30, bypass="to400")],
+                           {"base_pct": 250, "bypass_pct": 270, "beyond_pct": 290})
+    assert out["rate_capped"] == 270 and out["cap_used"] == 270 and out["wasted"] == 20
+
+
+def test_drop_stack_fractional_values():
+    out = grind.drop_stack([_row("luck", 12.5), _row("a", 100)], CAPS)
+    assert out["rate_total"] == 112.5 and out["rate_capped"] == 112.5
+
+
+def test_agris_roi_arithmetic():
+    now = dt.datetime(2026, 10, 10, tzinfo=UTC)
+    # before 300 %, after 350 %: drops x4 -> x4.5 = +12.5 %; break-even 1 B / 0.125 = 8 B/h.
+    r = grind.agris_roi(10_000_000_000, SCROLL, 300, 350, now)
+    assert r["gain_pct"] == 12.5 and r["break_even_silver_h"] == 8_000_000_000
+    assert r["gain_silver"] == 1_250_000_000 and r["net_silver"] == 250_000_000
+    assert r["worth"] is True and r["hidden"] is False and r["on_sale"] is True
+    assert r["price_silver"] == 1_000_000_000 and r["minutes"] == 60
+    r = grind.agris_roi(1_000_000_000, SCROLL, 300, 350, now)
+    assert r["worth"] is False and r["net_silver"] == -875_000_000
+
+
+def test_agris_roi_minutes_and_no_gain():
+    now = dt.datetime(2026, 10, 10, tzinfo=UTC)
+    r = grind.agris_roi(1_000, dict(SCROLL, minutes=30, price_silver=100), 0, 50, now)
+    # +50 % for half an hour: break-even = 100 / (0.5 * 0.5) = 400/h
+    assert r["break_even_silver_h"] == 400 and r["worth"] is True
+    r = grind.agris_roi(1_000, SCROLL, 400, 400, now)
+    assert r["gain_pct"] == 0 and r["break_even_silver_h"] is None and r["worth"] is False
+    r = grind.agris_roi(None, SCROLL, 300, 350, now)
+    assert r["silver_h"] is None and r["gain_silver"] is None and r["worth"] is None
+
+
+def test_agris_roi_dates():
+    sale_end = dt.datetime(2026, 10, 22, 23, 0, tzinfo=UTC)
+    r = grind.agris_roi(1, SCROLL, 0, 50, sale_end)
+    assert r["on_sale"] is True and r["hidden"] is False
+    r = grind.agris_roi(1, SCROLL, 0, 50, dt.datetime(2026, 10, 23, tzinfo=UTC))
+    assert r["on_sale"] is False and r["hidden"] is False
+    r = grind.agris_roi(1, SCROLL, 0, 50, dt.datetime(2026, 11, 5, tzinfo=UTC))
+    assert r["hidden"] is True
+    assert r["sale_until_utc"] == "2026-10-22" and r["removed_utc"] == "2026-11-05"
+
+
+# data file
+
+
+def test_drop_data_schema():
+    data = grind.load_drop_data()
+    assert set(data) == {"caps", "agris_scroll", "buffs"}
+    caps = data["caps"]
+    assert caps["base_pct"] < caps["bypass_pct"] < caps["beyond_pct"]
+    assert caps["source"] and caps["verified"]
+    s = data["agris_scroll"]
+    assert s["price_silver"] > 0 and s["minutes"] > 0 and s["per_week"] > 0
+    assert s["sale_until_utc"] < s["removed_utc"] and s["source"]
+    ids, names = set(), set()
+    for r in data["buffs"]:
+        assert r["bypass"] in ("none", "to400", "to500")
+        assert "rate_pct" in r or "amount_pct" in r
+        assert r["source"] and (r["verified"] is False or isinstance(r["verified"], str))
+        if r["verified"] is False:
+            assert r["note"], r["id"]
+        for n in [r["name"]] + r.get("aliases", []):
+            assert n.lower() not in names, n
+            names.add(n.lower())
+        assert r["id"] not in ids
+        ids.add(r["id"])
+    by = {r["id"]: r for r in data["buffs"]}
+    assert by["agris-fever"]["verified"] is False and "rate_pct" not in by["agris-fever"]
+    assert by["ecology-knowledge"]["verified"] is False
+    assert by["agris-scroll"]["bypass"] == "to500"
+    assert {r["id"] for r in data["buffs"] if r["bypass"] == "to400"} == {
+        "arsha-server", "node-investment", "castle-buff", "thriving-earth"}
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d["caps"].update(bypass_pct=200),
+    lambda d: d["caps"].pop("source"),
+    lambda d: d["agris_scroll"].update(sale_until_utc="2026-13-01"),
+    lambda d: d["agris_scroll"].update(price_silver=-1),
+    lambda d: d["buffs"][0].update(bypass="to600"),
+    lambda d: d["buffs"][0].update(rate_pct=True),
+    lambda d: d["buffs"][0].pop("rate_pct") and d["buffs"][0].pop("amount_pct"),
+    lambda d: d["buffs"][0].update(verified=False, note=""),
+    lambda d: d["buffs"].append(dict(d["buffs"][0])),
+    lambda d: d["buffs"][0].update(extra=1),
+])
+def test_drop_data_rejects_bad(tmp_path, mutate):
+    data = json.loads(grind.DROPS_FILE.read_text(encoding="ascii"))
+    mutate(data)
+    p = tmp_path / "d.json"
+    p.write_text(json.dumps(data), encoding="ascii")
+    with pytest.raises(ValueError):
+        grind.load_drop_data(p)
+
+
+def _forbidden_constants(src):
+    tree = ast.parse(src)
+    docs = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            body = node.body
+            if (body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                docs.add(id(body[0].value))
+    bad = []
+    date = re.compile(r"\b2026-10-22\b|\b2026-11-05\b")
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or id(node) in docs:
+            continue
+        v = node.value
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, (int, float)) and v in (300, 400, 500, 1_000_000_000):
+            bad.append(v)
+        elif isinstance(v, str) and date.search(v):
+            bad.append(v)
+    return bad
+
+
+def test_no_drop_game_constants_in_grind_code():
+    src = (Path(grind.__file__)).read_text(encoding="ascii")
+    assert _forbidden_constants(src) == []
+
+
+@pytest.mark.parametrize("src, hits", [
+    ("x = 300", 1), ("x = 4e2", 1), ("x = 1_000_000_000", 1), ("x = 1e9", 1),
+    ("x = 500.0", 1), ("x = '2026-10-22'", 1), ("x = 'until 2026-11-05 maint'", 1),
+    ("x = 3000", 0), ("x = 1500", 0), ("x = 'x300'", 0), ("# 300\nx = 1", 0),
+    ("def f():\n    '''cap 300, 2026-10-22'''\n    return 1", 0), ("cap_300 = 1", 0),
+])
+def test_forbidden_constant_scanner(src, hits):
+    assert len(_forbidden_constants(src)) == hits
+
+
+# service integration
+
+
+def test_view_drops_from_timers_and_toggles(svc, clock):
+    d = svc.view()["drops"]
+    assert d["error"] is None and d["rate_total"] == 0 and d["cap_used"] == 300
+    svc.buff({"name": "Drop rate scroll", "minutes": 60})      # alias -> item collection scroll
+    svc.buff({"name": "Kamasylve blessing", "minutes": 60})
+    d = svc.drop_toggle({"id": "node-investment", "on": True})["drops"]
+    assert d["rate_total"] == 130 and d["rate_capped"] == 130 and d["amount_total"] == 50
+    assert d["cap_used"] == 400
+    via = {a["id"]: a["via"] for a in d["active"]}
+    assert via == {"item-collection-scroll": "timer", "kamasylve-blessing": "timer",
+                   "node-investment": "toggle"}
+    row = next(r for r in d["buffs"] if r["id"] == "node-investment")
+    assert row["on"] is True and row["overridden"] is False
+    clock.advance(3601)
+    d = svc.view()["drops"]
+    assert d["rate_total"] == 10  # timers expired, toggle stays
+    d = svc.drop_toggle({"id": "node-investment", "on": False})["drops"]
+    assert d["rate_total"] == 0
+
+
+def test_drop_toggle_bad(svc):
+    for arg in ({"id": "nope", "on": True}, {"id": "luck", "on": 1}, {"id": "luck"}, "luck"):
+        with pytest.raises(ValueError):
+            svc.drop_toggle(arg)
+
+
+def test_drop_override_rows_caps_scroll(svc):
+    d = svc.drop_override({"id": "tent-adventurers-luck", "field": "rate_pct",
+                           "value": 30})["drops"]
+    row = next(r for r in d["buffs"] if r["id"] == "tent-adventurers-luck")
+    assert row["rate_pct"] == 30 and row["overridden"] is True
+    doc = svc.drop_override({"id": "caps", "field": "base_pct", "value": 320})
+    assert doc["drops"]["caps"]["base_pct"] == 320 and doc["drops"]["cap_used"] == 320
+    doc = svc.drop_override({"id": "agris_scroll", "field": "price_silver", "value": 500})
+    assert doc["agris_roi"]["price_silver"] == 500
+    doc = svc.drop_override({"id": "agris_scroll", "field": "removed_utc",
+                             "value": "2026-10-01"})
+    assert doc["agris_roi"]["hidden"] is True
+    doc = svc.drop_override({"id": "agris_scroll", "field": "removed_utc", "value": None})
+    assert doc["agris_roi"]["hidden"] is False
+    d = svc.drop_override({"id": "tent-adventurers-luck", "field": "rate_pct",
+                           "value": None})["drops"]
+    row = next(r for r in d["buffs"] if r["id"] == "tent-adventurers-luck")
+    assert row["rate_pct"] == 50 and row["overridden"] is False
+
+
+@pytest.mark.parametrize("arg", [
+    {"id": "nope", "field": "rate_pct", "value": 1},
+    {"id": "luck", "field": "name", "value": "x"},
+    {"id": "luck", "field": "rate_pct", "value": -1},
+    {"id": "luck", "field": "rate_pct", "value": True},
+    {"id": "luck", "field": "bypass", "value": "to600"},
+    {"id": "caps", "field": "base_pct", "value": 450},          # above bypass cap
+    {"id": "caps", "field": "source", "value": "x"},
+    {"id": "agris_scroll", "field": "removed_utc", "value": "soon"},
+    {"id": "agris_scroll", "field": "minutes", "value": 0},
+    {"id": "luck", "field": "rate_pct"},
+])
+def test_drop_override_bad(svc, arg):
+    with pytest.raises(ValueError):
+        svc.drop_override(arg)
+
+
+def test_agris_roi_in_view_uses_spot_average(svc):
+    svc.add_spot("Gyfin")
+    svc.log({"spot": "gyfin", "minutes": 60, "silver": 2_000_000_000, "trash": 0})
+    svc.buff({"name": "Drop rate scroll", "minutes": 60})
+    roi = svc.view()["agris_roi"]
+    # 100 % -> 150 %: x2 -> x2.5 = +25 %; break-even 4 B/h; 2 B/h earns 500 M
+    assert roi["spot"] == "gyfin" and roi["silver_h"] == 2_000_000_000
+    assert roi["gain_pct"] == 25 and roi["break_even_silver_h"] == 4_000_000_000
+    assert roi["worth"] is False
+
+
+def test_agris_scroll_active_counts_once(svc):
+    svc.buff({"name": "Agris scroll", "minutes": 60})
+    doc = svc.view()
+    assert doc["drops"]["rate_capped"] == 50 and doc["drops"]["cap_used"] == 500
+    assert doc["agris_roi"]["gain_pct"] == 50  # before excludes the scroll itself
+
+
+def test_drop_state_survives_other_writes(svc):
+    svc.drop_toggle({"id": "night", "on": True})
+    svc.drop_override({"id": "night", "field": "rate_pct", "value": 15})
+    svc.add_spot("Gyfin")
+    assert svc.view()["drops"]["rate_total"] == 15
+
+
+def test_corrupt_drop_state_degrades(tmp_path, clock):
+    st = Store(tmp_path / "store")
+    grind.GrindService(st, clock=clock)
+    doc = st.get("grind")
+    doc["drop_on"] = ["night", 5, "nope", None]
+    doc["drop_overrides"] = {"night": {"rate_pct": "x", "amount_pct": 5},
+                             "caps": {"base_pct": 999}, "zzz": 1, "luck": []}
+    st.put("grind", doc)
+    d = grind.GrindService(st, clock=clock).view()["drops"]
+    assert d["rate_total"] == 10 and d["amount_total"] == 5 and d["caps"]["base_pct"] == 300
+
+
+def test_bad_drop_file_degrades(tmp_path, clock):
+    p = tmp_path / "d.json"
+    p.write_text("{", encoding="ascii")
+    s = grind.GrindService(Store(tmp_path / "store"), clock=clock, drops_path=p)
+    doc = s.view()
+    assert doc["drops"]["error"] and doc["agris_roi"] is None
+    with pytest.raises(ValueError):
+        s.drop_toggle({"id": "night", "on": True})
+
+
+def test_route_drop_ops(gsrv):
+    st, doc, _ = _req(gsrv, "POST", "/api/grind", {"drop_toggle": {"id": "night", "on": True}})
+    assert st == 200 and doc["drops"]["rate_total"] == 10 and "agris_roi" in doc
+    st, doc, _ = _req(gsrv, "POST", "/api/grind",
+                      {"drop_override": {"id": "night", "field": "rate_pct", "value": 20}})
+    assert st == 200 and doc["drops"]["rate_total"] == 20
+    st, _, _ = _req(gsrv, "POST", "/api/grind", {"drop_toggle": {"id": "nope", "on": True}})
+    assert st == 400
