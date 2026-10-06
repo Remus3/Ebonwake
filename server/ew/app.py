@@ -35,7 +35,8 @@ from urllib.parse import parse_qs
 from . import (__version__, bosses, coupons, crafting, deadeye, enhance, eventnotices, events,
                gamewatch, grind, imperial, inventory, itemnames, leveling, market, mounts, ocr, onboarding, pets,
                ports,
-               progress, settings, shopping, single, spots, summary, today, weekly, xpbooks)
+               playsession, progress, settings, shopping, single, spots, summary, today,
+               weekly, xpbooks)
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -263,10 +264,19 @@ class EWServer(ThreadingHTTPServer):
         rule, grants, verified = today.dice_preset()
         self.dice = gamewatch.DiceClock(self.store, rule, grants, verified=verified,
                                         clock=today_clock or time.time)
+        # Plan 062: login opens / exit (after a grace) closes an auto grind session.
+        self.play = playsession.PlaySession(
+            self.store, self.grind, self.summary, config=self._play_config,
+            clock=grind_clock or time.time, on_change=lambda: self.bus.bump("grind"))
+        self.grind.play = self.play.state
         listeners = getattr(self.game, "listeners", None)
         if isinstance(listeners, list):
             listeners.append(self.summary.on_game)
             listeners.append(self.dice.on_game)
+            listeners.append(self.play.on_game)
+        pollers = getattr(self.game, "pollers", None)
+        if isinstance(pollers, list):
+            pollers.append(self.play.tick)
         if ocr_cache_dir is None:  # beside the store, so a test store keeps OCR in tmp too
             ocr_cache_dir = Path(store_root).parent / "ocr" if store_root else RUNTIME / "ocr"
         # Plan 040: loot import matches against the spot's grind loot list.
@@ -282,6 +292,10 @@ class EWServer(ThreadingHTTPServer):
             prices=self.market.cached_prices, name=self.names.name)
         if game_poll:  # off by default so tests never probe processes; main() turns it on
             self.game.start()
+
+    def _play_config(self):
+        s = self.settings.view()["settings"]
+        return s["play.auto_session"], s["play.grace_s"]
 
     def _weekly_character(self):
         ch = self.progress.view(refresh=False)["character"]
@@ -489,7 +503,11 @@ class Handler(BaseHTTPRequestHandler):
                              "clear_buff|drop_toggle|drop_override|loot_item|loot_forget|"
                              "keep: ...}")
         (op, arg), = body.items()
-        return getattr(self.server.grind, op)(arg)
+        out = getattr(self.server.grind, op)(arg)
+        if op == "stop":  # plan 062: a manual Stop overrides the auto play session
+            self.server.play.manual_stop()
+            out = self.server.grind.view()
+        return out
 
     def _post_events(self, body):
         ops = {"add", "edit", "done", "delete", "purge_expired", "dismiss_notice"}
@@ -678,8 +696,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
-        game, lev, bus = self.server.game, self.server.leveling, self.server.bus
-        seq, lseq, dseq = game.seq, lev.seq, bus.snapshot()
+        game, lev, bus, play = self.server.game, self.server.leveling, self.server.bus, \
+            self.server.play
+        seq, lseq, dseq, pseq = game.seq, lev.seq, bus.snapshot(), play.seq
         interval = self.server.sse_interval
         try:
             msg = json.dumps({"type": "heartbeat", "now": _now_iso()})
@@ -702,6 +721,11 @@ class Handler(BaseHTTPRequestHandler):
                         out.append(f"event: leveling\ndata: {json.dumps(lev.view())}\n\n")
                     except Exception:  # noqa: BLE001
                         pass
+                if play.seq != pseq:  # plan 062: {state: open|closed, id}
+                    pseq = play.seq
+                    ev = play.event()
+                    if ev is not None:
+                        out.append(f"event: play_session\ndata: {json.dumps(ev)}\n\n")
                 now_seq = bus.snapshot()
                 for d in sorted(k for k in now_seq if now_seq[k] != dseq.get(k)):
                     out.append(f"event: {d}\ndata: {json.dumps(d)}\n\n")

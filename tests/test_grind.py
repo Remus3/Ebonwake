@@ -112,7 +112,8 @@ def test_add_spot_60_chars_ok(svc):
 def test_start_stop_session(svc, clock):
     svc.add_spot("Olun's Valley")
     doc = svc.start("oluns-valley")
-    assert doc["active"] == {"spot": "oluns-valley", "started": T0.isoformat(), "elapsed_s": 0}
+    assert doc["active"] == {"spot": "oluns-valley", "started": T0.isoformat(), "elapsed_s": 0,
+                             "auto": False}  # plan 062: manual start
     clock.advance(90 * 60 + 20)
     assert svc.view()["active"]["elapsed_s"] == 90 * 60 + 20
     doc = svc.stop({"silver": 900_000_000, "trash": 12000})

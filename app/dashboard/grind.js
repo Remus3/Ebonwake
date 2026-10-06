@@ -285,8 +285,9 @@
     const ui = S.ui;
     const f = ui.form;
     const a = active();
-    ui.sessionPill.textContent = a ? 'running' : (S.data ? 'idle' : '-');
-    ui.sessionPill.className = 'ew-pill ' + (a ? 'ok' : 'unknown');
+    const pill = C.sessionPill(S.data);  // plan 062: 'auto' when login opened it
+    ui.sessionPill.textContent = pill.text;
+    ui.sessionPill.className = 'ew-pill ' + pill.cls;
     ui.sessionErr.textContent = S.err ? (S.data ? 'last data - ' : '') + S.err : '';
     // Spot picker: keep the operator's choice across redraws.
     const cur = f.spot.value || S.spot;

@@ -187,6 +187,9 @@ class GameWatch:
         # Plan 046: `fn(prev, new, at)` called after each state change, outside
         # the lock; a failing listener never breaks the poll.
         self.listeners = []
+        # Plan 062: `fn(state, at)` called after EVERY poll (changed or not), after
+        # the listeners and outside the lock; a failing poller never breaks the poll.
+        self.pollers = []
 
     @classmethod
     def from_config(cls, cfg, clock=time.time, tasklist=None):
@@ -288,6 +291,11 @@ class GameWatch:
                     fn(prev, state, now)
                 except Exception:  # noqa: BLE001 - a listener never breaks the poll
                     pass
+        for fn in list(self.pollers):
+            try:
+                fn(state, now)
+            except Exception:  # noqa: BLE001 - a poller never breaks the poll
+                pass
         return state
 
     def wait_change(self, seq, timeout):
