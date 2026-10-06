@@ -33,7 +33,7 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import (__version__, autotick, bosses, context, coupons, crafting, deadeye, detect, enhance,
+from . import (__version__, autotick, autowatch, bosses, context, coupons, crafting, deadeye, detect, enhance,
                eventnotices, events, gamewatch, grind, imperial, inventory, maint, itemnames, leveling, market,
                mounts, ocr, ocrauto, onboarding, pets,
                ports,
@@ -264,6 +264,13 @@ class EWServer(ThreadingHTTPServer):
         self.crafting = crafting.CraftingService(
             self.store, price=lambda iid: self.market.cached_price(iid),
             tax=lambda: self.market.settings, name=self.names.name)
+        # Plan 071: auto-watch from the shopping list, the current / last spot's
+        # loot and recipe inputs, curated before each watch refresh; cache prices only.
+        self.autowatch = autowatch.AutoWatch(
+            self.market.watchlist, shopping=self.shopping.view,
+            loot=self.grind.loot_candidates, recipes=self.crafting.view,
+            price=self.market.cached_price)
+        self.market.curate = self.autowatch.sync
         if game_watch is None:
             # Only main() passes the real config; a bare make_server (every test)
             # never reads config/local.json (plan 008 refute round 1).

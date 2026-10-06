@@ -272,6 +272,20 @@
     return alertFor(it.price, it.below, it.above, it.bands, it.p20);
   }
 
+  // Plan 071: badge for an auto-watched row ({text, title}) or null for a
+  // manual row; title names the band thresholds when the server used them.
+  function autoWatchBadge(it) {
+    if (!it || typeof it !== 'object' || it.auto !== true) return null;
+    const b = it.auto_band;
+    if (it.threshold === 'auto band' && b && typeof b === 'object') {
+      const parts = [];
+      if (isNum(b.below)) parts.push('below ' + fmtSilverExact(b.below));
+      if (isNum(b.above)) parts.push('above ' + fmtSilverExact(b.above));
+      return { text: 'auto band', title: 'auto-watched; alert ' + parts.join(' / ') + ' (90-day p20 / p80)' };
+    }
+    return { text: 'auto', title: 'auto-watched from shopping list, loot or recipes; no band yet' };
+  }
+
   // Plan 052 band strip: positions (0..1) of p20/p50/p80 and the current
   // price on a scale spanning the band and the price, or null without a band.
   function bandStrip(bands, price) {
@@ -6283,6 +6297,7 @@
     alertFor: alertFor,
     MARKET_ALERTS: MARKET_ALERTS,
     watchAlert: watchAlert,
+    autoWatchBadge: autoWatchBadge,
     bandStrip: bandStrip,
     depthBars: depthBars,
     fmtAge: fmtAge,
