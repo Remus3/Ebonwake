@@ -691,7 +691,25 @@ def _migrate_steps(steps):
 
 def _default_character():
     return {"name": None, "cls": "Deadeye", "level": None,
-            "gs": {"ap": None, "aap": None, "dp": None}}
+            "gs": {"ap": None, "aap": None, "dp": None}, "gs_src": {}}
+
+
+GS_SOURCES = ("typed", "ocr")  # plan 066: who set each gs stat, and when
+
+
+def _clean_gs_src(raw, gs):
+    out = {}
+    for k in GS_KEYS:
+        e = raw.get(k) if isinstance(raw, dict) else None
+        if gs[k] is None or not isinstance(e, dict) or e.get("source") not in GS_SOURCES:
+            continue
+        try:
+            when = _dt.datetime.fromisoformat(e.get("at"))
+        except (TypeError, ValueError):
+            continue
+        if when.tzinfo is not None:
+            out[k] = {"source": e["source"], "at": e["at"]}
+    return out
 
 
 def _clean_character(c):
@@ -710,6 +728,7 @@ def _clean_character(c):
         v = gs.get(k)
         if _is_int(v) and GS_RANGE[0] <= v <= GS_RANGE[1]:
             out["gs"][k] = v
+    out["gs_src"] = _clean_gs_src(c.get("gs_src"), out["gs"])
     return out
 
 
@@ -1025,8 +1044,47 @@ class ProgressService:
             character.update(patch)
             if gs:
                 character["gs"].update(gs)
+                now = _iso_now(self.clock)
+                for k in gs:
+                    character["gs_src"][k] = {"source": "typed", "at": now}
             self._save(character, tracks)
         return self.view(refresh=False)
+
+    def gs_ocr(self, stat, value, shot_at, force=False):
+        """Plan 066, server side only (never a POST op): one gs stat read from a
+        screenshot taken at `shot_at` (ISO). A stat typed after the shot wins
+        (ValueError) unless `force` (the operator accepted it from review).
+        Returns the previous {value, src} for undo."""
+        if stat not in GS_KEYS or not _is_int(value) or not GS_RANGE[0] <= value <= GS_RANGE[1]:
+            raise ValueError(f"gs {stat} must be an int {GS_RANGE[0]}..{GS_RANGE[1]}")
+        with self._lock:
+            character, tracks = self._load()
+            src = character["gs_src"].get(stat)
+            if not force and src is not None \
+                    and _dt.datetime.fromisoformat(src["at"]) > _dt.datetime.fromisoformat(shot_at):
+                raise ValueError(f"{stat} was {'typed' if src['source'] == 'typed' else 'read'} "
+                                 "after this screenshot")
+            prev = {"value": character["gs"][stat], "src": src}
+            character["gs"][stat] = value
+            character["gs_src"][stat] = {"source": "ocr", "at": shot_at}
+            self._save(character, tracks)
+        return prev
+
+    def gs_restore(self, stat, expect, prev):
+        """Undo of gs_ocr: back to `prev` while the stat still holds `expect`."""
+        if stat not in GS_KEYS or not isinstance(prev, dict):
+            raise ValueError("unknown gs stat")
+        with self._lock:
+            character, tracks = self._load()
+            if character["gs"][stat] != expect \
+                    or (character["gs_src"].get(stat) or {}).get("source") != "ocr":
+                raise ValueError(f"{stat} changed since this commit; set it in Progress")
+            v = prev.get("value")
+            character["gs"][stat] = v if _is_int(v) and GS_RANGE[0] <= v <= GS_RANGE[1] else None
+            character["gs_src"].pop(stat, None)
+            if character["gs"][stat] is not None and isinstance(prev.get("src"), dict):
+                character["gs_src"][stat] = prev["src"]
+            self._save(character, tracks)
 
     def step(self, arg):
         """{track, step, done: bool}; marking done twice keeps the first stamp."""

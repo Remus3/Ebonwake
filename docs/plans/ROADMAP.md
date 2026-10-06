@@ -70,7 +70,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 063 | Auto-OCR every new screenshot while logged in: confidence-gated auto-commit + review queue | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 064 | Official notice auto-import: maintenance UTC, Hot Time windows, events + coupons auto-add with undo | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 065 | Zero-config first run: Documents / Steam library path auto-detect, self-ticking onboarding | [ ] open (priority) |
-| 066 | Progress inference from screenshot OCR: level, XP %, silver, buffs, AP/DP, book use | [ ] open |
+| 066 | Progress inference from screenshot OCR: level, XP %, silver, buffs, AP/DP, book use | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 067 | Context-aware overlay: widgets chosen by state (in game, idle, maint/reset/boss soon), pins and blocks | [ ] open |
 | 068 | Auto-tick inferable checklist rows: login dailies, dice ready, boss-shot suggestion | [ ] open |
 | 069 | One "What now" card on Home + overlay: next best action ranked by urgency | [ ] open |

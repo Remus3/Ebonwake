@@ -1,0 +1,15 @@
+{
+ "note": "Plan 066 OCR region hints: relative crops [x0, y0, x1, y1] (fractions of the screenshot width / height) of where a HUD field is usually drawn, per UI scale. A read inside its region wins a tie between two reads of the same field; nothing is cropped or penalised while a row is unverified. Estimated from the default BDO HUD layout, not measured; verify against a real screenshot and set verified true.",
+ "source": "estimate (default HUD layout), plan 066",
+ "read": "2026-10-06",
+ "scales": [
+  {"ui_scale": 100, "verified": false,
+   "regions": {
+    "level": [0.0, 0.0, 0.3, 0.12],
+    "xp_pct": [0.0, 0.0, 0.3, 0.12],
+    "silver": [0.55, 0.45, 1.0, 1.0],
+    "buffs": [0.0, 0.0, 0.5, 0.2],
+    "gear": [0.0, 0.1, 0.5, 0.9]
+   }}
+ ]
+}

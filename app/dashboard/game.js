@@ -91,21 +91,26 @@
     box.appendChild(el('div', 'ew-mname', 'Auto-OCR: ' + (a ? C.ocrAutoHead(a) : '-')));
     if (S.autoErr) box.appendChild(el('div', 'ew-err', S.autoErr));
     if (!a) return;
+    const sph = C.ocrSilverH(a);
+    if (sph) box.appendChild(el('div', 'ew-muted', sph));
     a.review.forEach(function (r) {
       const row = el('div', 'ew-grow');
       const n = el('span', 'ew-mname', C.ocrAutoLabel(r));
       n.title = r.file + (r.why ? ' - ' + r.why : '');
       row.appendChild(n);
       row.appendChild(btn('accept', function () { autoPost({ review: { id: r.id, action: 'accept' } }); }));
-      const inp = el('input', 'ew-in ew-ocrfix');
-      inp.type = 'text';
-      inp.placeholder = r.kind === 'silver' ? 'silver' : 'minutes left now';
-      row.appendChild(inp);
-      row.appendChild(btn('fix', function () {
-        const body = C.ocrFixBody(r.id, r.kind, inp.value);
-        if (!body) { S.autoErr = 'fix needs a whole number'; drawAuto(); return; }
-        autoPost(body);
-      }));
+      const hint = C.ocrFixHint(r.kind);
+      if (hint) {  // plan 066: a book-use suggestion is accept / discard only
+        const inp = el('input', 'ew-in ew-ocrfix');
+        inp.type = 'text';
+        inp.placeholder = hint;
+        row.appendChild(inp);
+        row.appendChild(btn('fix', function () {
+          const body = C.ocrFixBody(r.id, r.kind, inp.value);
+          if (!body) { S.autoErr = 'fix needs: ' + hint; drawAuto(); return; }
+          autoPost(body);
+        }));
+      }
       row.appendChild(btn('discard', function () { autoPost({ review: { id: r.id, action: 'discard' } }); }));
       box.appendChild(row);
     });

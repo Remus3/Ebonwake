@@ -12,7 +12,9 @@ Confidence: every extracted field is {value, conf 0..1, why}. Fields at or over
 `ocr.auto_commit_min` are committed (silver sample in store domain `silver`,
 buff timer through GrindService) with source `ocr:<file>` and an undo id; the
 rest go to store domain `ocr_review` (MAX_REVIEW, oldest dropped) for accept /
-fix / discard. Nothing reaches the game: the input is image files the operator
+fix / discard. Plan 066 adds level / XP % samples (held for review when they
+break the history), AP / AAP / DP and a book-use suggestion (always reviewed)
+through `ocrinfer`. Nothing reaches the game: the input is image files the operator
 saved with the game's own screenshot key, read after they are written.
 """
 
@@ -22,8 +24,12 @@ import re
 import threading
 import time
 
-from . import ocr
+from . import ocr, ocrinfer
 from .grind import MAX_BUFF_MINUTES, MAX_SILVER, SEED_BUFFS
+from .leveling import _ok_pct
+from .levels import LEVEL_RANGE
+from .progress import GS_KEYS, GS_RANGE
+from .xpbooks import SIZES
 
 AUTO_COMMIT_MIN = 0.9
 DAILY_CAP = 120
@@ -36,7 +42,8 @@ MAX_WINDOWS = 50
 VIEW_COMMITS = 20
 POLL_S = 2.0
 LOGGED_IN = "logged_in"
-KINDS = ("silver", "buff")
+KINDS = ("silver", "buff", "level", "gear", "book_use")
+FIX_KINDS = ("silver", "buff", "level", "gear")  # a book suggestion is accept / discard only
 
 # Silver confidence (separators between the digit groups of the read amount).
 CONF_GROUPED = 0.97      # 1,234,567 - the game's own format
@@ -209,8 +216,22 @@ def _check_value(kind, v):
         return v
     if kind == "buff" and _ok_int(v, 1, MAX_BUFF_MINUTES):
         return v
-    raise ValueError(f"{kind} value must be an int "
-                     f"{'0..' + str(MAX_SILVER) if kind == 'silver' else '1..' + str(MAX_BUFF_MINUTES)}")
+    if kind == "gear" and _ok_int(v, *GS_RANGE):
+        return v
+    if kind == "level":
+        if isinstance(v, dict) and set(v) == {"level", "pct"} \
+                and _ok_int(v["level"], *LEVEL_RANGE) and _ok_pct(v["pct"]):
+            return {"level": v["level"], "pct": v["pct"]}
+        raise ValueError(f"level value must be {{level {LEVEL_RANGE[0]}..{LEVEL_RANGE[1]}, "
+                         "pct 0..100 with at most 3 decimals}")
+    if kind == "book_use":
+        if isinstance(v, dict) and set(v) == {"size", "pct_before", "pct_after"} \
+                and v["size"] in SIZES and _ok_pct(v["pct_before"]) and _ok_pct(v["pct_after"]):
+            return dict(v)
+        raise ValueError("book_use value must be {size, pct_before, pct_after}")
+    ranges = {"silver": f"0..{MAX_SILVER}", "buff": f"1..{MAX_BUFF_MINUTES}",
+              "gear": f"{GS_RANGE[0]}..{GS_RANGE[1]}"}
+    raise ValueError(f"{kind} value must be an int {ranges.get(kind, '')}".rstrip())
 
 
 class AutoOcr:
@@ -220,11 +241,16 @@ class AutoOcr:
     `silver` {samples: [{id, at, value, source}]} (oldest first)."""
 
     def __init__(self, store, game, reader, grind, settings=None, clock=time.time,
-                 on_change=None):
+                 on_change=None, leveling=None, progress=None, play=None, regions=None):
         self.store = store
         self.game = game
         self.reader = reader              # OcrService (plan 009): .doc(name) -> {text, lines}
         self.grind = grind                # GrindService: buff / restore_buff
+        # Plan 066 (each optional; without one its fields are not read):
+        self.leveling = leveling          # LevelingService: level / XP samples, books
+        self.progress = progress          # ProgressService: gs stats
+        self.play = play                  # fn() -> PlaySession.view() (silver/h window)
+        self.regions = regions if regions is not None else ocrinfer.load_regions()
         self.settings = settings or (lambda: {})
         self.clock = clock
         self.on_change = on_change        # fn() after a commit / queue / undo
@@ -355,23 +381,61 @@ class AutoOcr:
         if s is not None:
             fields.append(s)
         fields += buff_fields(doc)
+        fields += self._progress_fields(shot["name"], doc)
         shot_at = _ts(shot.get("mtime")) or self.clock()
         touched = False
         for f in fields:
             if f["kind"] == "buff" and f["value"] - math.floor(
                     max(0.0, self.clock() - shot_at) / 60) < 1:
                 continue  # ran out since the shot: nothing left to arm or review
-            if f["conf"] >= mn:
+            hold, before = None, None
+            if f["kind"] == "level":
+                samples = self.leveling.samples()
+                hold = ocrinfer.check_level(samples, f["value"]["level"], f["value"]["pct"],
+                                            shot_at)
+                if hold is not None:
+                    f = dict(f, why=f"{f['why']}; {hold}")  # S7: never auto-committed
+                else:
+                    before = (ocrinfer.prev_sample(samples, shot_at), self.leveling.rate())
+            if hold is None and f["conf"] >= mn:
                 try:
                     self._commit(shot["name"], f["kind"], f["name"], f["value"], shot_at)
                     touched = True
+                    if before is not None:
+                        self._suggest_book(shot["name"], f["value"], shot_at, *before)
                     continue
-                except ValueError:
-                    pass
+                except ValueError as e:
+                    f = dict(f, why=f"{f['why']}; {e}")
             self._enqueue_review(shot["name"], f, shot_at)
             touched = True
         if touched:
             self._changed()
+
+    def _progress_fields(self, name, doc):
+        """Plan 066 fields for the services this worker was given."""
+        if self.leveling is None and self.progress is None:
+            return []
+        size = None
+        if getattr(self.game, "shot_dir", None) is not None:
+            size = ocrinfer.image_size(self.game.shot_dir / name)
+        out = []
+        if self.leveling is not None:
+            lv = ocrinfer.level_field(doc, size=size, regions=self.regions)
+            if lv is not None:
+                out.append(lv)
+        if self.progress is not None:
+            out += ocrinfer.gear_fields(doc, size=size, regions=self.regions)
+        return out
+
+    def _suggest_book(self, file, value, shot_at, prev, rate):
+        """Queue a book-use suggestion (never auto-committed) for an XP jump."""
+        books = getattr(self.leveling, "books", None)
+        if books is None:
+            return
+        recent = books.recent(value["level"], shot_at - ocrinfer.BOOK_RECENT_S)
+        sug = ocrinfer.book_suggestion(prev, value["level"], value["pct"], shot_at, rate, recent)
+        if sug is not None:
+            self._enqueue_review(file, sug, shot_at)
 
     def _changed(self):
         if self.on_change is not None:
@@ -414,6 +478,20 @@ class AutoOcr:
                 samples.append({"id": uid, "at": _iso(shot_at), "value": value,
                                 "source": f"ocr:{_str(file, 255)}"})
                 self.store.put("silver", {"samples": samples[-MAX_SAMPLES:]})
+            elif kind in ("level", "book_use"):
+                if self.leveling is None:
+                    raise ValueError("leveling is not available")
+                if kind == "level":
+                    entry["ts"] = self.leveling.ocr_sample(value["level"], value["pct"], shot_at)
+                else:
+                    used = self.leveling.book_use(value)["books"]["used"][0]
+                    entry["row"] = {k: used[k] for k in ("at", "size", "level", "pct_before",
+                                                         "pct_after")}
+            elif kind == "gear":
+                if self.progress is None or name not in GS_KEYS:
+                    raise ValueError("gear score is not available")
+                entry["prev"] = self.progress.gs_ocr(name, value, _iso(shot_at),
+                                                     force=via != "auto")
             else:
                 # `value` is minutes left at the shot; a fix is typed as minutes left now.
                 left = value - math.floor(max(0.0, now - shot_at) / 60) if at_shot else value
@@ -432,9 +510,16 @@ class AutoOcr:
             self._save_auto(d)
         return uid
 
+    @staticmethod
+    def _need(service):
+        if service is None:
+            raise ValueError("that service is not available")
+        return service
+
     def undo(self, uid):
         """Reverse one commit: the silver sample is removed, a buff timer goes
-        back to what it was before the commit."""
+        back to what it was before the commit; plan 066: the OCR level sample /
+        book use is removed, a gs stat goes back (each only while unchanged)."""
         if not isinstance(uid, str) or not re.fullmatch(r"u[0-9]{1,9}", uid):
             raise ValueError("undo must be an id like u3")
         with self._lock:
@@ -450,6 +535,17 @@ class AutoOcr:
                 self.store.put("silver", {"samples": [s for s in samples
                                                       if not (isinstance(s, dict)
                                                               and s.get("id") == uid)]})
+            elif c.get("kind") == "level":
+                self._need(self.leveling).ocr_sample_del(c.get("ts"))
+            elif c.get("kind") == "book_use":
+                lev = self._need(self.leveling)
+                idx = lev.books.used_index(c.get("row") or {}) if lev.books else None
+                if idx is None:
+                    raise ValueError("that book use was deleted; edit it in Leveling")
+                lev.book_del(idx)
+            elif c.get("kind") == "gear":
+                self._need(self.progress).gs_restore(c.get("name"), c.get("value"),
+                                                     c.get("prev"))
             else:
                 # Only while the timer is still the one this commit wrote: a later
                 # commit or a manual re-arm / clear is never overwritten.
@@ -497,6 +593,8 @@ class AutoOcr:
             item = next((i for i in r["items"] if i.get("id") == arg["id"]), None)
             if item is None or item.get("kind") not in KINDS:
                 raise ValueError(f"unknown review item: {arg['id']}")
+            if action == "fix" and item["kind"] not in FIX_KINDS:
+                raise ValueError(f"a {item['kind']} suggestion is accepted or discarded")
             if action != "discard":
                 value = arg["value"] if action == "fix" else item.get("value")
                 self._commit(item.get("file"), item["kind"], item.get("name"), value,
@@ -522,7 +620,18 @@ class AutoOcr:
                                          "shot_at")} for i in reversed(items)]
         return {"enabled": enabled, "commit_min": mn, "daily_cap": cap, "today": d["count"],
                 "pending": pending, "review": review, "commits": commits,
-                "silver": self._last_silver()}
+                "silver": self._last_silver(), "silver_h": self._silver_h()}
+
+    def _silver_h(self):
+        """Plan 066: silver/h between OCR silver samples in one play session."""
+        if self.play is None:
+            return None
+        try:
+            window = ocrinfer.session_window(self.play())
+        except Exception:  # noqa: BLE001 - a broken session feed never breaks the card
+            return None
+        samples = self.store.get("silver").get("samples")
+        return ocrinfer.silver_rate(samples if isinstance(samples, list) else [], window)
 
     # -- thread ------------------------------------------------------------------
 

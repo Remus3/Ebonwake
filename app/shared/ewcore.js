@@ -2943,23 +2943,51 @@
 
   const OCR_REVIEW_RE = /^r[0-9]{1,9}$/;
   const OCR_UNDO_RE = /^u[0-9]{1,9}$/;
-  const OCR_AUTO_KINDS = ['silver', 'buff'];
+  // Plan 066: + level {level, pct}, gear (ap / aap / dp int) and book_use
+  // {size, pct_before, pct_after} (accept / discard only).
+  const OCR_AUTO_KINDS = ['silver', 'buff', 'level', 'gear', 'book_use'];
   const OCR_REVIEW_MAX = 50;
+  const OCR_LEVEL_MAX = 75;  // server levels.LEVEL_MAX
+
+  function ocrPct(v) {
+    return isNum(v) && v >= 0 && v <= 100 && Math.abs(v * 1000 - Math.round(v * 1000)) < 1e-6;
+  }
+
+  function ocrLevelValue(v) {
+    return plainObject(v) && exact(v, ['level', 'pct']) && Number.isInteger(v.level) &&
+      v.level >= 1 && v.level <= OCR_LEVEL_MAX && ocrPct(v.pct);
+  }
+
+  function ocrBookValue(v) {
+    return plainObject(v) && exact(v, ['size', 'pct_before', 'pct_after']) &&
+      typeof v.size === 'string' && /^[a-z]{1,10}$/.test(v.size) && ocrPct(v.pct_before) &&
+      ocrPct(v.pct_after);
+  }
+
+  function ocrAutoValue(kind, v) {
+    if (kind === 'level') return ocrLevelValue(v) ? { level: v.level, pct: v.pct } : null;
+    if (kind === 'book_use') {
+      return ocrBookValue(v) ? { size: v.size, pct_before: v.pct_before, pct_after: v.pct_after } : null;
+    }
+    return Number.isInteger(v) && v >= 0 ? v : null;
+  }
 
   function validOcrReview(r) {
     if (!plainObject(r) || typeof r.id !== 'string' || !OCR_REVIEW_RE.test(r.id)) return false;
     if (r.action === 'fix') {
-      return exact(r, ['id', 'action', 'value']) && Number.isInteger(r.value) &&
-        r.value >= 0 && r.value <= 1e13;
+      return exact(r, ['id', 'action', 'value']) && (ocrLevelValue(r.value) ||
+        (Number.isInteger(r.value) && r.value >= 0 && r.value <= 1e13));
     }
     return (r.action === 'accept' || r.action === 'discard') && exact(r, ['id', 'action']);
   }
 
   function ocrAutoRow(r, re) {
     if (!plainObject(r) || typeof r.id !== 'string' || !re.test(r.id)) return null;
-    if (OCR_AUTO_KINDS.indexOf(r.kind) < 0 || !Number.isInteger(r.value) || r.value < 0) return null;
+    if (OCR_AUTO_KINDS.indexOf(r.kind) < 0) return null;
+    const value = ocrAutoValue(r.kind, r.value);
+    if (value === null) return null;
     return {
-      id: r.id, kind: r.kind, value: r.value,
+      id: r.id, kind: r.kind, value: value,
       name: typeof r.name === 'string' ? r.name.slice(0, 60) : r.kind,
       file: typeof r.file === 'string' ? r.file.slice(0, OCR_NAME_MAX) : '',
       conf: isNum(r.conf) && r.conf >= 0 && r.conf <= 1 ? r.conf : null,
@@ -2980,16 +3008,46 @@
       cap: Number.isInteger(d.daily_cap) && d.daily_cap >= 0 ? d.daily_cap : null,
       pending: Number.isInteger(d.pending) && d.pending >= 0 ? d.pending : 0,
       review: pick(d.review, OCR_REVIEW_RE),
-      commits: pick(d.commits, OCR_UNDO_RE)
+      commits: pick(d.commits, OCR_UNDO_RE),
+      silverH: ocrSilverHRow(d.silver_h)
     };
+  }
+
+  // Plan 066 silver/h between OCR silver reads in one play session.
+  function ocrSilverHRow(s) {
+    if (!plainObject(s) || !Number.isInteger(s.per_h) || !Number.isInteger(s.span_s) ||
+        s.span_s <= 0 || !Number.isInteger(s.n) || s.n < 2) return null;
+    return { per_h: s.per_h, span_s: s.span_s, n: s.n };
+  }
+
+  function ocrSilverH(a) {
+    const s = a && a.silverH;
+    if (!s) return '';
+    return 'silver/h this session: ' + String(s.per_h).replace(/\B(?=(\d{3})+(?!\d))/g, ',') +
+      ' (' + s.n + ' shots over ' + Math.round(s.span_s / 60) + 'm)';
+  }
+
+  function ocrValueText(r) {
+    // Exact digits: a review decision needs the read number, not a rounded 1.23M.
+    if (r.kind === 'silver') return 'silver ' + String(r.value).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    if (r.kind === 'level') return 'Lv ' + r.value.level + ' ' + r.value.pct + '%';
+    if (r.kind === 'gear') return r.name.toUpperCase() + ' ' + r.value;
+    if (r.kind === 'book_use') {
+      return r.value.size + ' book used? ' + r.value.pct_before + '% -> ' + r.value.pct_after + '%';
+    }
+    return r.name + ' ' + r.value + 'm';
   }
 
   // One review / commit row -> "silver 1,234,567" / "XP scroll 30m" (+ conf).
   function ocrAutoLabel(r) {
-    // Exact digits: a review decision needs the read number, not a rounded 1.23M.
-    const v = r.kind === 'silver' ? String(r.value).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : r.value + 'm';
     const c = r.conf === null || r.conf === undefined ? '' : ' (' + Math.round(r.conf * 100) + '%)';
-    return (r.kind === 'silver' ? 'silver' : r.name) + ' ' + v + c;
+    return ocrValueText(r) + c;
+  }
+
+  // Fix input placeholder per kind; '' = no fix (a book suggestion).
+  function ocrFixHint(kind) {
+    return { silver: 'silver', buff: 'minutes left now', level: 'level pct, e.g. 61 12.5',
+      gear: 'stat 0-999' }[kind] || '';
   }
 
   // Header line of the System card: "N to review".
@@ -3002,10 +3060,20 @@
 
   // Operator-typed fix value -> POST body, or null when it is not a whole number.
   function ocrFixBody(id, kind, text) {
+    if (kind === 'book_use') return null;
+    if (kind === 'level') {
+      // "61 12.5" / "Lv 61 12.500%"
+      const m = /^\s*(?:lv\.?\s*)?([0-9]{1,2})\s+([0-9]{1,3}(?:\.[0-9]{1,3})?)\s*%?\s*$/i
+        .exec(String(text === undefined || text === null ? '' : text));
+      if (!m) return null;
+      const lv = { review: { id: id, action: 'fix', value: { level: Number(m[1]), pct: Number(m[2]) } } };
+      return validOcrBody(lv) ? lv : null;
+    }
     const s = String(text === undefined || text === null ? '' : text).replace(/[,.\s]/g, '');
     if (!/^[0-9]{1,14}$/.test(s)) return null;
     const v = Number(s);
     if (kind === 'buff' && (v < 1 || v > 43200)) return null;
+    if (kind === 'gear' && v > 999) return null;
     const body = { review: { id: id, action: 'fix', value: v } };
     return validOcrBody(body) ? body : null;
   }
@@ -3320,7 +3388,7 @@
       source: typeof e.source === 'string' ? e.source : '', verified: e.verified === true, tracked: e.tracked === true };
   }
 
-  const LEVEL_SOURCES = ['typed', 'profile'];
+  const LEVEL_SOURCES = ['typed', 'profile', 'ocr'];  // plan 066: ocr = read from a screenshot
 
   function normalizeLeveling(d) {
     if (!plainObject(d) || !Array.isArray(d.milestones)) return null;
@@ -5832,6 +5900,8 @@
     ocrAutoLabel: ocrAutoLabel,
     ocrAutoHead: ocrAutoHead,
     ocrFixBody: ocrFixBody,
+    ocrFixHint: ocrFixHint,
+    ocrSilverH: ocrSilverH,
     normalizeOcr: normalizeOcr,
     ocrBuffBody: ocrBuffBody,
     ocrSilverInput: ocrSilverInput,
