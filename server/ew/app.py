@@ -14,7 +14,9 @@ block), /api/settings (plan 030), /api/pets
 /api/onboarding (plan 051), /api/crafting (plan 054), /api/imperial (plan 053),
 /api/overlay/context (plan 067; SSE `overlay_context` on change),
 /api/whatnow (plan 069; SSE `whatnow` carries the full view on change),
-/api/signals (plan 073, GET only), and POST
+/api/signals (plan 073, GET only), /api/prompts (plan 070: quiet gate, alert ladder,
+live prompts; stale suggestions / review rows / pending stops are left out of their own
+payloads), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
 /api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings + /api/pets +
 /api/inventory + /api/mounts + /api/onboarding + /api/crafting + /api/imperial behind one
@@ -40,8 +42,8 @@ from . import (__version__, autotick, autowatch, bossdrift, bosses, context, cou
                detect, enhance, eventnotices, events, gamewatch, grind, imperial, inventory, itemnames,
                leveling, maint, market, mounts, ocr, ocrauto, onboarding, pets,
                ports,
-               playsession, progress, settings, shopping, signals, single, spots, summary, today,
-               weekly, whatnow, xpbooks)
+               playsession, progress, prompts, settings, shopping, signals, single, spots, summary,
+               today, weekly, whatnow, xpbooks)
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -345,6 +347,12 @@ class EWServer(ThreadingHTTPServer):
             listeners.append(self.autotick.on_game)
         if isinstance(pollers, list):
             pollers.append(self.autotick.on_poll)
+        # Plan 070: prompt registry (expiry, dedupe) + game-closed quiet + ladder.
+        self.prompts = prompts.PromptRegistry(
+            self.store, clock=today_clock or time.time,
+            settings=lambda: self.settings.view()["settings"])
+        if isinstance(listeners, list):
+            listeners.append(self.prompts.on_game)
         # Plan 051: first-run checklist over the same config file + store.
         self.onboarding = onboarding.OnboardingService(self.store, self.settings.path,
                                                        clock=today_clock or time.time,
@@ -360,7 +368,8 @@ class EWServer(ThreadingHTTPServer):
             "bosses": self.bosses.view, "today": self.today_view, "grind": self.grind.view,
             "leveling": self.leveling.view, "maint": self._maint_inputs,
             "events": self.events.view, "market": self._market_alerts,
-            "ocr": self.ocr_auto.view}, clock=today_clock or time.time)
+            "ocr": lambda: self.ocr_auto_out(self.ocr_auto.view())},  # plan 070 gate
+            clock=today_clock or time.time)
         # Plan 073: per-signal liveness over local state only (never fetches or polls).
         self.signals = signals.SignalService({
             "session_log": self._sig_session_log, "screenshots": self._sig_screenshots,
@@ -436,6 +445,52 @@ class EWServer(ThreadingHTTPServer):
     def _weekly_character(self):
         ch = self.progress.view(refresh=False)["character"]
         return dict(ch, level=self.progress._level(ch))
+
+    # -- plan 070: stale prompts vanish from their payloads ------------------------
+
+    # Age = first seen by this registry, never the row's own date (a post date
+    # is not when the operator was first prompted).
+    def events_out(self, out, sug, sug_ev):
+        sug = dict(sug, candidates=self.prompts.keep(
+            "coupon", sug.get("candidates"), lambda c: c["code"].upper()))
+        sug_ev = dict(sug_ev, candidates=self.prompts.keep(
+            "event_suggestion", sug_ev.get("candidates"), lambda c: str(c["group_no"])))
+        return dict(out, suggested=sug, suggested_events=sug_ev)
+
+    def grind_out(self, out):
+        pend = out.get("pending_stop")
+        kept = self.prompts.keep("pending_stop", [pend] if pend else [],
+                                 lambda p: f"{p['started']}:{p['at']}")
+        return dict(out, pending_stop=kept[0] if kept else None)
+
+    def ocr_auto_out(self, out):
+        return dict(out, review=self.prompts.keep("ocr_review", out.get("review"),
+                                                  lambda r: str(r["id"])))
+
+    def prompt_timers(self, now):
+        """Time-based ladder sources the dashboard cannot see on its own:
+        daily / weekly reset and the next maintenance start."""
+        when = _dt.datetime.fromtimestamp(now, _dt.timezone.utc)
+        out = []
+        for name, title, fn in (("daily", "Daily reset", today.next_daily_reset),
+                                ("weekly", "Weekly reset", today.next_weekly_reset)):
+            at = fn(when).timestamp()
+            out.append({"key": f"resetSoon:{name}:{int(at)}", "at": at, "title": title})
+        try:
+            win = maint.next_window(
+                when, maint.slot(self.settings.view()["settings"]["events.maintenance_start_utc"]),
+                self.notices.maint_notices())
+        except Exception:  # noqa: BLE001 - a bad maintenance source never breaks the view
+            win = None
+        if win and win[0] > when:
+            at = win[0].timestamp()
+            out.append({"key": f"resetSoon:maint:{int(at)}", "at": at, "title": "Maintenance"})
+        return out
+
+    def prompts_view(self):
+        now = float(self.prompts.clock())
+        return self.prompts.view(game_state=self.game.view().get("state"),
+                                 timers=self.prompt_timers(now))
 
     def today_view(self, body=None):
         """GET /api/today: plan 003 checklist + plan 033 `weekly_plan` + plan 056 `dice`
@@ -544,7 +599,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
         if path == "/api/grind":
-            return self._send(200, self.server.grind.view())
+            return self._send(200, self.server.grind_out(self.server.grind.view()))
         if path == "/api/grind/loot":
             try:
                 spot = parse_qs(query).get("spot", [None])[0]
@@ -555,8 +610,8 @@ class Handler(BaseHTTPRequestHandler):
             # plan 064: the notice read (and its auto-add) first, so items include it
             sug_ev = self.server.notices.view(refresh=True)
             sug = self.server.coupons.view(refresh=True)
-            return self._send(200, dict(self.server.events.view(), suggested=sug,
-                                        suggested_events=sug_ev))
+            return self._send(200, self.server.events_out(self.server.events.view(), sug,
+                                                          sug_ev))
         if path == "/api/deadeye":
             return self._send(200, self.server.deadeye.view())
         if path == "/api/deadeye/enhance":
@@ -574,12 +629,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/game":
             return self._send(200, self.server.game.view())
         if path == "/api/ocr/auto":
-            return self._send(200, self.server.ocr_auto.view())
+            return self._send(200, self.server.ocr_auto_out(self.server.ocr_auto.view()))
         if path == "/api/leveling":
             self.server.notices.view(refresh=False)  # plan 064: import cached Hot Time reads
             return self._send(200, self.server.leveling.view())
         if path == "/api/bosses":
             return self._send(200, self.server.bosses_view(refresh=True))
+        if path == "/api/prompts":
+            return self._send(200, self.server.prompts_view())
         if path == "/api/overlay/context":
             return self._send(200, self.server.context.view())
         if path == "/api/spots":
@@ -665,6 +722,8 @@ class Handler(BaseHTTPRequestHandler):
         if op == "stop":  # plan 062: a manual Stop overrides the auto play session
             self.server.play.manual_stop()
             out = self.server.grind.view()
+        if isinstance(out, dict) and "pending_stop" in out:
+            out = self.server.grind_out(out)
         return out
 
     def _post_events(self, body):
@@ -681,9 +740,8 @@ class Handler(BaseHTTPRequestHandler):
         else:
             out = getattr(self.server.events, op)(arg)
             sug_ev = self.server.notices.view(refresh=False)
-        out["suggested"] = self.server.coupons.view(refresh=False)  # a POST never fetches
-        out["suggested_events"] = sug_ev
-        return out
+        # a POST never fetches
+        return self.server.events_out(out, self.server.coupons.view(refresh=False), sug_ev)
 
     def _post_deadeye(self, body):
         ops = {"note", "add_step", "edit_step", "step_done", "delete_step", "move_step",

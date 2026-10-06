@@ -57,9 +57,9 @@ test('postToast: every POST result -> one toast (ok / 404 warn / bad)', () => {
 
 test('NOTIFY_RULES: stable names, marketAlert + buffEnding on by default', () => {
   assert.deepStrictEqual(C.NOTIFY_RULES.map((r) => r.name),
-    ['marketAlert', 'buffEnding', 'hotTime', 'resetPassed', 'newCoupon', 'gameExit', 'bossSoon']);
+    ['marketAlert', 'buffEnding', 'hotTime', 'resetPassed', 'newCoupon', 'gameExit', 'bossSoon', 'resetSoon']);
   assert.deepStrictEqual(C.notifyPrefs({}), { marketAlert: true, buffEnding: true, hotTime: false,
-    resetPassed: false, newCoupon: false, gameExit: false, bossSoon: false });
+    resetPassed: false, newCoupon: false, gameExit: false, bossSoon: false, resetSoon: false });
   const p = C.notifyPrefs({ notify: { gameExit: true, buffEnding: false, hotTime: 'yes', bogus: true } });
   assert.strictEqual(p.gameExit, true);
   assert.strictEqual(p.buffEnding, false);
@@ -135,14 +135,18 @@ test('marketAlert: plan 052 below_p20 crossing fires once', () => {
   assert.deepStrictEqual(C.notifyRules(b, b, T0, ALL_ON), []);
 });
 
-test('buffEnding: armed buff with <= 5 min left, key per arming', () => {
+test('buffEnding: armed buff on the 15/5/1 min ladder (plan 070), key per arming and step', () => {
   const ends = new Date(T0 + 4 * 60000).toISOString();
   const g = { buffs: [{ id: 3, name: 'XP scroll', ends: ends }, { id: 4, name: 'Value Pack', ends: new Date(T0 + 3600000).toISOString() }] };
   const hits = C.notifyRules(null, snap({ grind: g, grindAt: T0 }), T0, ALL_ON);
-  assert.deepStrictEqual(hits, [{ key: 'buffEnding:3:' + ends, rule: 'buffEnding', title: 'Buff ending: XP scroll',
-    body: 'XP scroll ends in 4m 00s' }]);
-  assert.deepStrictEqual(C.notifyRules(null, snap({ grind: g, grindAt: T0 }), T0 + 5 * 60000, ALL_ON), [], 'expired: quiet');
-  assert.deepStrictEqual(C.notifyRules(null, snap({ grind: g, grindAt: T0 }), T0 - 2 * 60000, ALL_ON), [], '6 min left: quiet');
+  assert.deepStrictEqual(hits, [{ key: 'buffEnding:3:' + ends + ':5', rule: 'buffEnding', title: 'Buff ending: XP scroll',
+    body: 'XP scroll ends in 4m 00s', ladder: true }]);
+  assert.deepStrictEqual(C.notifyRules(null, snap({ grind: g, grindAt: T0 }), T0 + 4 * 60000, ALL_ON), [], 'expired: quiet');
+  assert.deepStrictEqual(C.notifyRules(null, snap({ grind: g, grindAt: T0 }), T0 - 12 * 60000, ALL_ON), [], '16 min left: quiet');
+  assert.deepStrictEqual(C.notifyRules(null, snap({ grind: g, grindAt: T0 }), T0 - 2 * 60000, ALL_ON).map((h) => h.key),
+    ['buffEnding:3:' + ends + ':15'], '6 min left: the 15 min step');
+  assert.deepStrictEqual(C.notifyRules(null, snap({ grind: g, grindAt: T0 }), T0 + 3 * 60000, ALL_ON).map((h) => h.key),
+    ['buffEnding:3:' + ends + ':1']);
   const rel = C.notifyRules(null, snap({ grind: { buffs: [{ name: 'Hot Time', left_s: 120 }] }, grindAt: T0 }), T0, ALL_ON);
   assert.strictEqual(rel.length, 1);
   assert.match(rel[0].key, /^buffEnding:Hot Time:/);
@@ -198,7 +202,7 @@ test('gameExit: running -> not running while a grind session is open', () => {
   assert.deepStrictEqual(C.notifyRules(null, off, T0, ALL_ON), []);
 });
 
-test('bossSoon (plan 032): 15 then 5 min before a spawn, through the ledger once each', () => {
+test('bossSoon (plan 032, ladder plan 070): 15, 5 then 1 min before a spawn, through the ledger once each', () => {
   const at = T0 + 20 * 60000;
   const bosses = { next: [{ bosses: ['Kzarka'], at_utc: new Date(at).toISOString().replace('.000Z', '+00:00'), day: '2026-10-05' }],
     looted: {} };
@@ -208,7 +212,8 @@ test('bossSoon (plan 032): 15 then 5 min before a spawn, through the ledger once
   for (let t = T0; t < at + 60000; t += 60000) {
     L.take(C.notifyRules(null, snap({ at: t, bosses: bosses }), t, on), t).forEach((h) => fired.push([h.rule, h.title]));
   }
-  assert.deepStrictEqual(fired, [['bossSoon', 'World boss in 15m: Kzarka'], ['bossSoon', 'World boss in 5m: Kzarka']]);
+  assert.deepStrictEqual(fired, [['bossSoon', 'World boss in 15m: Kzarka'], ['bossSoon', 'World boss in 5m: Kzarka'],
+    ['bossSoon', 'World boss in 1m: Kzarka']]);
   const h = C.notifyRules(null, snap({ bosses: bosses }), at - 60000, on)[0];
   assert.ok(C.validNotify({ title: h.title, body: h.body }));
   assert.strictEqual(h.body, 'Kzarka spawns in 1m 00s');
