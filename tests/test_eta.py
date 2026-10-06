@@ -27,3 +27,14 @@ def test_torn_line_is_skipped(tmp_path):
     with log.open("a") as fh:
         fh.write('{"kind": "x", "sec')
     assert eta.estimate("x", log=log) == 10
+
+
+def test_resolve_cmd_uses_which_for_shims(monkeypatch):
+    # Windows: npm is npm.cmd; subprocess without a shell cannot find it.
+    monkeypatch.setattr(eta.shutil, "which", lambda name: "/bin/" + name + ".cmd")
+    assert eta.resolve_cmd(["npm", "test"]) == ["/bin/npm.cmd", "test"]
+
+
+def test_resolve_cmd_leaves_unknown_alone(monkeypatch):
+    monkeypatch.setattr(eta.shutil, "which", lambda name: None)
+    assert eta.resolve_cmd(["nope", "-x"]) == ["nope", "-x"]
