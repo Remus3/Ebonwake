@@ -836,6 +836,10 @@ class OcrService:
         return {"shot": shot["name"], "spot": arg["spot"], "text": doc["text"],
                 "rows": out["rows"], "unmatched": out["unmatched"]}
 
+    def doc(self, name):
+        """Plan 063: the cached {text, lines} of a watcher-listed shot (OCR on a miss)."""
+        return self._doc(self._listed(name))
+
     def _doc(self, shot):
         cpath = self.cache_dir / f"{self._key(shot)}.json"
         with self._lock:

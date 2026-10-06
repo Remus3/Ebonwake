@@ -44,4 +44,85 @@ file edit.
 
 Depends on: 008, 009, 040.
 
+## As-built (lane build, 2026-10-06)
+
+Verifier: refute round 1 REFUTE (3 undo / expiry defects, fixed), round 2
+PASS. refute-rounds: 2/3. Host follow-up: run `tools/ocr_bench.py --live` and
+score commit precision at 0.9 with `ocrauto.silver_field` (deviation 4).
+
+Code: `server/ew/ocrauto.py` (AutoOcr, silver_field, buff_fields),
+`OcrService.doc` (ocr.py), `GrindService.restore_buff` (grind.py, undo only,
+not a POST op), settings keys `ocr.auto` / `ocr.auto_commit_min` /
+`ocr.daily_cap`, `GET /api/ocr/auto`, `POST /api/ocr {review: {id, action,
+value?}} | {undo: id}`, SSE domain `ocr`, System tab game card "Auto-OCR: N to
+review" (accept / fix / discard, last 5 commits with undo), Settings group
+"Screenshots (OCR)". Tests: `tests/test_ocr_auto.py`, `app/test/ocr_auto.test.js`.
+
+### As-built deviations
+
+1. Loot rows are not auto-extracted.
+   Decision: the auto pipeline commits / queues silver and buff fields only;
+   loot import stays on the plan 040 Import button.
+   Alternatives: queue loot rows against the active plan 005 session's spot;
+   commit them to a plan 062 session.
+   Why: plan 062 (the session loot rows would commit into) is not built, and
+   a queued loot row has no commit target for "accept".
+   Reverses if: plan 062 lands - then rows join `buff_fields`/`silver_field`
+   as a third kind with `1 - edit distance` confidence.
+2. Silver samples live in a new store domain `silver` ({samples: [{id, at,
+   value, source}]}, newest 500).
+   Alternatives: write into a grind session's silver field.
+   Why: no silver-sample domain existed; a bag/wallet reading is not a session
+   result, and plausibility needs "the last committed silver".
+   Reverses if: a later plan adds a silver history; migrate the samples there.
+3. Engine agreement is wired (`silver_field(..., alt=)`) but the normal path
+   runs one engine (the plan 009 chain) per shot, so `alt` is None there.
+   Alternatives: always run Windows OCR as a second engine.
+   Why: Windows OCR read 105/288 on the plan 009 bench; requiring agreement
+   would cut recall to about a third and double OCR time.
+   Reverses if: the live bench below shows precision < 0.99.
+4. Bench: the plan 009 render bench needs PowerShell rendering + Tesseract on
+   the host, which a sandboxed lane cannot reach. The CI gate is a replay
+   bench (`test_bench_commit_precision_at_default_threshold`): the bench's
+   288 amount draws through the error classes plan 009 / 016 measured (clean,
+   dot, space, spaced separator, dropped comma, truncated / garbled group,
+   joined neighbour number). Precision 1.00 by construction of the classes
+   (only clean and dot-grouped reads clear 0.9), recall about 0.54 (asserted
+   >= 0.4). A single wrong glyph that keeps valid grouping (4/288 live misses in
+   plan 009) cannot be seen in text; at that rate live precision could be
+   ~0.986. Mitigations: every auto commit is listed with undo; the
+   plausibility check (10x off the last committed silver) catches magnitude
+   errors.
+   Alternatives: mandatory engine agreement (see 3); Tesseract per-word
+   confidence (needs live calibration).
+   Why: no host access from the lane; the gate must run in CI.
+   Reverses if: a host run of the live bench measures commit precision < 0.99
+   - then add Tesseract word confidence as a silver signal.
+5. Buff names: exact (normalised) match = ratio 1.0; otherwise the plan 040
+   fuzzy match (edit distance <= 0.25) against the seed buff names gives
+   `1 - distance`, so a misread name never reaches the default 0.9 gate.
+   A time read from a neighbour line caps at 0.85 (queued at the default).
+6. Committed buff minutes are the read minutes minus whole minutes since the
+   shot's mtime; a buff that ran out since the shot is neither committed nor
+   queued. In review, accept applies the same rule (an expired item says so);
+   fix takes minutes left NOW. Undo restores the timer's `ends` and `armed`,
+   and only while the timer is still the one the commit wrote (a later commit
+   or a manual re-arm / clear is never overwritten; verifier r1 findings 1-3).
+7. Shots outside a logged_in window and shots over the daily cap are marked
+   seen and never auto-read (the Read button still works). `ocr.daily_cap`
+   accepts 0..1000 (0 = auto-read nothing).
+8. Merge onto main (resolve lane, 2026-10-06): conflicts in
+   `server/ew/settings.py` (SPEC), `app/shared/ewcore.js` (SETTINGS_GROUPS)
+   and `app/test/settings.test.js` (group order) against plans 062 / 064.
+   Decision: union - main's `notices.auto_add`, `play.auto_session`,
+   `play.grace_s` and the "Play session" group stay, the `ocr.*` keys and the
+   "Screenshots (OCR)" group follow them as the last group.
+   Alternatives: OCR group before Play session (plan-number order).
+   Why: both sides are independent keys; appending keeps main's existing order
+   and the client/server allowlist parity test unchanged in shape.
+   Reverses if: the Settings tab is reordered by a later plan.
+   Note: deviation 1's reversal trigger (plan 062 landed) is now met; loot
+   auto-extraction into the plan 062 session is NOT built in this resolve
+   (merge-only scope) and is left for a follow-up plan.
+
 Dependency guard: before writing code the lane checks that `server/ew/gamewatch.py` (plan 008), `server/ew/ocr.py` (plan 009) and `server/ew/grind.py` (plan 040) exist. If any is missing, the lane changes nothing, writes `"status": "blocked", "needs": ["008", "009", "040"]` into its progress JSON (`ops/loop/control/progress/p063-build.json`) and exits 0.

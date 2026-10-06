@@ -33,7 +33,7 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 from . import (__version__, bosses, coupons, crafting, deadeye, enhance, eventnotices, events,
-               gamewatch, grind, imperial, inventory, itemnames, leveling, market, mounts, ocr, onboarding, pets,
+               gamewatch, grind, imperial, inventory, itemnames, leveling, market, mounts, ocr, ocrauto, onboarding, pets,
                ports,
                playsession, progress, settings, shopping, single, spots, summary, today,
                weekly, xpbooks)
@@ -288,6 +288,14 @@ class EWServer(ThreadingHTTPServer):
         # Plan 040: loot import matches against the spot's grind loot list.
         self.ocr = ocr.OcrService(self.game, ocr_cache_dir, runner=ocr_runner,
                                   loot_names=self.grind.loot_names)
+        # Plan 063: every shot taken while logged in is read on its own; confident
+        # fields commit (undoable), the rest wait in the System review card.
+        self.ocr_auto = ocrauto.AutoOcr(
+            self.store, self.game, self.ocr, self.grind,
+            settings=lambda: self.settings.view()["settings"], clock=grind_clock or time.time,
+            on_change=self._ocr_auto_changed)
+        if isinstance(listeners, list):
+            listeners.append(self.ocr_auto.on_game)
         # Plan 051: first-run checklist over the same config file + store.
         self.onboarding = onboarding.OnboardingService(self.store, self.settings.path,
                                                        clock=today_clock or time.time)
@@ -298,6 +306,11 @@ class EWServer(ThreadingHTTPServer):
             prices=self.market.cached_prices, name=self.names.name)
         if game_poll:  # off by default so tests never probe processes; main() turns it on
             self.game.start()
+            self.ocr_auto.start()
+
+    def _ocr_auto_changed(self):
+        self.bus.bump("ocr")
+        self.bus.bump("grind")
 
     def _play_config(self):
         s = self.settings.view()["settings"]
@@ -313,6 +326,7 @@ class EWServer(ThreadingHTTPServer):
                     weekly_plan=self.weekly.view(), dice=self.dice.status())
 
     def server_close(self):
+        self.ocr_auto.stop()
         self.game.stop()
         super().server_close()
 
@@ -432,6 +446,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(e)})
         if path == "/api/game":
             return self._send(200, self.server.game.view())
+        if path == "/api/ocr/auto":
+            return self._send(200, self.server.ocr_auto.view())
         if path == "/api/leveling":
             self.server.notices.view(refresh=False)  # plan 064: import cached Hot Time reads
             return self._send(200, self.server.leveling.view())
@@ -561,6 +577,12 @@ class Handler(BaseHTTPRequestHandler):
         return out
 
     def _post_ocr(self, body):
+        # Plan 063: {"review": {id, action, value?}} / {"undo": id} act on the
+        # auto-OCR queue; every other body is a plan 009 / 040 read.
+        if isinstance(body, dict) and set(body) == {"review"}:
+            return self.server.ocr_auto.review(body["review"])
+        if isinstance(body, dict) and set(body) == {"undo"}:
+            return self.server.ocr_auto.undo(body["undo"])
         return self.server.ocr.read(body)
 
     def _post_leveling(self, body):

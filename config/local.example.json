@@ -32,9 +32,12 @@
     "silent": true
   },
   "ocr": {
-    "_doc": "engine: auto (Tesseract if found, else Windows OCR) | tesseract | windows. tesseract: optional path to tesseract.exe when not on PATH or in the default install dir.",
+    "_doc": "engine: auto (Tesseract if found, else Windows OCR) | tesseract | windows. tesseract: optional path to tesseract.exe when not on PATH or in the default install dir. auto / auto_commit_min / daily_cap: plan 063 auto-OCR of screenshots taken while logged in.",
     "engine": "auto",
-    "tesseract": ""
+    "tesseract": "",
+    "auto": true,
+    "auto_commit_min": 0.9,
+    "daily_cap": 120
   },
   "loop": {
     "_doc": "tools/ew_loop.py tick. inbox_dir / outbox_dir default to <root>/moon_sync_inbox and moon_sync_outbox. max_notes_per_day: kit v8 item 14 cap 6 (may lower, never raise; only ORDER/FIX/RULING-class notes are exempt, order-closing ANSWERs count).",

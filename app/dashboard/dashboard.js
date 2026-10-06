@@ -17,7 +17,7 @@
   const H = { version: null, health: null, sources: null, lastOkMs: null, sseOk: null, restarting: false };
   // Plan 049: the one /events stream fans out here; modules subscribe in mount().
   const bus = window.EWBus = C.createBus();
-  const DOMAINS = ['today', 'grind', 'game', 'leveling', 'market', 'progress', 'events'];
+  const DOMAINS = ['today', 'grind', 'game', 'leveling', 'market', 'progress', 'events', 'ocr'];
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
