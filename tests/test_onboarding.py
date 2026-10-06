@@ -33,12 +33,16 @@ def _svc(tmp_path, doc=None):
     return onboarding.OnboardingService(store, cfg, clock=lambda: T0), store, cfg
 
 
-def test_fresh_install_nothing_done(tmp_path):
+def _ticked(view):
+    return [k for k, d in _done(view).items() if d]
+
+
+def test_fresh_install_only_default_overlay_done(tmp_path):
     svc, _, _ = _svc(tmp_path)
     v = svc.view()
     assert [s["id"] for s in v["steps"]] == IDS
-    assert not any(_done(v).values())
-    assert v["done"] == 0 and v["total"] == len(IDS)
+    assert _ticked(v) == ["overlay"]  # plan 065: the default corner kept counts
+    assert v["done"] == 1 and v["total"] == len(IDS)
     assert v["complete"] is False and v["dismissed"] is False and v["show"] is True
     for s in v["steps"]:
         assert s["title"] and s["hint"] and s["link"]["tab"]
@@ -47,13 +51,13 @@ def test_fresh_install_nothing_done(tmp_path):
 def test_missing_or_bad_config_is_not_an_error(tmp_path):
     store = Store(tmp_path / "store")
     v = onboarding.status(tmp_path, store, config_path=tmp_path / "nope.json")
-    assert not any(_done(v).values())
+    assert _ticked(v) == ["overlay"]
     bad = tmp_path / "bad.json"
     bad.write_text("{nope", encoding="utf-8")
-    assert not any(_done(onboarding.status(tmp_path, store, config_path=bad)).values())
+    assert _ticked(onboarding.status(tmp_path, store, config_path=bad)) == ["overlay"]
     arr = tmp_path / "arr.json"
     arr.write_text("[1]", encoding="utf-8")
-    assert not any(_done(onboarding.status(tmp_path, store, config_path=arr)).values())
+    assert _ticked(onboarding.status(tmp_path, store, config_path=arr)) == ["overlay"]
 
 
 def test_status_defaults_to_root_config(tmp_path):
@@ -104,9 +108,9 @@ def test_overlay_anchor_key_present_and_valid(tmp_path, anchor, ok):
     assert _done(svc.view())["overlay"] is ok
 
 
-def test_overlay_anchor_absent(tmp_path):
+def test_overlay_anchor_absent_is_the_default_kept(tmp_path):
     svc, _, _ = _svc(tmp_path, {"overlay": {"scale": 1.2}})
-    assert _done(svc.view())["overlay"] is False
+    assert _done(svc.view())["overlay"] is True  # plan 065 auto-tick
 
 
 def test_watch_needs_three_items(tmp_path):
