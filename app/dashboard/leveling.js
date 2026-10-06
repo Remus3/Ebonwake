@@ -150,13 +150,19 @@
     ui.wins.textContent = '';
     ui.samples.textContent = '';
     if (!d) return;
-    if (!d.hot_windows.length) ui.wins.appendChild(el('div', 'ew-muted', 'No Hot Time windows. Copy them from the event notice (UTC).'));
+    if (!d.hot_windows.length) ui.wins.appendChild(el('div', 'ew-muted', 'No Hot Time windows. Copy them from the event notice (pick PT for patch-note times).'));
+    const now = Date.now();
     d.hot_windows.forEach(function (w) {
       const r = el('div', 'ew-lrow');
       const t = el('span', 'ew-mname', String(w.label || w.id));
       t.title = String(w.label || '');
       r.appendChild(t);
-      r.appendChild(el('span', 'ew-muted ew-gnum', C.fmtDays(w.days) + ' ' + w.start + '-' + w.end));
+      // Plan 048: shown in local time, the stored UTC window on hover.
+      const v = C.hotWindowView(w, { now: now });
+      const when = el('span', 'ew-muted ew-gnum', v ? C.fmtDays(v.days) + ' ' + v.start + '-' + v.end :
+        C.fmtDays(w.days) + ' ' + w.start + '-' + w.end + ' UTC');
+      if (v) when.title = v.title;
+      r.appendChild(when);
       r.appendChild(el('span', 'ew-mprice ew-gnum', '+' + w.pct + '%'));
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';
@@ -178,7 +184,7 @@
       t.title = 'edit: ' + e.id + (e.source ? ' - ' + e.source : '');
       t.addEventListener('click', function () { fillEpoch(e); });
       r.appendChild(t);
-      r.appendChild(el('span', 'ew-muted ew-gnum', e.starts_utc.slice(0, 16).replace('T', ' ') + ' UTC'));
+      r.appendChild(localSpan('ew-muted ew-gnum', e.starts_utc, 0));
       r.appendChild(el('span', 'ew-muted', e.verified ? 'verified' : 'verify'));
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';
@@ -191,7 +197,7 @@
     d.samples.forEach(function (s) {
       if (typeof s.ts !== 'string') return;
       const r = el('div', 'ew-lrow' + (s.pre_patch === true ? ' ew-stale' : ''));
-      r.appendChild(el('span', 'ew-muted ew-gnum', s.ts.slice(5, 16).replace('T', ' ')));
+      r.appendChild(localSpan('ew-muted ew-gnum', s.ts, 5));
       r.appendChild(el('span', 'ew-mprice ew-gnum', 'Lv ' + s.level));
       // Plan 041: a server-written profile marker has no XP percent.
       r.appendChild(s.source === 'profile' ? el('span', 'ew-muted', '(profile)') :
@@ -207,10 +213,19 @@
     });
   }
 
+  // Plan 048: a stored UTC stamp as local 'YYYY-MM-DD HH:MM' (from `cut`), UTC on hover.
+  function localSpan(cls, iso, cut) {
+    const t = C.fmtLocal(iso);
+    const s = el('span', cls, t ? t.text.slice(cut) : String(iso).slice(cut, 16).replace('T', ' ') + ' UTC');
+    if (t) s.title = t.title;
+    return s;
+  }
+
   function fillEpoch(e) {
     const f = S.ui.ep;
     f.id.value = e.id;
-    f.start.value = e.starts_utc.slice(0, 16).replace('T', ' ');
+    const t = C.fmtLocal(e.starts_utc, { zone: f.zone.value });
+    f.start.value = t ? t.text : e.starts_utc.slice(0, 16).replace('T', ' ');
     f.label.value = e.label;
     f.source.value = e.source;
     f.verified.checked = e.verified;
@@ -255,6 +270,15 @@
     return i;
   }
 
+  // Plan 048 entry zone: local by default; PT pastes patch-note times.
+  function zoneSelect(what) {
+    const s = el('select', 'ew-lnum');
+    C.ZONES.forEach(function (z) { const o = el('option', null, z[1]); o.value = z[0]; s.appendChild(o); });
+    s.value = 'local';
+    s.title = what + ' entered in this time zone (PT = patch notes); stored as UTC';
+    return s;
+  }
+
   function button(text, type) {
     const b = el('button', 'ew-btn ew-bbtn', text);
     b.type = type || 'button';
@@ -266,7 +290,7 @@
     det.appendChild(el('summary', 'ew-muted', 'Hot Time windows, milestones, XP patch epochs, samples'));
     ui.wins = el('div', 'ew-list');
     det.appendChild(ui.wins);
-    // Add window: day toggles + UTC times + label + pct, one compact block.
+    // Add window: day toggles + times (zone picked, stored UTC) + label + pct.
     const f = el('form', 'ew-lform ew-lhot');
     const days = el('div', 'ew-ldays');
     ui.dayBoxes = C.DAY_NAMES.map(function (n, i) {
@@ -280,19 +304,19 @@
       return cb;
     });
     f.appendChild(days);
-    const start = input('ew-lnum', 5, 'HH:MM', 'start, UTC');
-    const end = input('ew-lnum', 5, 'HH:MM', 'end, UTC (may wrap past midnight)');
+    const start = input('ew-lnum', 8, '21:00', 'start: 21:00 or 9pm (days are the start day)');
+    const end = input('ew-lnum', 8, '23:00', 'end (may wrap past midnight)');
     const label = input('ew-lname', 40, 'label', 'label, e.g. Hot Time');
     label.value = 'Hot Time';
     const pct = input('ew-lnum', 4, 'XP %', 'combat XP bonus % (0-1000)');
-    [start, end, label, pct].forEach(function (i) { f.appendChild(i); });
-    f.appendChild(el('span', 'ew-muted', 'UTC'));
+    const zone = zoneSelect('days and times');
+    [start, end, label, pct, zone].forEach(function (i) { f.appendChild(i); });
     f.appendChild(button('Add', 'submit'));
     f.addEventListener('submit', function (ev) {
       ev.preventDefault();
       const r = C.parseHotForm({
         days: ui.dayBoxes.filter(function (b) { return b.checked; }).map(function (b) { return b.value; }),
-        start: start.value, end: end.value, label: label.value, pct: pct.value
+        start: start.value, end: end.value, label: label.value, pct: pct.value, zone: zone.value, now: Date.now()
       });
       if (!r.ok) { msg(r.error); return; }
       send(r.body, 'window added');
@@ -318,17 +342,18 @@
     det.appendChild(ui.mlabels);
     // XP patch epochs (plan 018): the rate counts only samples since the newest
     // started one. Click a row to correct it (same id), x deletes it.
-    det.appendChild(el('div', 'ew-muted ew-lnote', 'XP patch epochs (UTC)'));
+    det.appendChild(el('div', 'ew-muted ew-lnote', 'XP patch epochs (local time; UTC on hover)'));
     ui.epochs = el('div', 'ew-list');
     det.appendChild(ui.epochs);
     const ef = el('form', 'ew-lform');
     ui.ep = {
       id: input('ew-lnum', 40, 'id', 'epoch id (blank = from label; an existing id corrects it)'),
-      start: input('ew-lname', 16, 'YYYY-MM-DD HH:MM', 'live maintenance end, UTC'),
+      start: input('ew-lname', 16, 'YYYY-MM-DD HH:MM', 'live maintenance end, in the zone picked'),
+      zone: zoneSelect('start'),
       label: input('ew-lname', 40, 'label', 'label, e.g. Lv 75 patch'),
       source: input('ew-lname', 200, 'source', 'where the date comes from (patch notes)')
     };
-    ['id', 'start', 'label', 'source'].forEach(function (k) { ef.appendChild(ui.ep[k]); });
+    ['id', 'start', 'zone', 'label', 'source'].forEach(function (k) { ef.appendChild(ui.ep[k]); });
     const vlab = el('label', 'ew-lday');
     ui.ep.verified = el('input');
     ui.ep.verified.type = 'checkbox';
@@ -338,8 +363,8 @@
     ef.appendChild(button('Save', 'submit'));
     ef.addEventListener('submit', function (ev) {
       ev.preventDefault();
-      const r = C.parseEpochForm({ id: ui.ep.id.value, start: ui.ep.start.value, label: ui.ep.label.value,
-        source: ui.ep.source.value, verified: ui.ep.verified.checked });
+      const r = C.parseEpochForm({ id: ui.ep.id.value, start: ui.ep.start.value, zone: ui.ep.zone.value,
+        label: ui.ep.label.value, source: ui.ep.source.value, verified: ui.ep.verified.checked });
       if (!r.ok) { msg(r.error); return; }
       send(r.body, 'epoch saved');
     });

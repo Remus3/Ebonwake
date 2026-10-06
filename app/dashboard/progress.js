@@ -691,6 +691,7 @@
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';
       x.title = 'remove mount (click twice)';
+      x.setAttribute('aria-label', x.title);
       x.addEventListener('click', function () { removeMount(m, x); });
       meta.appendChild(x);
       r.appendChild(meta);

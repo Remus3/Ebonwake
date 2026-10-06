@@ -290,7 +290,7 @@
       const name = el('span', 'ew-mname', C.spotName(spots(), s.spot));
       name.title = when;
       r.appendChild(name);
-      r.appendChild(el('span', 'ew-muted ew-gnum', (typeof s.minutes === 'number' ? s.minutes : '?') + 'm'));
+      r.appendChild(el('span', 'ew-muted ew-gnum', typeof s.minutes === 'number' ? C.fmtDurationShort(s.minutes) : '?'));
       // Plan 039: a loot-valued session shows its valued silver (typed silver otherwise).
       const silver = C.sessionSilver(s);
       const amt = el('span', 'ew-mprice', C.fmtSilver(silver));
@@ -382,7 +382,7 @@
       add.appendChild(i);
     };
     box('name', 'item', 60);
-    box('vendor', 'vendor price', 11);
+    box('vendor', 'vendor price (12k)', 16);
     box('id', 'item id', 10);
     lf.market = el('input');
     lf.market.type = 'checkbox';
@@ -405,7 +405,7 @@
     list.forEach(function (s) {
       const r = el('div', 'ew-srow');
       r.appendChild(el('span', 'ew-mname', String(s.name || s.id)));
-      r.appendChild(el('span', 'ew-muted ew-gnum', (s.sessions || 0) + 'x ' + (s.minutes || 0) + 'm'));
+      r.appendChild(el('span', 'ew-muted ew-gnum', (s.sessions || 0) + 'x ' + C.fmtDurationShort(s.minutes || 0)));
       r.appendChild(el('span', 'ew-mprice', s.silver_per_h === null || s.silver_per_h === undefined ? '-' : C.fmtSilver(s.silver_per_h) + '/h'));
       box.appendChild(r);
     });
@@ -420,17 +420,18 @@
     if (S.err && !S.data) ui.buffBody.appendChild(el('div', 'ew-err', S.err));
     const box = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
     rows.forEach(function (row) {
-      const r = el('div', 'ew-brow' + (row.left_s === null ? '' : ' on'));
+      // Plan 048: armed rows first (buffRows), unarmed 'off' muted, minutes short.
+      const v = C.buffRowView(row);
+      const r = el('div', 'ew-brow' + (v.armed ? ' on' : ''));
       r.appendChild(el('span', 'ew-mname', row.name));
-      const left = el('span', 'ew-mprice', row.left_s === null ? '-' : C.fmtDuration(row.left_s * 1000));
+      const left = el('span', v.muted ? 'ew-mprice ew-muted' : 'ew-mprice', v.left);
       r.appendChild(left);
-      if (row.left_s !== null) ui.buffClocks.push({ name: row.name, node: left });
+      if (v.armed) ui.buffClocks.push({ name: row.name, node: left });
       const min = el('input');
       min.type = 'text';
-      min.inputMode = 'numeric';
-      min.maxLength = 5;
-      min.title = 'minutes (1-43200)';
-      min.value = S.buffMin[row.name.toLowerCase()] || String(row.minutes);
+      min.maxLength = 8;
+      min.title = 'duration: 30d, 1h30m or minutes (max 30d)';
+      min.value = S.buffMin[row.name.toLowerCase()] || v.minutes;
       min.addEventListener('input', function () { S.buffMin[row.name.toLowerCase()] = min.value; });
       r.appendChild(min);
       const xp = el('input');
@@ -484,10 +485,9 @@
     f.appendChild(sel);
     const min = el('input');
     min.type = 'text';
-    min.inputMode = 'numeric';
-    min.maxLength = 5;
-    min.placeholder = 'min';
-    min.title = 'minutes (1-43200)';
+    min.maxLength = 8;
+    min.placeholder = '1h';
+    min.title = 'duration: 30d, 1h30m or minutes (max 30d)';
     min.value = S.presetMin || '';
     min.addEventListener('input', function () { S.presetMin = min.value; });
     f.appendChild(min);
@@ -683,11 +683,14 @@
     };
     f.spotRow = field('spot', 'spot', el('select'));
     f.spot.addEventListener('change', function () { S.spot = f.spot.value; loadLoot(false); });
-    f.minutesRow = field('minutes', 'minutes (manual)', text(4));
-    f.minutes.inputMode = 'numeric';
-    field('silver', 'silver earned', text(14));
-    f.silver.inputMode = 'numeric';
-    field('trash', 'trash', text(7));
+    // Plan 048 quick entry: minutes 90 / 1h30m, silver 1.2b / 850m / 1,234,567.
+    f.minutesRow = field('minutes', 'minutes (manual)', text(8));
+    f.minutes.placeholder = '1h30m';
+    f.minutes.title = 'session length: 90, 1h30m (max 1d)';
+    field('silver', 'silver earned', text(20));
+    f.silver.placeholder = '1.2b';
+    f.silver.title = 'silver: 1.2b, 850m or 1,234,567';
+    field('trash', 'trash', text(9));
     f.trash.inputMode = 'numeric';
     // Plan 039: loot counts for the spot's table; values the session when given.
     const loot = el('div', 'ew-gloot');

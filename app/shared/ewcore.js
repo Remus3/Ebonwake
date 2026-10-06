@@ -356,9 +356,11 @@
     if (action === 'remove') return { ok: true, body: { remove: { id: id, sid: sid } } };
     const add = { id: id, sid: sid };
     for (const k of ['below', 'above']) {
-      const v = num(k, 0, null);
-      if (Number.isNaN(v)) return { ok: false, error: k + ' must be a whole number >= 0' };
-      if (v !== null) add[k] = v;
+      const s = f[k] === undefined || f[k] === null ? '' : String(f[k]).trim();
+      if (s === '') continue;
+      const v = parseSilver(s);
+      if (v === null) return { ok: false, error: k + ': a silver amount like 1.2b, 850m or 1,234,567' };
+      add[k] = v;
     }
     return { ok: true, body: { add: add } };
   }
@@ -380,19 +382,197 @@
     return Number(BigInt(price) * BigInt(keep) * BigInt(mult) / 100000000n);
   }
 
-  // Operator-typed silver: "84,500,000", "100m", "1.5b", "750k" -> int or null.
+  // ---- plan 048: quick-entry parsers + local time ----
+  // Inputs accept what the operator reads in game or in patch notes; stored
+  // values stay integers and UTC.
+
+  const SILVER_PLACES = { k: 3, m: 6, b: 9, t: 12 };
+
+  // Operator-typed silver: "84,500,000", "100m", "1.2b", "750k" -> int or null.
+  // Exact decimal maths: a fraction finer than one silver is refused, not rounded.
   function parseSilver(s) {
     if (s === null || s === undefined) return null;
     const t = String(s).trim().toLowerCase();
-    let m = /^(\d{1,3}(?:,\d{3})+|\d+)$/.exec(t);
-    if (m) {
-      const v = Number(m[1].replace(/,/g, ''));
-      return Number.isSafeInteger(v) ? v : null;
-    }
-    m = /^(\d+(?:\.\d+)?)([kmb])$/.exec(t);
+    const m = /^(\d{1,3}(?:,\d{3})+|\d+)(?:(?:\.(\d+))? ?([kmbt]))?$/.exec(t);
     if (!m) return null;
-    const v = Math.round(Number(m[1]) * { k: 1e3, m: 1e6, b: 1e9 }[m[2]]);
+    const places = m[3] ? SILVER_PLACES[m[3]] : 0;
+    const frac = m[2] || '';
+    if (frac.length > places) return null;
+    const v = Number(m[1].replace(/,/g, '') + frac.padEnd(places, '0'));
     return Number.isSafeInteger(v) ? v : null;
+  }
+
+  // Duration -> whole minutes or null: "30d", "1h30m", "90m", "90min", "1.5h";
+  // a bare number is minutes ("45"). Units in d, h, m order, each at most once.
+  function parseDuration(s) {
+    if (s === null || s === undefined) return null;
+    const t = String(s).toLowerCase().replace(/\s+/g, '');
+    if (/^\d{1,7}$/.test(t)) return Number(t);
+    const m = /^(?:(\d{1,5}(?:\.\d+)?)d)?(?:(\d{1,6}(?:\.\d+)?)h)?(?:(\d{1,7})(?:m|min))?$/.exec(t);
+    if (!t || !m) return null;
+    const v = Number(m[1] || 0) * 1440 + Number(m[2] || 0) * 60 + Number(m[3] || 0);
+    const r = Math.round(v);
+    return Math.abs(v - r) < 1e-6 && Number.isSafeInteger(r) ? r : null;
+  }
+
+  // Whole minutes -> "30d", "1h", "1h30m", "1d1m", "45m"; parseDuration reads it back.
+  function fmtDurationShort(min) {
+    if (!isInt(min, 0)) return '-';
+    if (min === 0) return '0m';
+    const d = Math.floor(min / 1440);
+    const h = Math.floor((min % 1440) / 60);
+    const m = min % 60;
+    return (d ? d + 'd' : '') + (h ? h + 'h' : '') + (m ? m + 'm' : '');
+  }
+
+  // US Pacific DST, a port of server/ew/bosses.py (plan 031): [2nd Sun Mar
+  // 02:00, 1st Sun Nov 02:00) PT wall clock. Wall clocks are carried as
+  // Date.UTC ms of their fields. app/test/ewcore.test.js pins the same edge
+  // dates as tests/test_bosses.py.
+  function nthSunday(y, mo, n) {
+    const first = new Date(Date.UTC(y, mo - 1, 1)).getUTCDay();
+    return 1 + (7 - first) % 7 + 7 * (n - 1);
+  }
+
+  function ptDstWall(y) {
+    return [Date.UTC(y, 2, nthSunday(y, 3, 2), 2), Date.UTC(y, 10, nthSunday(y, 11, 1), 2)];
+  }
+
+  // UTC offset of Pacific time at instant utcMs: -7 (PDT) or -8 (PST).
+  function ptOffsetHours(utcMs) {
+    const b = ptDstWall(new Date(utcMs).getUTCFullYear());
+    return utcMs >= b[0] + 8 * 3600000 && utcMs < b[1] + 7 * 3600000 ? -7 : -8;
+  }
+
+  function wallMs(y, mo, d, h, mi) {
+    if (![y, mo, d, h, mi].every(function (v) { return isInt(v, 0); }) || h > 23 || mi > 59) return null;
+    const w = Date.UTC(y, mo - 1, d, h, mi);
+    const t = new Date(w);
+    return t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d ? w : null;
+  }
+
+  // PT wall clock -> UTC ms, or null for an impossible date. The repeated 01:xx
+  // in November and the skipped 02:xx in March both resolve to PDT, as in Python.
+  function ptToUtc(y, mo, d, h, mi) {
+    const w = wallMs(y, mo, d, h, mi);
+    if (w === null) return null;
+    const b = ptDstWall(y);
+    return w + (w >= b[0] && w < b[1] ? 7 : 8) * 3600000;
+  }
+
+  // Minutes east of UTC for zone 'utc' | 'pt' | 'local' (this machine) at utcMs.
+  function zoneOffsetMin(zone, utcMs) {
+    if (zone === 'utc') return 0;
+    if (zone === 'pt') return ptOffsetHours(utcMs) * 60;
+    if (zone === 'local') return -new Date(utcMs).getTimezoneOffset();
+    return null;
+  }
+
+  // Zone wall clock -> UTC ms. Local time goes through Date so the host's own
+  // DST rule applies; null for an impossible date or an unknown zone.
+  function zoneToUtc(zone, y, mo, d, h, mi) {
+    if (zone === 'pt') return ptToUtc(y, mo, d, h, mi);
+    const w = wallMs(y, mo, d, h, mi);
+    if (w === null) return null;
+    if (zone === 'utc') return w;
+    if (zone !== 'local') return null;
+    const t = new Date(y, mo - 1, d, h, mi);
+    return t.getDate() === d ? t.getTime() : null;
+  }
+
+  function zoneOf(o) {
+    return o && typeof o.zone === 'string' ? o.zone : 'local';
+  }
+
+  function hm(min) { return pad2(Math.floor(min / 60)) + ':' + pad2(min % 60); }
+
+  // "21:00" / "9:30" / "0900" / "9pm" / "12:15 am" -> minutes of day, or null.
+  function clockMinutes(s) {
+    const m = /^(\d{1,2})(?::?([0-5]\d))?\s*([ap]m)?$/.exec(String(s === null || s === undefined ? '' : s).trim().toLowerCase());
+    if (!m || (!m[2] && !m[3])) return null;
+    let h = Number(m[1]);
+    if (m[3]) {
+      if (h < 1 || h > 12) return null;
+      h = h % 12 + (m[3] === 'pm' ? 12 : 0);
+    } else if (h > 23 || m[1].length === 1 && !/:/.test(s)) {
+      return null;
+    }
+    return h * 60 + Number(m[2] || 0);
+  }
+
+  // Wall time in opts.zone (default local) -> {utc: 'HH:MM', shift: -1|0|1}
+  // days added to reach the UTC weekday. Uses the zone offset at opts.now.
+  function parseLocalTime(s, opts) {
+    const o = opts || {};
+    const min = clockMinutes(s);
+    const off = zoneOffsetMin(zoneOf(o), isNum(o.now) ? o.now : Date.now());
+    if (min === null || off === null) return null;
+    const t = min - off;
+    const shift = Math.floor(t / 1440);
+    return { utc: hm(t - shift * 1440), shift: shift };
+  }
+
+  // UTC 'HH:MM' -> the zone's {hhmm, shift} at opts.now (inverse of parseLocalTime).
+  function utcClockIn(hhmm, opts) {
+    const o = opts || {};
+    const m = typeof hhmm === 'string' ? /^([01]\d|2[0-3]):([0-5]\d)$/.exec(hhmm) : null;
+    const off = zoneOffsetMin(zoneOf(o), isNum(o.now) ? o.now : Date.now());
+    if (!m || off === null) return null;
+    const t = Number(m[1]) * 60 + Number(m[2]) + off;
+    const shift = Math.floor(t / 1440);
+    return { hhmm: hm(t - shift * 1440), shift: shift };
+  }
+
+  function utcMsOf(iso) {
+    if (typeof iso !== 'string' || !ISO_TS.test(iso)) return null;
+    const ms = Date.parse(iso);
+    return isFinite(ms) ? ms : null;
+  }
+
+  function wallText(ms) {
+    const d = new Date(ms);
+    return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate()) + ' ' +
+      pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
+  }
+
+  // Stored UTC ISO -> {text: 'YYYY-MM-DD HH:MM' in opts.zone (default local),
+  // title: 'UTC HH:MM' (with the UTC date when it differs)}, or null.
+  function fmtLocal(utcIso, opts) {
+    const ms = utcMsOf(utcIso);
+    const off = ms === null ? null : zoneOffsetMin(zoneOf(opts), ms);
+    if (off === null) return null;
+    const text = wallText(ms + off * 60000);
+    const utc = wallText(ms);
+    return { text: text, title: 'UTC ' + (utc.slice(0, 10) === text.slice(0, 10) ? utc.slice(11) : utc) };
+  }
+
+  // 'YYYY-MM-DD HH:MM' (or T) in opts.zone -> UTC 'YYYY-MM-DDTHH:MM:00Z', or null.
+  function parseLocalDateTime(s, opts) {
+    const m = typeof s === 'string' ? /^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})$/.exec(s.trim()) : null;
+    if (!m) return null;
+    const ms = zoneToUtc(zoneOf(opts), +m[1], +m[2], +m[3], +m[4], +m[5]);
+    return ms === null ? null : new Date(ms).toISOString().slice(0, 16) + ':00Z';
+  }
+
+  // Stored UTC Hot Time window {days (Mon=0), start, end} -> the zone's view
+  // {days, start, end, title 'UTC <days> HH:MM-HH:MM'}; days follow the start.
+  function hotWindowView(w, opts) {
+    if (!plainObject(w) || !Array.isArray(w.days)) return null;
+    const a = utcClockIn(w.start, opts);
+    const b = utcClockIn(w.end, opts);
+    if (!a || !b) return null;
+    const days = w.days.filter(function (x) { return inRange(x, [0, 6]); })
+      .map(function (x) { return ((x + a.shift) % 7 + 7) % 7; }).sort(function (x, y) { return x - y; });
+    return { days: days, start: a.hhmm, end: b.hhmm, title: 'UTC ' + fmtDays(w.days) + ' ' + w.start + '-' + w.end };
+  }
+
+  // Entry zones for time inputs: [value, label]. 'pt' is the "paste PT" helper
+  // for patch-note times.
+  const ZONES = [['local', 'local'], ['pt', 'PT'], ['utc', 'UTC']];
+
+  function zoneName(zone) {
+    const z = ZONES.filter(function (x) { return x[0] === zone; })[0];
+    return z ? z[1] : String(zone);
   }
 
   // Item-detail calculator: buy at X, sell at Y -> net and profit after tax.
@@ -1291,6 +1471,14 @@
     return armed.concat(idle, extra);
   }
 
+  // Plan 048: one buffRows row -> display strings. Time left as a countdown,
+  // unarmed 'off' (muted); the minutes field pre-filled short ('30d', '1h').
+  function buffRowView(row) {
+    const armed = plainObject(row) && isNum(row.left_s) && row.left_s > 0;
+    return { armed: armed, muted: !armed, left: armed ? fmtDuration(row.left_s * 1000) : 'off',
+      minutes: plainObject(row) ? fmtDurationShort(row.minutes) : '-' };
+  }
+
   // Plan 018 XP buff presets from GET /api/grind: [{name, xp_pct, title}],
   // junk rows dropped. The values are community / patch-note figures, verify.
   function xpPresets(d) {
@@ -1491,15 +1679,25 @@
   function parseGrindForm(kind, form) {
     const f = form || {};
     const blank = function (k) { return f[k] === undefined || f[k] === null || String(f[k]).trim() === ''; };
+    // Plan 048: silver / counts take 1.2b, 850m, 1,234,567; minutes take 30d, 1h30m, 90.
+    const amount = function (k, r) {
+      const v = parseSilver(f[k]);
+      return v !== null && inRange(v, r) ? v : null;
+    };
     const loot = function () {
-      const silver = blank('silver') ? 0 : wholeIn(f.silver, SILVER);
-      if (silver === null) return { error: 'silver must be a whole number 0-10000000000000' };
-      const trash = blank('trash') ? 0 : wholeIn(f.trash, TRASH);
-      if (trash === null) return { error: 'trash must be a whole number 0-1000000' };
+      const silver = blank('silver') ? 0 : amount('silver', SILVER);
+      if (silver === null) return { error: 'silver: 0-10T, e.g. 1.2b, 850m or 1,234,567' };
+      const trash = blank('trash') ? 0 : amount('trash', TRASH);
+      if (trash === null) return { error: 'trash: a count 0-1000000, e.g. 3,200 or 3.2k' };
       return { silver: silver, trash: trash };
     };
-    const minutes = function (r) { return wholeIn(f.minutes, r); };
-    const minErr = function (r) { return 'minutes must be a whole number ' + r[0] + '-' + r[1]; };
+    const minutes = function (r) {
+      const v = parseDuration(f.minutes);
+      return v !== null && inRange(v, r) ? v : null;
+    };
+    const minErr = function (r) {
+      return 'minutes ' + r[0] + '-' + r[1] + ' (' + fmtDurationShort(r[1]) + '), e.g. 90, 1h30m or 30d';
+    };
     const name = function (k) { return typeof f[k] === 'string' ? f[k].trim() : ''; };
     // Plan 039: f.loot = [{name, count string}]; blank / 0 counts are skipped.
     const items = function () {
@@ -1548,8 +1746,8 @@
         item.id = id;
       }
       if (!blank('vendor_price')) {
-        const v = wholeIn(f.vendor_price, VENDOR_PRICE);
-        if (v === null) return { ok: false, error: 'vendor price must be a whole number 0-10000000000' };
+        const v = amount('vendor_price', VENDOR_PRICE);
+        if (v === null) return { ok: false, error: 'vendor price: 0-10B, e.g. 12k or 1,500' };
         item.vendor_price = v;
       }
       if (!item.marketable && item.vendor_price === undefined) {
@@ -2240,19 +2438,23 @@
   }
 
   // Settings form strings -> {shop_set} body, or an error for the operator.
-  // Silver accepts digits with optional , separators.
+  // Silver takes quick entry (plan 048: 1.2b, 1,234,567); hours a decimal or
+  // a duration (2h30m).
   function parseShopForm(form) {
     const f = form || {};
-    const silver = String(f.silver === undefined || f.silver === null ? '' : f.silver).trim().replace(/,/g, '');
+    const silver = String(f.silver === undefined || f.silver === null ? '' : f.silver).trim();
     const hours = String(f.hours === undefined || f.hours === null ? '' : f.hours).trim();
     const body = {};
     if (silver !== '') {
-      const n = /^[0-9]{1,16}$/.test(silver) ? Number(silver) : NaN;
-      if (!(n <= SHOP_MAX_SILVER)) return { ok: false, error: 'silver on hand: a whole number 0-' + fmtSilver(SHOP_MAX_SILVER) };
+      const n = parseSilver(silver);
+      if (n === null || n > SHOP_MAX_SILVER) {
+        return { ok: false, error: 'silver on hand: 0-' + fmtSilver(SHOP_MAX_SILVER) + ', e.g. 1.2b or 1,234,567' };
+      }
       body.silver_on_hand = n;
     }
     if (hours !== '') {
-      const h = /^[0-9]{1,2}(\.[0-9]{1,2})?$/.test(hours) ? Number(hours) : NaN;
+      const dur = /[a-z]/i.test(hours) ? parseDuration(hours) : null;
+      const h = dur !== null ? Math.round(dur / 0.6) / 100 : (/^[0-9]{1,2}(\.[0-9]{1,2})?$/.test(hours) ? Number(hours) : NaN);
       if (!(h > 0 && h <= SHOP_MAX_HOURS)) return { ok: false, error: 'hours per day: a number above 0, up to 24' };
       body.hours_per_day = h;
     }
@@ -2583,9 +2785,23 @@
   }
 
   // Hot window editor -> {hot_add} body or an error. days: weekday numbers
-  // (Monday=0) as numbers or strings; times are UTC HH:MM.
+  // (Monday=0) as numbers or strings; times are UTC HH:MM, or (plan 048) wall
+  // times in f.zone 'local' | 'pt' at f.now, stored as UTC with the days moved
+  // when the start crosses midnight.
   function parseHotForm(form) {
     const f = form || {};
+    if (f.zone !== undefined) {
+      const opts = { zone: f.zone, now: f.now };
+      const a = parseLocalTime(f.start, opts);
+      const b = parseLocalTime(f.end, opts);
+      if (zoneOffsetMin(f.zone, 0) === null) return { ok: false, error: 'unknown time zone' };
+      if (!a || !b) return { ok: false, error: 'start / end: a time like 21:00 or 9pm (' + zoneName(f.zone) + ')' };
+      const days = (Array.isArray(f.days) ? f.days : []).map(function (d) {
+        const n = wholeIn(d, [0, 6]);
+        return n === null ? d : (n + a.shift + 7) % 7;
+      });
+      return parseHotForm(Object.assign({}, f, { zone: undefined, days: days, start: a.utc, end: b.utc }));
+    }
     const raw = Array.isArray(f.days) ? f.days : [];
     const days = [];
     for (const d of raw) {
@@ -2622,9 +2838,16 @@
   }
 
   // Epoch editor (plan 018) -> {epoch_add} body or an error. start is UTC
-  // "YYYY-MM-DD HH:MM"; a blank id is slugged from the label (an existing id
-  // corrects that epoch, e.g. the confirmed live maintenance time).
+  // "YYYY-MM-DD HH:MM" (plan 048: or wall time in f.zone 'local' | 'pt'); a
+  // blank id is slugged from the label (an existing id corrects that epoch,
+  // e.g. the confirmed live maintenance time).
   function parseEpochForm(form) {
+    const f0 = form || {};
+    if (f0.zone !== undefined && f0.zone !== 'utc') {
+      const iso = parseLocalDateTime(typeof f0.start === 'string' ? f0.start : '', { zone: f0.zone });
+      if (!iso) return { ok: false, error: 'start must be YYYY-MM-DD HH:MM (' + zoneName(f0.zone) + ')' };
+      return parseEpochForm(Object.assign({}, f0, { zone: 'utc', start: iso.slice(0, 16) }));
+    }
     const f = form || {};
     const label = typeof f.label === 'string' ? f.label.trim() : '';
     if (!validAscii(label, HOT_LABEL_MAX)) return { ok: false, error: 'label: 1-' + HOT_LABEL_MAX + ' plain ASCII characters' };
@@ -4423,6 +4646,16 @@
     pollDue: pollDue,
     netProceeds: netProceeds,
     parseSilver: parseSilver,
+    parseDuration: parseDuration,
+    fmtDurationShort: fmtDurationShort,
+    ptOffsetHours: ptOffsetHours,
+    ptToUtc: ptToUtc,
+    parseLocalTime: parseLocalTime,
+    parseLocalDateTime: parseLocalDateTime,
+    fmtLocal: fmtLocal,
+    hotWindowView: hotWindowView,
+    buffRowView: buffRowView,
+    ZONES: ZONES,
     pairProfit: pairProfit,
     preorderState: preorderState,
     preorderBadge: preorderBadge,
