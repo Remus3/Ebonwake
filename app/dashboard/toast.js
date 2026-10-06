@@ -6,8 +6,10 @@
    the tabs read (game every 5 s, the rest every 60 s), runs C.notifyRules
    with the operator's prefs (config notify.*, a launch argument), dedupes
    through C.notifyLedger and turns each hit into a toast plus an OS
-   notification via the allowlisted ew:notify bridge. EW's own data only; it
-   never sends anything to the game. Every node is built with DOM APIs. */
+   notification via the allowlisted ew:notify bridge. Plan 070: GET
+   /api/prompts feeds C.promptGate (game-closed quiet) and the 15/5/1 alert
+   ladder; a notify toast shows once per key (queue `once`). EW's own data
+   only; it never sends anything to the game. Every node is built with DOM APIs. */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -49,8 +51,9 @@
     });
   }
 
-  function toast(level, text, key) {
-    queue.push({ key: key, level: level, text: text }, Date.now());
+  // once: true (plan 070) = this key shows once, whichever tab or rule raised it.
+  function toast(level, text, key, once) {
+    if (!queue.push({ key: key, level: level, text: text, once: once === true }, Date.now())) return false;
     draw();
     if (!timer) {
       timer = setInterval(function () {
@@ -58,6 +61,7 @@
         if (!queue.items().length) { clearInterval(timer); timer = null; }
       }, 500);
     }
+    return true;
   }
 
   // The modules' POST: same reply as bridge.post, plus one toast.
@@ -74,10 +78,13 @@
   }
 
   // Each hit -> a toast + an OS notification; resolves to the bridge replies.
-  function fire(hits) {
+  // `again` (the self-test only) skips the show-once memory.
+  function fire(hits, again) {
     const b = window.ewApi;
     return Promise.all(hits.map(function (h) {
-      toast('warn', h.title + (h.body ? ' - ' + h.body : ''), 'notify:' + h.key);
+      if (!toast('warn', h.title + (h.body ? ' - ' + h.body : ''), 'notify:' + h.key, again !== true)) {
+        return Promise.resolve({ ok: false, error: 'shown already' });
+      }
       if (!b || typeof b.notify !== 'function') return Promise.resolve({ ok: false, error: 'no bridge' });
       return b.notify({ title: h.title, body: h.body }).catch(function (e) {
         return { ok: false, error: String(e && e.message || e) }; // the toast already shows it
@@ -102,7 +109,7 @@
 
   function round() {
     const now = Date.now();
-    const jobs = [fetchInto('game', '/api/game')];
+    const jobs = [fetchInto('game', '/api/game'), fetchInto('prompts', '/api/prompts')];
     SOURCES.forEach(function (s) {
       if (C.pollDue(last[s[0]] === undefined ? null : last[s[0]], now, DATA_MS)) {
         last[s[0]] = now;
@@ -113,8 +120,13 @@
       const t = Date.now();
       const next = { at: t, market: docs.market || null, grind: docs.grind || null, grindAt: at.grind,
         leveling: docs.leveling || null, levelingAt: at.leveling, events: docs.events || null,
-        today: docs.today || null, game: docs.game || null, bosses: docs.bosses || null };
-      fire(ledger.take(C.notifyRules(prev, next, t, prefs()), t));
+        today: docs.today || null, game: docs.game || null, bosses: docs.bosses || null,
+        prompts: docs.prompts || null };
+      // Plan 070: game-closed quiet; a ladder step missed while closed is
+      // consumed (never fires late), other held hits re-fire at login.
+      const g = C.promptGate(C.notifyRules(prev, next, t, prefs()), next.game, next.prompts);
+      ledger.take(g.drop, t);
+      fire(ledger.take(g.fire, t));
       prev = next;
     });
   }
@@ -128,7 +140,7 @@
     const t = Date.now();
     const hits = C.notifyRules({ at: t, market: { items: [item(null)] } },
       { at: t, market: { items: [item('below')] } }, t, { marketAlert: true });
-    return fire(hits).then(function (r) {
+    return fire(hits, true).then(function (r) {
       return { hits: hits.length, toasts: document.querySelectorAll('#toasts .ew-toast').length, notify: r[0] || null };
     });
   }

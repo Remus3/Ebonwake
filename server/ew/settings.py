@@ -20,17 +20,17 @@ import time
 from json.decoder import scanstring
 from pathlib import Path
 
-from . import maint, market, progress
+from . import maint, market, progress, prompts
 
 ANCHORS = ("tl", "tr", "bl", "br", "ml", "mr")
 WIDGETS = {"grindSession": True, "grindBuff": True, "eventsSoon": True,
            "leveling": False, "season": False, "marketTicker": False,
            "worldBoss": False, "dice": False}
-# Plan 026 rule names (+ plan 032 bossSoon); default off except marketAlert
-# and buffEnding.
+# Plan 026 rule names (+ plan 032 bossSoon, plan 070 resetSoon); default off
+# except marketAlert and buffEnding.
 NOTIFY = {"marketAlert": True, "buffEnding": True, "hotTime": False,
           "resetPassed": False, "newCoupon": False, "gameExit": False,
-          "bossSoon": False}
+          "bossSoon": False, "resetSoon": False}
 THEMES = ("system", "dark", "light")
 OVERLAY_MODES = ("auto", "pin", "block")  # plan 067: per-widget pin / block
 MODS = ("Control", "Ctrl", "Alt", "Shift", "CommandOrControl", "Super")
@@ -131,6 +131,10 @@ SPEC.update({
 for _n, _d in NOTIFY.items():
     SPEC[f"notify.{_n}"] = (_is_bool, _d)
 SPEC.update({
+    # Plan 070: game-closed quiet (only allowlisted rules notify while the game
+    # is not running) and the minutes-before alert ladder, "15,5,1".
+    "notify.quiet_closed": (_is_bool, True),
+    "notify.ladder_min": (lambda v: prompts.parse_ladder(v) is not None, "15,5,1"),
     "market.vp": (_is_bool, False),
     "market.fame_pct": (_num_in(0, market.FAME_MAX), 0),
     "coupons.check": (_is_bool, True),
