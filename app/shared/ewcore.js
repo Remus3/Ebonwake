@@ -3292,12 +3292,147 @@
     return isNum(u) && u >= UI_SCALE[0] && u <= UI_SCALE[1] ? u : 1;
   }
 
+  // ---- Pets (plan 043) ----
+  // GET /api/pets -> {roster: [{id, name, species, species_name, tier, talents,
+  // skill_names, alpha, out, fed_at, fed_ago_s}], species, goals, goal_options,
+  // coverage, exchange, alpha_rule, exchange_rule}. The roster is operator-typed;
+  // the server enforces 5 out, one alpha, alpha on T5 only.
+
+  const PET_NAME_MAX = 40;
+  const PET_TALENTS_MAX = 5;
+  const PET_TALENT_MAX = 40;
+  const PET_TIER = [1, 5];
+  const PET_KEY = /^[a-z][a-z0-9_]{0,39}$/;
+  const PET_FIELDS = ['name', 'species', 'tier', 'talents', 'alpha', 'out'];
+
+  function validPetFields(v, required) {
+    if (!plainObject(v) || !onlyKeys(v, PET_FIELDS)) return false;
+    if (!required.every(function (k) { return k in v; })) return false;
+    if ('name' in v && !validAscii(v.name, PET_NAME_MAX)) return false;
+    if ('species' in v && !(typeof v.species === 'string' && PET_KEY.test(v.species))) return false;
+    if ('tier' in v && !intIn(v.tier, PET_TIER[0], PET_TIER[1])) return false;
+    if ('talents' in v && !(Array.isArray(v.talents) && v.talents.length <= PET_TALENTS_MAX &&
+      v.talents.every(function (t) { return validAscii(t, PET_TALENT_MAX); }))) return false;
+    return ['alpha', 'out'].every(function (k) { return !(k in v) || typeof v[k] === 'boolean'; });
+  }
+
+  // POST /api/pets body: exactly one of {add|edit|remove|feed|goals}.
+  function validPetsBody(body) {
+    if (!plainObject(body)) return false;
+    const keys = Object.keys(body);
+    if (keys.length !== 1) return false;
+    const k = keys[0];
+    const v = body[k];
+    if (k === 'add') return validPetFields(v, ['name', 'species', 'tier']);
+    if (k === 'edit') {
+      if (!plainObject(v) || typeof v.id !== 'string' || !SLUG.test(v.id)) return false;
+      const rest = Object.assign({}, v);
+      delete rest.id;
+      return Object.keys(rest).length > 0 && validPetFields(rest, []);
+    }
+    if (k === 'remove' || k === 'feed') return typeof v === 'string' && SLUG.test(v);
+    if (k === 'goals') {
+      return Array.isArray(v) && v.length <= 20 && v.every(function (g) { return typeof g === 'string' && PET_KEY.test(g); }) &&
+        v.filter(function (g, i) { return v.indexOf(g) === i; }).length === v.length;
+    }
+    return false;
+  }
+
+  // Add / edit form -> {ok, body} or {ok: false, error}. Talents: comma list.
+  function parsePetForm(f, editId) {
+    const name = String(f && f.name || '').trim();
+    if (!validAscii(name, PET_NAME_MAX)) return { ok: false, error: 'name must be 1..' + PET_NAME_MAX + ' ASCII characters' };
+    const species = String(f.species || '');
+    if (!PET_KEY.test(species)) return { ok: false, error: 'pick a pet type' };
+    const tier = /^\d+$/.test(String(f.tier || '').trim()) ? Number(f.tier) : NaN;
+    if (!intIn(tier, PET_TIER[0], PET_TIER[1])) return { ok: false, error: 'tier must be 1..5' };
+    const talents = String(f.talents || '').split(',').map(function (t) { return t.trim(); })
+      .filter(function (t) { return t; });
+    if (talents.length > PET_TALENTS_MAX || !talents.every(function (t) { return validAscii(t, PET_TALENT_MAX); })) {
+      return { ok: false, error: 'at most ' + PET_TALENTS_MAX + ' talents, each 1..' + PET_TALENT_MAX + ' ASCII characters' };
+    }
+    const alpha = f.alpha === true;
+    if (alpha && tier !== PET_TIER[1]) return { ok: false, error: 'alpha needs a T5 pet' };
+    const fields = { name: name, species: species, tier: tier, talents: talents, out: f.out === true, alpha: alpha };
+    if (typeof editId === 'string') return { ok: true, body: { edit: Object.assign({ id: editId }, fields) } };
+    return { ok: true, body: { add: fields } };
+  }
+
+  function strList(a) {
+    return Array.isArray(a) ? a.filter(function (x) { return typeof x === 'string'; }) : [];
+  }
+
+  // Roster rows -> display rows; junk dropped.
+  function petRows(view) {
+    const r = plainObject(view) && Array.isArray(view.roster) ? view.roster : [];
+    return r.filter(function (p) {
+      return plainObject(p) && typeof p.id === 'string' && SLUG.test(p.id) && typeof p.name === 'string' &&
+        intIn(p.tier, PET_TIER[0], PET_TIER[1]);
+    }).map(function (p) {
+      const skills = strList(p.skill_names);
+      const talents = strList(p.talents);
+      return { id: p.id, name: p.name, species: typeof p.species === 'string' ? p.species : '',
+        label: (typeof p.species_name === 'string' ? p.species_name : String(p.species || '?')) + ' T' + p.tier +
+          (p.alpha === true ? ' Alpha' : ''),
+        skills: skills.length ? skills.join(', ') : 'no special skill',
+        talents: talents.join(', '), talentList: talents, tier: p.tier,
+        out: p.out === true, alpha: p.alpha === true,
+        fed: isNum(p.fed_ago_s) ? 'fed ' + fmtDuration(p.fed_ago_s * 1000) + ' ago' : 'not fed yet' };
+    });
+  }
+
+  // Coverage -> [{text, cls: ok|warn|bad}]: loot first, then each goal, then warnings.
+  function petCoverageLines(view) {
+    const c = plainObject(view) && plainObject(view.coverage) ? view.coverage : null;
+    if (!c || !plainObject(c.loot)) return [];
+    const head = 'out ' + c.out + '/' + c.max_out;
+    const out = [];
+    if (c.loot.covered !== true) {
+      out.push({ text: head + ' - no pets out: no loot', cls: 'bad' });
+    } else {
+      const parts = [head + ' - loot ok'];
+      if (isNum(c.loot.t4_plus) && c.loot.t4_plus > 0) parts.push(c.loot.t4_plus + ' at T4+');
+      if (typeof c.loot.alpha === 'string') parts.push('Alpha ' + c.loot.alpha + ' +' + c.loot.alpha_bonus_pct + '% loot speed');
+      out.push({ text: parts.join(', '), cls: 'ok' });
+    }
+    (Array.isArray(c.goals) ? c.goals : []).forEach(function (g) {
+      if (!plainObject(g) || typeof g.title !== 'string') return;
+      if (g.covered === true) out.push({ text: g.title + ': ' + strList(g.by).join(', '), cls: 'ok' });
+      else out.push({ text: g.title + ': missing ' + strList(g.missing_names).join(', '), cls: 'warn' });
+    });
+    strList(c.warnings).forEach(function (w) { out.push({ text: w, cls: 'warn' }); });
+    return out;
+  }
+
+  // Exchange plans -> [{text, warn}]; the warning names every parent destroyed.
+  function petExchangeLines(view) {
+    const ex = plainObject(view) && Array.isArray(view.exchange) ? view.exchange : [];
+    return ex.filter(function (e) { return plainObject(e) && isNum(e.use) && isNum(e.target_tier); }).map(function (e) {
+      const head = String(e.species_name || e.species) + ' x' + e.use + ' -> T' + e.target_tier + ': ';
+      const chance = isNum(e.chance_pct) ? e.chance_pct + '%' :
+        'chance not sourced, ' + e.need_for_full + ' more for 100%';
+      const outUsed = strList(e.out_used);
+      const warn = String(e.warning || '') + (outUsed.length ? ' (' + outUsed.join(', ') + (outUsed.length > 1 ? ' are' : ' is') + ' out)' : '');
+      return { text: head + chance, warn: warn };
+    });
+  }
+
+  // Species select options from the server list.
+  function petSpeciesOptions(view) {
+    const s = plainObject(view) && Array.isArray(view.species) ? view.species : [];
+    return s.filter(function (x) { return plainObject(x) && typeof x.id === 'string' && PET_KEY.test(x.id) && typeof x.name === 'string'; })
+      .map(function (x) {
+        const sk = strList(x.skill_names);
+        return { id: x.id, label: x.name + (sk.length ? ' (' + sk.join(', ') + ')' : '') };
+      });
+  }
+
   // The only routes the dashboard bridge forwards, each with its body check.
   const POST_VALIDATORS = {
     '/api/market/watch': validWatchBody, '/api/today': validTodayBody, '/api/progress': validProgressBody,
     '/api/grind': validGrindBody, '/api/events': validEventsBody, '/api/deadeye': validDeadeyeBody,
     '/api/ocr': validOcrBody, '/api/leveling': validLevelingBody, '/api/settings': validSettingsBody,
-    '/api/bosses': validBossesBody
+    '/api/bosses': validBossesBody, '/api/pets': validPetsBody
   };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
@@ -3349,7 +3484,8 @@
   const POST_LABELS = {
     '/api/market/watch': 'Market watch', '/api/today': 'Today', '/api/progress': 'Progress',
     '/api/grind': 'Grind', '/api/events': 'Events', '/api/deadeye': 'Deadeye', '/api/ocr': 'OCR',
-    '/api/leveling': 'Leveling', '/api/settings': 'Settings', '/api/bosses': 'World bosses'
+    '/api/leveling': 'Leveling', '/api/settings': 'Settings', '/api/bosses': 'World bosses',
+    '/api/pets': 'Pets'
   };
 
   // One POST result (the ew:post bridge reply) -> one toast.
@@ -3736,6 +3872,12 @@
     overlayStyleFromQuery: overlayStyleFromQuery,
     ovQuiet: ovQuiet,
     ovServerRowHidden: ovServerRowHidden,
+    validPetsBody: validPetsBody,
+    parsePetForm: parsePetForm,
+    petRows: petRows,
+    petCoverageLines: petCoverageLines,
+    petExchangeLines: petExchangeLines,
+    petSpeciesOptions: petSpeciesOptions,
     validPost: validPost,
     POST_ROUTES: POST_ROUTES,
     THEMES: THEMES,

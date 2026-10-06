@@ -2,7 +2,8 @@
    forwarded to the main process, which checks the route against a fixed
    allowlist, validates the body and POSTs (the server refuses renderer POSTs by
    design). Routes: /api/market/watch, /api/today, /api/progress, /api/grind,
-   /api/events, /api/deadeye, /api/ocr, /api/leveling, /api/bosses (plan 032).
+   /api/events, /api/deadeye, /api/ocr, /api/leveling, /api/bosses (plan 032),
+   /api/pets (plan 043).
    Plan 020 adds the app's
    commit (a read-only launch argument) and a restart of EW's own server (the
    tray "Restart server" path; it never touches the game). Plan 026 adds an

@@ -1,0 +1,65 @@
+{
+ "note": "Plan 043 pet rules, transcribed via research 0003 section 1.4. Operator-typed roster only; nothing is read from the game.",
+ "max_out": 5,
+ "skills": {
+  "source": "https://www.blackdesertfoundry.com/pets-guide/",
+  "verified": "2025-07-25",
+  "names": {
+   "auto_fishing": "auto-fishing speed",
+   "desert_resistance": "desert resistance",
+   "elite_marking": "elite monster marking",
+   "gathering_amount": "gathering amount",
+   "gathering_detection": "gathering detection",
+   "player_detection": "flagged-player detection",
+   "taunt": "taunt"
+  }
+ },
+ "species": [
+  {"id": "cat", "name": "Cat", "skills": ["gathering_detection"]},
+  {"id": "ferret", "name": "Ferret", "skills": ["gathering_detection"]},
+  {"id": "duck", "name": "Duck", "skills": ["gathering_detection"]},
+  {"id": "dog", "name": "Dog", "skills": ["player_detection"]},
+  {"id": "lamb", "name": "Lamb", "skills": ["player_detection"]},
+  {"id": "dragon", "name": "Dragon", "skills": ["player_detection", "auto_fishing"]},
+  {"id": "bird", "name": "Bird", "skills": ["elite_marking"]},
+  {"id": "penguin", "name": "Penguin", "skills": ["auto_fishing"]},
+  {"id": "otter", "name": "Otter", "skills": ["auto_fishing"]},
+  {"id": "fox", "name": "Fox", "skills": ["desert_resistance"]},
+  {"id": "hedgehog", "name": "Hedgehog", "skills": ["gathering_amount"]},
+  {"id": "llama", "name": "Llama", "skills": ["gathering_amount"]},
+  {"id": "panda", "name": "Panda", "skills": ["taunt"]},
+  {"id": "other", "name": "Other", "skills": []}
+ ],
+ "goals": [
+  {"id": "detection", "title": "Detection", "skills": ["player_detection"]},
+  {"id": "elite", "title": "Elite marking", "skills": ["elite_marking"]},
+  {"id": "fishing", "title": "Fishing", "skills": ["auto_fishing"]},
+  {"id": "gathering", "title": "Gathering", "skills": ["gathering_detection", "gathering_amount"]},
+  {"id": "desert", "title": "Desert", "skills": ["desert_resistance"]}
+ ],
+ "feeds": {
+  "source": "https://www.blackdesertfoundry.com/pets-guide/",
+  "verified": "2025-07-25",
+  "items": [
+   {"id": "cheap", "name": "Cheap Feed", "hunger": 12},
+   {"id": "good", "name": "Good Feed", "hunger": 80},
+   {"id": "organic", "name": "Organic Feed", "hunger": 140}
+  ]
+ },
+ "alpha": {
+  "source": "https://www.naeu.playblackdesert.com/en-us/Wiki?wikiNo=264",
+  "verified": "2025-07-25",
+  "loot_bonus_pct": 15,
+  "text": "A Tier 5 pet (trained at Obi Bellen, Old Wisdom Tree) can be appointed Alpha: the other checked-out pets loot 15 percent faster and the Alpha's talent gains one level. Special skills are not boosted. A trained Tier 5 pet can no longer be exchanged."
+ },
+ "exchange": {
+  "source": "https://www.blackdesertfoundry.com/pets-guide/",
+  "verified": "2025-07-25",
+  "target_tier": 4,
+  "max_pets": 5,
+  "full_chance_pets": 5,
+  "full_chance_pct": 100,
+  "cross_species": ["Wizard Gosphy"],
+  "text": "Exchange takes pets of the same type only (Wizard Gosphy excepted) and destroys every parent. Up to 5 pets can go in; 5 give a 100 percent Tier 4 result."
+ }
+}
