@@ -2100,6 +2100,7 @@
     const v = body[k];
     if (k === 'delete') return validRef(v, EVENT_ID_RE);
     if (k === 'purge_expired') return v === true;
+    if (k === 'dismiss_notice') return validNoticeNo(v);
     if (k === 'done') return exact(v, ['id', 'done']) && validRef(v.id, EVENT_ID_RE) && typeof v.done === 'boolean';
     if (k === 'add') {
       if (!plainObject(v) || !onlyKeys(v, ['kind', 'title', 'code', 'rewards', 'starts', 'ends', 'url'])) return false;
@@ -2188,6 +2189,84 @@
     const s = plainObject(suggested) ? suggested : null;
     const st = s && Object.prototype.hasOwnProperty.call(SUGGEST_STATUS, s.status) ? s.status : 'none';
     let text = 'coupon check: ' + SUGGEST_STATUS[st];
+    if (st === 'off' && (s.robots === 'disallow' || s.robots === 'unreachable')) text += ' ' + s.robots;
+    return { status: st, text: text };
+  }
+
+  // ---- Event-notice suggestions (plan 059) ----
+  // GET /api/events `suggested_events`: windows read from the official Events
+  // board (robots.txt-gated, server side). Suggest only: add posts a normal
+  // event entry with the source link; dismiss is remembered by the server.
+
+  function validNoticeNo(v) { return Number.isInteger(v) && v > 0 && v < 1e9; }
+
+  // Valid candidates not already an item (same url, or same title + ends).
+  function noticeRows(suggested, items) {
+    const s = plainObject(suggested) ? suggested : {};
+    const list = Array.isArray(s.candidates) ? s.candidates : [];
+    const urls = {};
+    const known = {};
+    (Array.isArray(items) ? items : []).forEach(function (it) {
+      if (!plainObject(it)) return;
+      if (typeof it.url === 'string') urls[it.url] = true;
+      const e = utcMsOf(it.ends);
+      if (typeof it.title === 'string' && e !== null) known[it.title + '\n' + e] = true;
+    });
+    const seen = {};
+    const out = [];
+    list.forEach(function (c) {
+      if (!plainObject(c) || !validNoticeNo(c.group_no) || seen[c.group_no]) return;
+      if (!validTitle(c.title) || !validUrl(c.url)) return;
+      const s0 = utcMsOf(c.starts);
+      const e0 = utcMsOf(c.ends);
+      if (s0 === null || e0 === null || s0 > e0) return;
+      if (urls[c.url] || known[c.title + '\n' + e0]) return;
+      seen[c.group_no] = true;
+      out.push({
+        group_no: c.group_no, title: c.title, url: c.url, starts: c.starts, ends: c.ends,
+        ends_text: typeof c.ends_text === 'string' ? c.ends_text.slice(0, 120) : '',
+        maint_relative: c.maint_relative === true,
+        ends_edge: c.ends_edge === 'before' || c.ends_edge === 'after' ? c.ends_edge : null
+      });
+    });
+    return out;
+  }
+
+  // Candidate -> POST /api/events body (a plain event add with its link), or null.
+  function noticeAddBody(c) {
+    if (!plainObject(c) || !validTitle(c.title)) return null;
+    if (utcMsOf(c.starts) === null || utcMsOf(c.ends) === null) return null;
+    const add = { kind: 'event', title: c.title, starts: c.starts, ends: c.ends };
+    if (validUrl(c.url)) add.url = c.url;
+    return validEventsBody({ add: add }) ? { add: add } : null;
+  }
+
+  function noticeDismissBody(c) {
+    return plainObject(c) && validNoticeNo(c.group_no) ? { dismiss_notice: c.group_no } : null;
+  }
+
+  // End label: a maintenance-relative end reads 'YYYY-MM-DD before maint.
+  // (~HH:MM local, verify)' (the slot is a guess until verified); else the
+  // local end time.
+  function noticeEndText(c, opts) {
+    if (!plainObject(c)) return '';
+    const t = fmtLocal(c.ends, opts);
+    if (!t) return '';
+    if (c.maint_relative && (c.ends_edge === 'before' || c.ends_edge === 'after')) {
+      return t.text.slice(0, 10) + ' ' + c.ends_edge + ' maint. (~' + t.text.slice(11) + ' local, verify)';
+    }
+    return t.text;
+  }
+
+  const NOTICE_STATUS = {
+    ok: 'checked', stale: 'stale - last good list', pending: 'checking...',
+    off: 'off - robots.txt', error: 'check failed', none: 'off'
+  };
+
+  function noticeStatus(suggested) {
+    const s = plainObject(suggested) ? suggested : null;
+    const st = s && Object.prototype.hasOwnProperty.call(NOTICE_STATUS, s.status) ? s.status : 'none';
+    let text = 'event check: ' + NOTICE_STATUS[st];
     if (st === 'off' && (s.robots === 'disallow' || s.robots === 'unreachable')) text += ' ' + s.robots;
     return { status: st, text: text };
   }
@@ -4189,6 +4268,11 @@
     { id: 'notify', title: 'Notifications', fields: NOTIFY_RULES_PREFS.map(function (n) {
       return { key: 'notify.' + n, label: n, type: 'bool' };
     }).concat([{ key: 'coupons.check', label: 'Coupon suggestions', type: 'bool' }]) },
+    // Plan 059: event-notice suggestions + the weekly maintenance start (UTC).
+    { id: 'events', title: 'Events', fields: [
+      { key: 'events.notice_check', label: 'Event notice suggestions', type: 'bool' },
+      { key: 'events.maintenance_start_utc', label: 'Maintenance start, HH:MM UTC (blank = default)', type: 'hhmm' }
+    ] },
     { id: 'market', title: 'Market', fields: [
       { key: 'market.vp', label: 'Value Pack active', type: 'bool' },
       { key: 'market.fame_pct', label: 'Family fame bonus (0-1.5 %)', type: 'number', min: 0, max: 1.5, step: 0.05 }
@@ -4208,6 +4292,7 @@
       case 'hotkey': return validAccelerator(v) && v.length <= 64;
       case 'family': return v === '' || (typeof v === 'string' && FAMILY_RE.test(v));
       case 'enum': return typeof v === 'string' && f.options.indexOf(v) >= 0;
+      case 'hhmm': return v === '' || (typeof v === 'string' && /^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(v));
       default: return false;
     }
   }
@@ -4241,6 +4326,7 @@
       else if (f.type === 'family') hint = '2-16 letters, digits or _';
       else if (f.type === 'anchor') hint = OVERLAY_ANCHORS.join('|') + ' or x,y';
       else if (f.type === 'display') hint = 'blank or a display number 0-16';
+      else if (f.type === 'hhmm') hint = 'blank or HH:MM (UTC), e.g. 07:00';
       return { error: f.label + ': ' + hint };
     }
     return { value: v };
@@ -5669,6 +5755,11 @@
     suggestedRows: suggestedRows,
     suggestAddBody: suggestAddBody,
     suggestStatus: suggestStatus,
+    noticeRows: noticeRows,
+    noticeAddBody: noticeAddBody,
+    noticeDismissBody: noticeDismissBody,
+    noticeEndText: noticeEndText,
+    noticeStatus: noticeStatus,
     DEADEYE_LEVELS: DEADEYE_LEVELS,
     DEADEYE_SECTIONS: DEADEYE_SECTIONS,
     NOTE_MAX: NOTE_MAX,

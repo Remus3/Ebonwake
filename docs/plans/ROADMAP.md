@@ -63,7 +63,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 056 | Black Spirit's Adventure dice timer from logged-in time (overlay) | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 057 | Deadeye notes autosave + safe open-in-browser for source links | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 058 | Loop resolves its own merge conflicts: re-dispatch a resolve lane | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
-| 059 | Official event-notice import: maintenance-relative windows, suggest-only | [ ] open |
+| 059 | Official event-notice import: maintenance-relative windows, suggest-only | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 060 | Combat Secret Book ledger: books per activity, observed XP, books-to-level | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 
 Deep dive 2026-10-06 (research 0006): two plans. Ranking: 059 first - pays

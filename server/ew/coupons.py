@@ -69,10 +69,10 @@ def _decode(raw):
 
 # -- robots gate ----------------------------------------------------------------
 
-def robots_verdict(fetch):
-    """"allow" when robots.txt lets both `*` and our agent GET NEWS_URL;
-    "disallow" when it does not; "unreachable" when it cannot be read or holds
-    no User-agent group (= off)."""
+def robots_verdict(fetch, urls=(NEWS_URL,)):
+    """"allow" when robots.txt lets both `*` and our agent GET every one of
+    `urls` (plan 059 passes its list + Detail pages); "disallow" when it does
+    not; "unreachable" when it cannot be read or holds no User-agent group (= off)."""
     try:
         text = _decode(fetch(ROBOTS_URL, TIMEOUT_S))
     except Exception:  # noqa: BLE001 - any failure to read the policy = feature off
@@ -83,7 +83,7 @@ def robots_verdict(fetch):
         return "unreachable"
     rp = urllib.robotparser.RobotFileParser()
     rp.parse(lines)
-    ok = rp.can_fetch("*", NEWS_URL) and rp.can_fetch(USER_AGENT, NEWS_URL)
+    ok = all(rp.can_fetch("*", u) and rp.can_fetch(USER_AGENT, u) for u in urls)
     return "allow" if ok else "disallow"
 
 

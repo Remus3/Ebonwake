@@ -1,0 +1,8 @@
+{
+ "weekday": "thu",
+ "start_utc": "07:00",
+ "duration_min": 180,
+ "source": "publisher's usual NA/EU weekly maintenance slot (Wednesday night Pacific = Thursday morning UTC), research 0006 section 3; verify against the next maintenance notice",
+ "verified": false,
+ "note": "verify: the start shifts with the publisher's notice; override with the setting events.maintenance_start_utc (HH:MM UTC)"
+}
