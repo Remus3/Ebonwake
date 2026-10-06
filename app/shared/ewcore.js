@@ -4496,8 +4496,14 @@
       { key: 'ocr.auto', label: 'Read new screenshots automatically', type: 'bool' },
       { key: 'ocr.auto_commit_min', label: 'Auto-commit confidence (0.75-0.99)', type: 'number', min: 0.75, max: 0.99, step: 0.01 },
       { key: 'ocr.daily_cap', label: 'Screenshots read per day (0-1000)', type: 'number', min: 0, max: 1000, step: 1, int: true }
+    ] },
+    // Plan 065: blank = auto-detected (Steam library / Documents); a path = "use other".
+    { id: 'game', title: 'Game folders', fields: [
+      { key: 'bdo.install_dir', label: 'BDO install folder (blank = auto-detect)', type: 'dir' },
+      { key: 'bdo.documents_dir', label: 'BDO Documents folder (blank = auto-detect)', type: 'dir' }
     ] }
   ];
+  const DIR_MAX = 1024;
   const SETTINGS_FIELDS = {};
   SETTINGS_GROUPS.forEach(function (g) { g.fields.forEach(function (f) { SETTINGS_FIELDS[f.key] = f; }); });
   const SETTINGS_KEYS = Object.keys(SETTINGS_FIELDS);
@@ -4513,6 +4519,9 @@
       case 'family': return v === '' || (typeof v === 'string' && FAMILY_RE.test(v));
       case 'enum': return typeof v === 'string' && f.options.indexOf(v) >= 0;
       case 'hhmm': return v === '' || (typeof v === 'string' && /^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(v));
+      // Shape only (the server checks the folder exists): '' or an absolute path.
+      case 'dir': return v === '' || (typeof v === 'string' && v.length <= DIR_MAX && v === v.trim() &&
+        !/[\u0000-\u001f\u007f]/.test(v) && /^([A-Za-z]:[\\/]|[\\/])/.test(v));
       default: return false;
     }
   }
@@ -4547,6 +4556,7 @@
       else if (f.type === 'anchor') hint = OVERLAY_ANCHORS.join('|') + ' or x,y';
       else if (f.type === 'display') hint = 'blank or a display number 0-16';
       else if (f.type === 'hhmm') hint = 'blank or HH:MM (UTC), e.g. 07:00';
+      else if (f.type === 'dir') hint = 'blank (auto-detect) or a full folder path';
       return { error: f.label + ': ' + hint };
     }
     return { value: v };
@@ -4559,6 +4569,17 @@
     if (f.type === 'anchor' && plainObject(v)) return v.x + ',' + v.y;
     if (v === null || v === undefined) return '';
     return String(v);
+  }
+
+  // Plan 065: note beside a 'dir' field from GET /api/settings `detected`
+  // ({key: path|null}); '' for any other field.
+  function settingDetectedNote(key, saved, detected) {
+    const f = SETTINGS_FIELDS[key];
+    if (!f || f.type !== 'dir') return '';
+    const d = plainObject(detected) && typeof detected[key] === 'string' && detected[key] ? detected[key] : null;
+    const own = typeof saved === 'string' && saved !== '';
+    if (!own) return d ? 'auto-detected: ' + d : 'not detected - type the folder path';
+    return d && d !== saved ? 'using this folder (auto-detected: ' + d + ')' : 'using this folder';
   }
 
   function sameSetting(a, b) {
@@ -6134,6 +6155,7 @@
     validSettingsBody: validSettingsBody,
     parseSettingInput: parseSettingInput,
     settingInputText: settingInputText,
+    settingDetectedNote: settingDetectedNote,
     settingsBody: settingsBody,
     settingsEffects: settingsEffects,
     themeAttr: themeAttr,

@@ -85,6 +85,23 @@ def valid_maint_start(v):
     return v == "" or maint.valid_hhmm(v)
 
 
+MAX_DIR = 1024
+
+
+def valid_dir(v):
+    """"" (auto-detect) or an absolute path of an existing directory."""
+    if v == "":
+        return True
+    if not isinstance(v, str) or len(v) > MAX_DIR or v != v.strip():
+        return False
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in v):
+        return False
+    try:
+        return os.path.isabs(v) and os.path.isdir(v)
+    except (OSError, ValueError):
+        return False
+
+
 def _one_of(choices):
     return lambda v: isinstance(v, str) and v in choices
 
@@ -122,7 +139,11 @@ SPEC.update({
     "ocr.auto": (_is_bool, True),
     "ocr.auto_commit_min": (_num_in(0.75, 0.99), 0.9),
     "ocr.daily_cap": (lambda v: _is_int(v) and 0 <= v <= 1000, 120),
+    # Plan 065: "use other" overrides for the auto-detected BDO folders.
+    "bdo.install_dir": (valid_dir, ""),
+    "bdo.documents_dir": (valid_dir, ""),
 })
+DETECTED_KEYS = ("bdo.install_dir", "bdo.documents_dir")
 
 
 def defaults():
@@ -279,8 +300,22 @@ def _atomic_write_bytes(path, data):
 
 
 class Settings:
-    def __init__(self, path):
+    def __init__(self, path, detected=None):
         self.path = Path(path)
+        # Plan 065: callable -> {"install_dir", "documents_dir"} (detect.Detector.paths).
+        self.detected = detected
+
+    def _detected(self):
+        try:
+            got = self.detected() if self.detected is not None else {}
+        except Exception:  # noqa: BLE001 - a detector fault shows as "nothing detected"
+            got = {}
+        got = got if isinstance(got, dict) else {}
+        out = {}
+        for key in DETECTED_KEYS:
+            v = got.get(key.split(".", 1)[1])
+            out[key] = v if isinstance(v, str) and v else None
+        return out
 
     def _read_text(self):
         try:
@@ -296,7 +331,8 @@ class Settings:
         except (OSError, ValueError):
             doc, error = {}, "config/local.json is unreadable"
         return {"settings": values_from(doc if isinstance(doc, dict) else {}),
-                "defaults": defaults(), "restart_keys": list(RESTART_KEYS), "error": error}
+                "defaults": defaults(), "restart_keys": list(RESTART_KEYS), "error": error,
+                "detected": self._detected()}
 
     def apply(self, body):
         pairs = validate(body)

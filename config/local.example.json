@@ -6,8 +6,9 @@
     "showDashboard": "Control+Alt+D"
   },
   "bdo": {
-    "install_dir": "<steam library>/steamapps/common/Black Desert Online",
-    "documents_dir": "<documents>/Black Desert"
+    "_doc": "Plan 065. Blank = auto-detect (Steam libraryfolders.vdf -> <library>/steamapps/common/Black Desert Online; Documents known folder -> Black Desert). A path here (or Settings > bdo.*) always wins.",
+    "install_dir": "",
+    "documents_dir": ""
   },
   "secrets": {
     "_example_ocr_key": {"env": "EW_OCR_API_KEY"}

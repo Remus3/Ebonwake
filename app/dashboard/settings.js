@@ -53,6 +53,7 @@
     S.saved = doc.settings;
     S.defaults = doc.defaults || null;
     S.restartKeys = Array.isArray(doc.restart_keys) ? doc.restart_keys : [];
+    S.detected = doc.detected && typeof doc.detected === 'object' ? doc.detected : null;
     S.err = typeof doc.error === 'string' ? doc.error : null;
     applyTheme(S.saved['ui.theme']);
   }
@@ -156,12 +157,15 @@
         input.placeholder = C.OVERLAY_ANCHORS.join(' ') + ' or x,y';
       }
       if (f.type === 'number') input.placeholder = f.min + '-' + f.max;
+      if (f.type === 'dir') input.placeholder = (S.detected && S.detected[f.key]) || 'auto-detect';
     }
     input.dataset.key = f.key;
     if (S.restartKeys.indexOf(f.key) >= 0) row.title = 'applies after a server restart';
     S.inputs[f.key] = input;
     row.appendChild(input);
-    if (S.defaults && f.key in S.defaults && f.type !== 'bool') {
+    if (f.type === 'dir') {
+      row.appendChild(el('span', 'ew-muted ew-sdef', C.settingDetectedNote(f.key, v, S.detected)));
+    } else if (S.defaults && f.key in S.defaults && f.type !== 'bool') {
       row.appendChild(el('span', 'ew-muted ew-sdef', 'default ' + (C.settingInputText(f.key, S.defaults[f.key]) || 'blank')));
     }
     return row;
