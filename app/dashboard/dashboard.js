@@ -54,6 +54,7 @@
     try { localStorage.setItem('ew.tab', id); } catch (e) { /* storage optional */ }
     if (id === 'home' && window.EWHome) window.EWHome.show();
     if (id === 'market' && window.EWMarket) window.EWMarket.show();
+    if (id === 'market' && window.EWCrafting) window.EWCrafting.show();
     if (id === 'today' && window.EWToday) window.EWToday.show();
     if (id === 'progress' && window.EWProgress) window.EWProgress.show();
     if (id === 'progress' && window.EWLeveling) window.EWLeveling.show();
@@ -114,6 +115,7 @@
         window.EWDeadeye.mount(p);
       } else if (t.id === 'market' && window.EWMarket) {
         window.EWMarket.mount(p);
+        if (window.EWCrafting) window.EWCrafting.mount(p); // plan 054
       } else if (t.id === 'settings' && window.EWSettings) {
         window.EWSettings.mount(p);
       } else if (t.id === 'system') {

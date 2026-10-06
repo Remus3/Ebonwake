@@ -9,10 +9,10 @@ adds its `suggested` coupon block),
 /api/deadeye (plan 007; /api/deadeye/enhance GET plan 035; /api/deadeye/shopping GET plan 037), /api/game (plan 008), /api/leveling (plan 011),
 /api/spots (plan 012, GET only), /api/bosses (plan 031), /api/settings (plan 030), /api/pets
 (plan 043), /api/inventory (plan 045), /api/mounts (plan 044), /api/summary (plan 046),
-/api/onboarding (plan 051), and POST
+/api/onboarding (plan 051), /api/crafting (plan 054), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
 /api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings + /api/pets +
-/api/inventory + /api/mounts + /api/onboarding behind one shared guard.
+/api/inventory + /api/mounts + /api/onboarding + /api/crafting behind one shared guard.
 """
 
 import datetime as _dt
@@ -30,7 +30,7 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import (__version__, bosses, coupons, deadeye, enhance, events, gamewatch, grind,
+from . import (__version__, bosses, coupons, crafting, deadeye, enhance, events, gamewatch, grind,
                inventory, itemnames, leveling, market, mounts, ocr, onboarding, pets, ports,
                progress, settings, shopping, single, spots, summary, today, weekly)
 from .store import Store
@@ -232,6 +232,10 @@ class EWServer(ThreadingHTTPServer):
             silver_per_h=lambda: shopping.average_silver_per_h(self.grind.view()["spots"]),
             watched=lambda: {w["id"] for w in self.market.watchlist.items() if w["sid"] == 0},
             clock=deadeye_clock or time.time)
+        # Plan 054: operator recipes priced from the market cache only, taxed per plan 027.
+        self.crafting = crafting.CraftingService(
+            self.store, price=lambda iid: self.market.cached_price(iid),
+            tax=lambda: self.market.settings, name=self.names.name)
         if game_watch is None:
             # Only main() passes the real config; a bare make_server (every test)
             # never reads config/local.json (plan 008 refute round 1).
@@ -403,6 +407,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.summary.view())
         if path == "/api/onboarding":
             return self._send(200, self.server.onboarding.view())
+        if path == "/api/crafting":
+            return self._send(200, self.server.crafting.view())
         if path == "/events":
             return self._sse()
         if path == "/":  # plan 020: redirect so relative asset paths resolve
@@ -537,13 +543,21 @@ class Handler(BaseHTTPRequestHandler):
         (op, arg), = body.items()
         return getattr(self.server.onboarding, op)(arg)
 
+    def _post_crafting(self, body):
+        ops = {"add", "edit", "delete"}
+        if len(body) != 1 or not (ops & set(body)):
+            raise ValueError("body must be one of {add|edit|delete: ...}")
+        (op, arg), = body.items()
+        return getattr(self.server.crafting, op)(arg)
+
     POST_ROUTES = {"/api/market/watch": _post_market_watch, "/api/today": _post_today,
                    "/api/progress": _post_progress, "/api/grind": _post_grind,
                    "/api/events": _post_events, "/api/deadeye": _post_deadeye,
                    "/api/ocr": _post_ocr, "/api/leveling": _post_leveling,
                    "/api/bosses": _post_bosses, "/api/settings": _post_settings,
                    "/api/pets": _post_pets, "/api/inventory": _post_inventory,
-                   "/api/mounts": _post_mounts, "/api/onboarding": _post_onboarding}
+                   "/api/mounts": _post_mounts, "/api/onboarding": _post_onboarding,
+                   "/api/crafting": _post_crafting}
 
     def do_POST(self):  # noqa: N802
         """Shared guard for every POST route: loopback Host + application/json +
