@@ -63,6 +63,19 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 056 | Black Spirit's Adventure dice timer from logged-in time (overlay) | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 057 | Deadeye notes autosave + safe open-in-browser for source links | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 058 | Loop resolves its own merge conflicts: re-dispatch a resolve lane | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
+| 059 | Official event-notice import: maintenance-relative windows, suggest-only | [ ] open |
+| 060 | Combat Secret Book ledger: books per activity, observed XP, books-to-level | [ ] open |
+
+Deep dive 2026-10-06 (research 0006): two plans. Ranking: 059 first - pays
+off every week from today, removes the biggest manual-typing chore on the
+Events tab and reuses plan 014's proven robots-gated fetcher; 060 second -
+high value once the operator is Lv 60+ and the post-patch Lv 62+ per-kill
+cap (~0.01 %) makes books a main XP source, but books only exist from the
+2026-10-15 maintenance. Rejected: Steam news feed (api.steampowered.com
+robots.txt disallows `/`), level-gap helper (plan 018 steps 5-6), per-level
+stat card (sheet AP already includes it). Data items (no plan): 6-49
+per-kill cap bands into `xp_epochs.json`; verify the plan 018 epoch after
+the 2026-10-08 patch notes.
 
 Deep dive + UX audit 2026-10-05 session 4 (research 0003-0005): plans 019-057,
 39 plans from 21 + 25 + 15 candidates and 30 UX findings. Ordering rationale:
