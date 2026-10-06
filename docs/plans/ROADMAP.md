@@ -43,7 +43,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 036 | Failstack bank + Agris pity tracker + cron budget | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 037 | Shopping list from the enhancement plan: materials x arsha prices, can-afford-by | [ ] open |
 | 038 | Drop-buff cap calculator (300/400/500 % caps, rate vs amount) + Blessing of Agris ROI | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
-| 039 | Loot-valued grind log: per-spot loot tables, tax-correct silver/h, sell-vs-vendor | [ ] open |
+| 039 | Loot-valued grind log: per-spot loot tables, tax-correct silver/h, sell-vs-vendor | [x] done 2026-10-05 (loop; refute 0/3 PASS) |
 | 040 | OCR loot-window import: operator screenshot -> item counts for the grind log | [ ] open |
 | 041 | Profile history: hourly BDO-REST-API snapshots, trend sparklines, auto level sample | [ ] open |
 | 042 | Lifeskill / energy / contribution card from the profile API | [ ] open |

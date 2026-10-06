@@ -12,7 +12,10 @@
     data: null, at: 0, err: null, last: null, timer: null, ui: null, busy: false,
     spot: null, buffMin: {}, preset: undefined, presetMin: '', dropOpen: false,
     // Plan 012 "Where next": GET /api/spots, refetched with each grind poll.
-    recs: null, recsErr: null, goal: 'xp', whatIf: { ap: '', dp: '', level: '' }
+    recs: null, recsErr: null, goal: 'xp', whatIf: { ap: '', dp: '', level: '' },
+    // Plan 039: GET /api/grind/loot for the running (else selected) spot;
+    // counts typed per item name survive redraws until a log succeeds.
+    loot: null, lootSpot: null, lootErr: null, lootCounts: {}
   };
 
   function el(tag, cls, text) {
@@ -61,8 +64,36 @@
     S.last = now;
     clearTimeout(S.timer);
     S.timer = setTimeout(function () { poll(true); }, POLL_MS);
-    getJSON('/api/grind').then(accept, function (e) { S.err = e.message; }).then(draw);
+    getJSON('/api/grind').then(accept, function (e) { S.err = e.message; }).then(draw)
+      .then(function () { loadLoot(false); });
     loadRecs();
+  }
+
+  // Plan 039: the loot list follows the running spot, else the picker.
+  function lootSpot() {
+    const a = active();
+    if (a) return a.spot;
+    return S.ui && S.ui.form.spot.value ? S.ui.form.spot.value : null;
+  }
+
+  function loadLoot(force) {
+    if (!S.ui) return;
+    const spot = lootSpot();
+    if (!force && spot === S.lootSpot) return;
+    if (spot !== S.lootSpot) S.lootCounts = {};
+    S.lootSpot = spot;
+    if (!spot) { S.loot = null; S.lootErr = null; drawLoot(); return; }
+    getJSON('/api/grind/loot?spot=' + encodeURIComponent(spot)).then(function (d) {
+      if (spot !== S.lootSpot) return;
+      S.loot = d && Array.isArray(d.items) ? d : null;
+      S.lootErr = S.loot ? null : 'bad loot reply';
+    }, function (e) { S.lootErr = e.message; }).then(drawLoot);
+  }
+
+  function lootRows() {
+    const items = S.loot ? S.loot.items : [];
+    return items.filter(function (it) { return it && typeof it.name === 'string'; })
+      .map(function (it) { return { name: it.name, count: S.lootCounts[it.name] || '' }; });
   }
 
   function loadRecs() {
@@ -113,17 +144,27 @@
 
   function stop() {
     const f = S.ui.form;
-    const r = C.parseGrindForm('stop', { silver: f.silver.value, trash: f.trash.value });
+    const r = C.parseGrindForm('stop', { silver: f.silver.value, trash: f.trash.value, loot: lootRows() });
     if (!r.ok) { msg(r.error); return; }
-    send(r.body, 'logged').then(function (ok) { if (ok) { f.silver.value = ''; f.trash.value = ''; } });
+    send(r.body, 'logged').then(function (ok) {
+      if (ok) { f.silver.value = ''; f.trash.value = ''; S.lootCounts = {}; loadLoot(true); }
+    });
   }
 
   function logManual() {
     const f = S.ui.form;
-    const r = C.parseGrindForm('log', { spot: f.spot.value, minutes: f.minutes.value, silver: f.silver.value, trash: f.trash.value });
+    const r = C.parseGrindForm('log', { spot: f.spot.value, minutes: f.minutes.value, silver: f.silver.value, trash: f.trash.value, loot: lootRows() });
     if (!r.ok) { msg(r.error); return; }
     send(r.body, 'logged').then(function (ok) {
-      if (ok) { f.minutes.value = ''; f.silver.value = ''; f.trash.value = ''; }
+      if (ok) { f.minutes.value = ''; f.silver.value = ''; f.trash.value = ''; S.lootCounts = {}; loadLoot(true); }
+    });
+  }
+
+  function addLootItem(lf) {
+    const r = C.parseGrindForm('loot_item', { spot: lootSpot(), name: lf.name.value, vendor_price: lf.vendor.value, id: lf.id.value, marketable: lf.market.checked });
+    if (!r.ok) { msg(r.error); return; }
+    send(r.body, 'loot item saved').then(function (ok) {
+      if (ok) { lf.name.value = ''; lf.vendor.value = ''; lf.id.value = ''; loadLoot(true); }
     });
   }
 
@@ -213,8 +254,14 @@
       name.title = when;
       r.appendChild(name);
       r.appendChild(el('span', 'ew-muted ew-gnum', (typeof s.minutes === 'number' ? s.minutes : '?') + 'm'));
-      r.appendChild(el('span', 'ew-mprice', C.fmtSilver(s.silver)));
-      r.appendChild(el('span', 'ew-mprice ew-gnum', C.fmtSilver(C.silverPerHour(s.silver, s.minutes)) + '/h'));
+      // Plan 039: a loot-valued session shows its valued silver (typed silver otherwise).
+      const silver = C.sessionSilver(s);
+      const amt = el('span', 'ew-mprice', C.fmtSilver(silver));
+      const pile = C.trashPileText(s);
+      if (pile) amt.title = 'loot-valued: ' + pile;
+      r.appendChild(amt);
+      r.appendChild(el('span', 'ew-mprice ew-gnum', C.fmtSilver(C.silverPerHour(silver, s.minutes)) + '/h'));
+      if (pile) r.appendChild(el('span', 'ew-muted', pile));
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';
       x.title = 'delete (click twice)';
@@ -225,6 +272,75 @@
       box.appendChild(r);
     });
     body.appendChild(box);
+  }
+
+  // Plan 039: one row per loot item (count input, sell-vs-vendor hint, x for
+  // operator items), the table source, and an add-item row.
+  function drawLoot() {
+    const ui = S.ui;
+    if (!ui || !ui.lootBody) return;
+    const body = ui.lootBody;
+    body.textContent = '';
+    if (!S.lootSpot) return;
+    body.appendChild(el('div', 'ew-muted', 'loot (counts value the session)'));
+    if (S.lootErr) body.appendChild(el('div', 'ew-err', S.lootErr));
+    const items = S.loot ? S.loot.items : [];
+    items.forEach(function (it) {
+      if (!it || typeof it.name !== 'string') return;
+      const r = el('div', 'ew-grow');
+      r.appendChild(el('span', 'ew-mname', it.name));
+      const n = el('input');
+      n.type = 'text';
+      n.inputMode = 'numeric';
+      n.maxLength = 8;
+      n.placeholder = 'count';
+      n.value = S.lootCounts[it.name] || '';
+      n.addEventListener('input', function () { S.lootCounts[it.name] = n.value; });
+      r.appendChild(n);
+      const h = el('span', 'ew-muted', C.lootHintText(it.hint));
+      const hint = it.hint || {};
+      h.title = 'vendor ' + C.fmtSilver(hint.vendor) + ' / market net ' + C.fmtSilver(hint.market_net) + ' per unit';
+      r.appendChild(h);
+      if (it.origin === 'operator') {
+        const x = el('button', 'ew-tx', 'x');
+        x.type = 'button';
+        x.title = 'forget this item (click twice)';
+        x.addEventListener('click', function () {
+          if (!armed(x, 'x')) return;
+          send({ loot_forget: { spot: S.lootSpot, name: it.name } }, 'loot item removed')
+            .then(function (ok) { if (ok) loadLoot(true); });
+        });
+        r.appendChild(x);
+      }
+      body.appendChild(r);
+    });
+    if (S.loot && S.loot.source) {
+      const src = el('div', 'ew-muted', 'table: ' + S.loot.source + (S.loot.verified ? ' (' + S.loot.verified + ')' : ' (unverified)'));
+      body.appendChild(src);
+    }
+    const add = el('div', 'ew-grow');
+    const lf = {};
+    const box = function (k, ph, max) {
+      const i = el('input');
+      i.type = 'text';
+      i.maxLength = max;
+      i.placeholder = ph;
+      i.autocomplete = 'off';
+      lf[k] = i;
+      add.appendChild(i);
+    };
+    box('name', 'item', 60);
+    box('vendor', 'vendor price', 11);
+    box('id', 'item id', 10);
+    lf.market = el('input');
+    lf.market.type = 'checkbox';
+    lf.market.title = 'marketable (sells on the Central Market)';
+    add.appendChild(lf.market);
+    const b = el('button', 'ew-btn', 'Add item');
+    b.type = 'button';
+    b.addEventListener('click', function () { addLootItem(lf); });
+    add.appendChild(b);
+    body.appendChild(add);
   }
 
   function drawSpots() {
@@ -513,13 +629,16 @@
       return i;
     };
     f.spotRow = field('spot', 'spot', el('select'));
-    f.spot.addEventListener('change', function () { S.spot = f.spot.value; });
+    f.spot.addEventListener('change', function () { S.spot = f.spot.value; loadLoot(false); });
     f.minutesRow = field('minutes', 'minutes (manual)', text(4));
     f.minutes.inputMode = 'numeric';
     field('silver', 'silver earned', text(14));
     f.silver.inputMode = 'numeric';
     field('trash', 'trash', text(7));
     f.trash.inputMode = 'numeric';
+    // Plan 039: loot counts for the spot's table; values the session when given.
+    const loot = el('div', 'ew-gloot');
+    form.appendChild(loot);
     const btns = el('div', 'ew-btns');
     const btn = function (label, fn) {
       const b = el('button', 'ew-btn', label);
@@ -545,7 +664,7 @@
     form.appendChild(m);
     form.addEventListener('submit', function (ev) { ev.preventDefault(); });
     c.body.appendChild(form);
-    return { card: c.card, pill: c.pill, form: f, msg: m, clock: clk, activeSpot: spotLabel, err: err };
+    return { card: c.card, pill: c.pill, form: f, msg: m, clock: clk, activeSpot: spotLabel, err: err, loot: loot };
   }
 
   // Goal toggle + what-if AP / DP / level (blank = the Progress character).
@@ -591,16 +710,18 @@
     const d = card('Drop rate');
     [s, w, l, p, b, d].forEach(function (x) { panel.appendChild(x.card); });
     S.ui = {
-      form: s.form, msg: s.msg, clock: s.clock, activeSpot: s.activeSpot, sessionErr: s.err,
+      form: s.form, msg: s.msg, clock: s.clock, activeSpot: s.activeSpot, sessionErr: s.err, lootBody: s.loot,
       sessionPill: s.pill, recBody: w.body, recPill: w.pill,
       logBody: l.body, logPill: l.pill, spotBody: p.body, buffBody: b.body, buffClocks: [],
       dropBody: d.body, dropPill: d.pill
     };
+    S.lootSpot = undefined; // fresh loot box: the next loadLoot always fetches
     if (!S.timer) {
       setInterval(tick, 1000);
       poll(false);
     } else {
       draw();
+      loadLoot(false);
     }
   }
 
