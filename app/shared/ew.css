@@ -100,6 +100,22 @@ html, body {
 .ew-spark { display: block; width: 100%; height: 60px; margin: 6px 0; }
 .ew-spark path { fill: none; stroke: var(--fk-chart-1); stroke-width: 1.5; }
 .ew-stats { display: flex; gap: 12px; margin-bottom: 6px; }
+/* Plan 052: p20-p80 price band strip with the p50 tick and the current price. */
+.ew-badge.below_p20 { color: var(--fk-status-ok); cursor: help; }
+.ew-band { margin: 4px 0 6px; font-size: 12px; }
+.ew-band-strip {
+  position: relative; height: 10px; margin: 4px 0;
+  border: 1px solid var(--fk-border); border-radius: 3px;
+}
+.ew-band-fill { position: absolute; top: 0; bottom: 0; background: var(--fk-chart-1); opacity: .3; }
+.ew-band-p50 { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--fk-chart-1); }
+.ew-band-at {
+  position: absolute; top: -3px; bottom: -3px; width: 3px; margin-left: -1px;
+  background: var(--fk-text); border-radius: 1px;
+}
+.ew-band-at.low { background: var(--fk-status-ok); }
+.ew-band-at.high { background: var(--fk-status-warn); }
+.ew-check { display: flex; align-items: center; gap: 4px; }
 .ew-depth { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .ew-drow { position: relative; height: 18px; margin-top: 2px; }
 .ew-dbar { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; opacity: .35; }

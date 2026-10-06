@@ -125,6 +125,16 @@ test('marketAlert: fires on the crossing only, per item and direction', () => {
   assert.deepStrictEqual(C.notifyRules(a, snap({ market: null }), T0, ALL_ON), []);
 });
 
+test('marketAlert: plan 052 below_p20 crossing fires once', () => {
+  const row = (alert, price) => ({ id: 4901, sid: 0, name: 'Black Stone', price: price, below: null, above: null,
+    p20: true, bands: { p20: 200000, p50: 220000, p80: 240000 }, alert: alert });
+  const a = snap({ market: { items: [row(null, 210000)] } });
+  const b = snap({ market: { items: [row('below_p20', 190000)] } });
+  assert.deepStrictEqual(C.notifyRules(a, b, T0, ALL_ON), [{ key: 'marketAlert:4901:0:below_p20', rule: 'marketAlert',
+    title: 'Market alert: Black Stone', body: 'Black Stone at 190K, under its 90-day p20 200K' }]);
+  assert.deepStrictEqual(C.notifyRules(b, b, T0, ALL_ON), []);
+});
+
 test('buffEnding: armed buff with <= 5 min left, key per arming', () => {
   const ends = new Date(T0 + 4 * 60000).toISOString();
   const g = { buffs: [{ id: 3, name: 'XP scroll', ends: ends }, { id: 4, name: 'Value Pack', ends: new Date(T0 + 3600000).toISOString() }] };
