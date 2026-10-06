@@ -1,6 +1,6 @@
 EW NEXT SESSION
 ---------------
-SESSION: 8
+SESSION: 9
 
 Next action: watch the loop's self-continuing deep-dive -> plan -> build
 cycle (ROADMAP 0 open rows at /done; autonomy round plans 061-073 all
@@ -127,7 +127,9 @@ mark item merged, delete keep ref, push). EW server restarted on 4649c98
 Acceptance: each new deep-dive plan merged by the loop with ci green,
 nothing in adjudicate / merge-conflict / gave-up / failed-dirty.
 
-Do NOT redo: plans 019-073 merged (061 c019766 via leak-sweep false
+Do NOT redo: session 8 check (2026-10-06 ~18:50): loop items 69 merged /
+8 no-change, none stuck; inbox 0 new; lanes FREE; HALT absent; server
+version 4649c98 ok; headless runs 106/120 (frees 21:17). Plans 019-073 merged (061 c019766 via leak-sweep false
 positive fix; 070 4649c98 with 069/070 whatnow-filter reconcile), research
 0007 autonomy deep-dive (4c03025), H9665a8 merged, H77a68e/H5850e9
 no-change (records), loop stall fix 56be70f, lane-race fix bc5a6bd,
@@ -136,9 +138,9 @@ LaneLoop arm, kit v8.
 In flight: none (all 3 lanes FREE at /done; loop idle, next deep-dive
 2026-10-07).
 
-Status: main 4649c98 = origin/main before this hand-off commit. Gates this
-/done: pytest exit 0, node 600 pass / 0 fail, leak sweep ARMED (19). CI:
-ci 37547948158 + codeql 37547948217 success on 4649c98. Server health ok,
-version 4649c98. Session jsonl ~1 MB.
+Status: main 5e1d59d = origin/main before this hand-off commit (session 8
+made no code changes). Gates this /done: pytest exit 0, node exit 0, leak
+sweep ARMED (19). CI: ci 37548324258 + codeql 37548324237 success on
+5e1d59d (128 s). Server health ok, version 4649c98. Session jsonl ~0.5 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
