@@ -1397,6 +1397,11 @@
     if (!plainObject(profile) || profile.status === 'none') {
       return { cls: 'unknown', label: 'no profile', stale: true, error: null, none: true, pending: false };
     }
+    // Plan 061: profile source off (no self-hosted base, or robots disallow).
+    if (profile.state === 'off' || profile.status === 'off') {
+      return { cls: 'unknown', label: 'profile off', stale: true, error: null, none: false,
+        pending: false, off: true, reason: typeof profile.reason === 'string' ? profile.reason : null };
+    }
     if (profile.status === 'pending' && !plainObject(profile.data)) {
       return { cls: 'unknown', label: 'profile fetching', stale: true, error: null, none: false, pending: true };
     }
@@ -4561,7 +4566,9 @@
       { key: 'hotkeys.showDashboard', label: 'Show dashboard', type: 'hotkey' }
     ] },
     { id: 'profile', title: 'Profile', fields: [
-      { key: 'profile.family', label: 'Family name (blank = none)', type: 'family' }
+      { key: 'profile.family', label: 'Family name (blank = none)', type: 'family' },
+      // Plan 061: self-hosted BDO-REST-API base; blank = profile source off.
+      { key: 'profile.base_url', label: 'Self-hosted profile API base (blank = off)', type: 'baseurl' }
     ] },
     { id: 'appearance', title: 'Appearance', fields: [
       { key: 'ui.theme', label: 'Theme', type: 'enum', options: THEMES },
@@ -4608,6 +4615,19 @@
   const SETTINGS_KEYS = Object.keys(SETTINGS_FIELDS);
   const FAMILY_RE = /^[A-Za-z0-9_]{2,16}$/;
 
+  // Plan 061 mirror of progress.base_ok: https on any host, http on loopback
+  // only; no userinfo, query, fragment, whitespace or non-ASCII; <= 200 chars.
+  function validProfileBase(v) {
+    if (typeof v !== 'string' || !v || v.length > 200 || !/^[\x21-\x7e]+$/.test(v)) return false;
+    const m = /^(https?):\/\/([^/?#@]+)(\/[^?#]*)?$/.exec(v);
+    if (!m) return false;
+    const hp = /^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)(:\d{1,5})?$/.exec(m[2]);
+    if (!hp || (hp[2] && Number(hp[2].slice(1)) > 65535)) return false;
+    const host = hp[1].toLowerCase();
+    const loop = host === 'localhost' || host === '[::1]' || /^127(\.\d{1,3}){3}$/.test(host);
+    return m[1] === 'https' || loop;
+  }
+
   function settingValueOk(f, v) {
     switch (f.type) {
       case 'bool': return typeof v === 'boolean';
@@ -4621,6 +4641,7 @@
       // Shape only (the server checks the folder exists): '' or an absolute path.
       case 'dir': return v === '' || (typeof v === 'string' && v.length <= DIR_MAX && v === v.trim() &&
         !/[\u0000-\u001f\u007f]/.test(v) && /^([A-Za-z]:[\\/]|[\\/])/.test(v));
+      case 'baseurl': return v === '' || validProfileBase(v);
       default: return false;
     }
   }
@@ -4656,6 +4677,7 @@
       else if (f.type === 'display') hint = 'blank or a display number 0-16';
       else if (f.type === 'hhmm') hint = 'blank or HH:MM (UTC), e.g. 07:00';
       else if (f.type === 'dir') hint = 'blank (auto-detect) or a full folder path';
+      else if (f.type === 'baseurl') hint = 'blank, https://..., or http://127.0.0.1:8001/v1';
       return { error: f.label + ': ' + hint };
     }
     return { value: v };
@@ -6068,6 +6090,8 @@
     parseCharacterForm: parseCharacterForm,
     parseTrackForm: parseTrackForm,
     profilePill: profilePill,
+    PROFILE_OFF_TEXT: 'Profile source off - set a self-hosted base in Settings',
+    validProfileBase: validProfileBase,
     profileRows: profileRows,
     BUFF_DEFAULTS: BUFF_DEFAULTS,
     BUFF_MINUTES: BUFF_MINUTES,

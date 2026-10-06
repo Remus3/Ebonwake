@@ -18,7 +18,8 @@ from server.ew import httpcache, market, progress
 from server.ew.store import Store
 
 FAMILY = "Testfam"
-HIT = [{"familyName": "Testfam", "profileTarget": "OPAQUE", "region": "NA",
+LOCAL = progress.SELF_HOST_EXAMPLE  # plan 061: loopback base, robots gate skipped
+HIT =[{"familyName": "Testfam", "profileTarget": "OPAQUE", "region": "NA",
         "guild": {"name": "Guildy"},
         "characters": [{"name": "Shooty", "class": "Deadeye", "main": True, "level": 62},
                        {"name": "Alt", "class": "Warrior", "main": False}]}]
@@ -44,7 +45,7 @@ class FakeFetch:
         return self.body if isinstance(self.body, bytes) else json.dumps(self.body).encode()
 
 
-def _pc(tmp_path, body=HIT, clock=None, family=FAMILY, base_url=None):
+def _pc(tmp_path, body=HIT, clock=None, family=FAMILY, base_url=LOCAL):
     f = FakeFetch(body)
     c = progress.ProfileClient(family, base_url=base_url, fetch=f, clock=clock or Clock(),
                                cache_dir=tmp_path / "cache")
@@ -117,7 +118,7 @@ def test_profile_url_shape_read_only_na(tmp_path):
     c, f = _pc(tmp_path)
     c.get()
     url = f.calls[0]
-    assert url.startswith(progress.DEFAULT_BASE + "/adventurer/search?")
+    assert url.startswith(LOCAL + "/adventurer/search?")
     assert "query=Testfam" in url and "searchType=familyName" in url and "region=NA" in url
 
 
@@ -186,13 +187,14 @@ def test_profile_family_from_config(cfg, want):
     assert progress.family_from_config(cfg) == want
 
 
-def test_profile_base_url_must_be_https(tmp_path):
+def test_profile_base_url_https_or_loopback(tmp_path):
+    # Plan 061: plain http off loopback = no base = off, zero requests.
     c, f = _pc(tmp_path, base_url="http://evil.example.com")
     c.get()
-    assert f.calls[0].startswith(progress.DEFAULT_BASE)
-    c2, f2 = _pc(tmp_path / "other", base_url="https://mirror.example.com/v1/")
+    assert f.calls == [] and c.off_reason() == "no_base"
+    c2, f2 = _pc(tmp_path / "other", base_url="http://127.0.0.1:8001/v1/")
     c2.get()
-    assert f2.calls[0].startswith("https://mirror.example.com/v1/adventurer/search?")
+    assert f2.calls[0].startswith("http://127.0.0.1:8001/v1/adventurer/search?")
 
 
 # --- progress service ------------------------------------------------------
@@ -375,7 +377,7 @@ def _no_network(url, timeout):
 
 @pytest.fixture()
 def psrv(tmp_path):
-    pc = progress.ProfileClient(FAMILY, fetch=FakeFetch(HIT), clock=Clock(),
+    pc = progress.ProfileClient(FAMILY, base_url=LOCAL, fetch=FakeFetch(HIT), clock=Clock(),
                                 cache_dir=tmp_path / "pcache")
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
                           sse_interval=0.05, market_seed=[],
@@ -516,7 +518,7 @@ def test_post_view_never_fetches(tmp_path):
 
 def test_get_view_refreshes_off_request_path(tmp_path):
     f = SlowFetch(HIT)
-    c = progress.ProfileClient(FAMILY, fetch=f, clock=Clock(), cache_dir=tmp_path / "cache")
+    c = progress.ProfileClient(FAMILY, base_url=LOCAL, fetch=f, clock=Clock(), cache_dir=tmp_path / "cache")
     s = _svc(tmp_path, c)
     import time as _t
     t0 = _t.monotonic()
@@ -544,7 +546,7 @@ def test_pending_status_when_upstream_says_being_fetched(tmp_path):
 
 def test_route_post_does_not_wait_on_slow_upstream(tmp_path):
     f = SlowFetch(HIT)
-    pc = progress.ProfileClient(FAMILY, fetch=f, clock=Clock(), cache_dir=tmp_path / "pcache")
+    pc = progress.ProfileClient(FAMILY, base_url=LOCAL, fetch=f, clock=Clock(), cache_dir=tmp_path / "pcache")
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
                           sse_interval=0.05, market_seed=[],
                           market_client=market.ArshaClient(fetch=_no_network,
@@ -1056,7 +1058,7 @@ def test_history_query_validation(tmp_path):
 @pytest.fixture()
 def hsrv(tmp_path):
     clk = Clock()
-    pc = progress.ProfileClient(FAMILY, fetch=FakeFetch(PROFILE_FIXTURE), clock=clk,
+    pc = progress.ProfileClient(FAMILY, base_url=LOCAL, fetch=FakeFetch(PROFILE_FIXTURE), clock=clk,
                                 cache_dir=tmp_path / "pcache")
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
                           sse_interval=0.05, market_seed=[], leveling_clock=clk,
@@ -1091,7 +1093,7 @@ def test_route_history_and_marker_end_to_end(hsrv, tmp_path):
 
 
 def test_route_auto_level_off_by_config(tmp_path):
-    pc = progress.ProfileClient(FAMILY, fetch=FakeFetch(PROFILE_FIXTURE), clock=Clock(),
+    pc = progress.ProfileClient(FAMILY, base_url=LOCAL, fetch=FakeFetch(PROFILE_FIXTURE), clock=Clock(),
                                 cache_dir=tmp_path / "pcache")
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", market_seed=[],
                           market_client=market.ArshaClient(fetch=_no_network,

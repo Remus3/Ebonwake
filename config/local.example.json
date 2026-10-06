@@ -52,8 +52,9 @@
     "fame_pct": 0
   },
   "profile": {
+    "_doc": "Plan 061. base_url: a self-hosted BDO-REST-API instance (man90/bdo-rest-api, loopback default shown). Blank = profile source off. The public instance is robots-disallowed and is never called; a non-loopback base is used only while its robots.txt allows Ebonwake.",
     "family": "",
-    "base_url": "https://api.cutepap.us/community/v1",
+    "base_url": "http://127.0.0.1:8001/v1",
     "auto_level": true
   }
 }

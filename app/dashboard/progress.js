@@ -268,6 +268,10 @@
       body.appendChild(el('div', 'ew-muted', 'No family configured. Set profile.family in config/local.json.'));
       return;
     }
+    if (p.off) {  // plan 061: one muted line
+      body.appendChild(el('div', 'ew-muted', C.PROFILE_OFF_TEXT));
+      return;
+    }
     if (p.pending) {
       body.appendChild(el('div', 'ew-muted', 'Profile is being fetched upstream - check back in a minute.'));
       return;
@@ -300,6 +304,10 @@
     }
     const v = C.lifeskillView(S.data.lifeskill);
     ui.sub.textContent = v.character || '';
+    if (C.profilePill(S.data.profile).off) {  // plan 061: one muted line
+      body.appendChild(el('div', 'ew-muted', C.PROFILE_OFF_TEXT));
+      return;
+    }
     if (v.state !== 'ok') {
       body.appendChild(el('div', 'ew-muted', 'No profile snapshot yet (needs profile.family and one refresh).'));
       return;

@@ -37,7 +37,7 @@ MODS = ("Control", "Ctrl", "Alt", "Shift", "CommandOrControl", "Super")
 _KEY_RE = re.compile(r"^([A-Z0-9]|F([1-9]|1[0-9]|2[0-4]))$")
 MAX_SET = 64
 # Keys the running server reads only at start (dashboard offers a restart).
-RESTART_KEYS = ("profile.family", "coupons.check", "events.notice_check")
+RESTART_KEYS = ("profile.family", "profile.base_url", "coupons.check", "events.notice_check")
 _LOCK = threading.Lock()
 
 
@@ -81,6 +81,11 @@ def valid_family(v):
     return isinstance(v, str) and (v == "" or bool(progress.FAMILY_RE.fullmatch(v)))
 
 
+def valid_base_url(v):
+    """Plan 061: "" (profile source off) or a self-hosted BDO-REST-API base."""
+    return v == "" or progress.base_ok(v)
+
+
 def valid_maint_start(v):
     """"" (use data/maintenance.json) or HH:MM UTC."""
     return v == "" or maint.valid_hhmm(v)
@@ -119,6 +124,7 @@ SPEC.update({
     "hotkeys.toggleOverlay": (valid_accelerator, "Control+Alt+E"),
     "hotkeys.showDashboard": (valid_accelerator, "Control+Alt+D"),
     "profile.family": (valid_family, ""),
+    "profile.base_url": (valid_base_url, ""),
     "ui.theme": (_one_of(THEMES), "dark"),
     "ui.scale": (_num_in(0.9, 1.3), 1.0),
 })

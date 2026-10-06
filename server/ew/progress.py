@@ -11,6 +11,7 @@ background refresh, at most one in flight.
 
 import datetime as _dt
 import hashlib
+import ipaddress
 import json
 import re
 import threading
@@ -18,13 +19,23 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from . import brackets
-from .httpcache import CachedClient, Pending, UpstreamError, freshness
+from . import brackets, coupons
+from .httpcache import CachedClient, Pending, UpstreamError, freshness, read_json
 from .levels import LEVEL_RANGE
-from .store import atomic_write_text
+from .store import atomic_write_json, atomic_write_text
 from .today import slug
 
-DEFAULT_BASE = "https://api.cutepap.us/community/v1"
+# Plan 061: the public BDO-REST-API host is robots-disallowed, so the profile
+# source ships off. The documented path is a self-hosted instance
+# (man90/bdo-rest-api) set as profile.base_url; SELF_HOST_EXAMPLE is its default.
+DEFAULT_BASE = ""
+SELF_HOST_EXAMPLE = "http://127.0.0.1:8001/v1"
+MAX_BASE = 200
+ROBOTS_RECHECK_S = 24 * 3600
+FAIL_LIMIT = 3              # consecutive failures on an allowed base ...
+FAIL_BACKOFF_S = 24 * 3600  # ... back off this long (plan 002 backoff, extended)
+GATE_FILE = "robots_gate.json"
+OFF_REASONS = ("no_base", "robots")
 REGION = "NA"
 PROFILE_TTL = 3600
 TIMEOUT_S = 10
@@ -152,6 +163,44 @@ def config_profile(root):
     return p if isinstance(p, dict) else {}
 
 
+def _split_base(v):
+    """urlsplit of a usable base (http/https, a host, no userinfo, query,
+    fragment, whitespace or non-ASCII), else None."""
+    if not isinstance(v, str) or not v or len(v) > MAX_BASE or not v.isascii() \
+            or any(ch.isspace() for ch in v):
+        return None
+    try:
+        p = urllib.parse.urlsplit(v)
+        host = p.hostname
+        p.port  # noqa: B018 - raises ValueError on a junk port
+    except ValueError:
+        return None
+    if p.scheme not in ("http", "https") or not host or "@" in p.netloc \
+            or p.query or p.fragment:
+        return None
+    return p
+
+
+def _loopback_host(host):
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def is_loopback_base(v):
+    p = _split_base(v)
+    return p is not None and _loopback_host(p.hostname)
+
+
+def base_ok(v):
+    """Plan 061 profile.base_url: https on any host, or http on loopback only."""
+    p = _split_base(v)
+    return p is not None and (p.scheme == "https" or _loopback_host(p.hostname))
+
+
 def _chars(raw):
     out = []
     for ch in raw if isinstance(raw, list) else []:
@@ -166,15 +215,23 @@ def _chars(raw):
 
 
 class ProfileClient(CachedClient):
-    """BDO-REST-API adventurer search by family name, region NA, GET only."""
+    """BDO-REST-API adventurer search by family name, region NA, GET only.
+
+    Plan 061: off - zero requests - without a usable base, or while the base's
+    robots.txt (read at most once per ROBOTS_RECHECK_S, verdict persisted)
+    disallows `*` or Ebonwake or cannot be read; a loopback base (the
+    operator's own instance) skips the gate. FAIL_LIMIT consecutive failures
+    stretch the backoff to FAIL_BACKOFF_S; the last good cache is served."""
 
     def __init__(self, family, base_url=None, fetch=None, clock=time.time, cache_dir=None):
         super().__init__(fetch=fetch, clock=clock,
                          cache_dir=cache_dir if cache_dir is not None else _DEFAULT_CACHE)
         self.family = family
-        base = base_url if isinstance(base_url, str) and base_url.startswith("https://") \
-            else DEFAULT_BASE
-        self.base = base.rstrip("/")
+        self.base = base_url.rstrip("/") if base_ok(base_url) else DEFAULT_BASE
+        p = _split_base(self.base)
+        self.loopback = p is not None and _loopback_host(p.hostname)
+        self.origin = f"{p.scheme}://{p.netloc}" if p is not None else None
+        self._gate_lock = threading.Lock()
         # Cache file name never spells the family name.
         h = hashlib.sha256(f"{REGION}:{family.lower()}".encode("utf-8")).hexdigest()[:16]
         self.key = f"profile_{h}"
@@ -220,6 +277,55 @@ class ProfileClient(CachedClient):
                 and isinstance(guild.get("name"), str) else None,
                 "characters": _chars(pick.get("characters"))}
 
+    # -- plan 061 robots gate -------------------------------------------------
+    def _gate_entry(self):
+        doc = read_json(self.cache_dir / GATE_FILE)
+        e = doc.get(self.origin) if isinstance(doc, dict) else None
+        if not (isinstance(e, dict) and e.get("verdict") in coupons.ROBOTS
+                and isinstance(e.get("checked_at"), (int, float))
+                and not isinstance(e.get("checked_at"), bool)):
+            return None  # corrupt or missing = not checked yet
+        return e
+
+    def off_reason(self):
+        """"no_base" | "robots" | None (on, or the gate not read yet); never fetches."""
+        if not self.base:
+            return "no_base"
+        if self.loopback:
+            return None
+        e = self._gate_entry()
+        return "robots" if e is not None and e["verdict"] != "allow" else None
+
+    def _gate_due(self):
+        if not self.base or self.loopback:
+            return False
+        e = self._gate_entry()
+        return e is None or self.clock() - e["checked_at"] >= ROBOTS_RECHECK_S
+
+    def _check_gate(self):
+        """One robots.txt GET when due, then off_reason()."""
+        with self._gate_lock:
+            if self._gate_due():
+                verdict = coupons.robots_verdict(
+                    self.fetch, urls=(self.base + "/adventurer/search",),
+                    robots_url=self.origin + "/robots.txt")
+                path = self.cache_dir / GATE_FILE
+                doc = read_json(path)
+                doc = doc if isinstance(doc, dict) else {}
+                doc[self.origin] = {"verdict": verdict, "checked_at": self.clock()}
+                atomic_write_json(path, doc)
+        return self.off_reason()
+
+    def cached_get(self, key, ttl, download):
+        reason = self._check_gate()
+        if reason is not None:
+            return self._result(None, self.clock(), ttl, True, f"profile source off: {reason}")
+        res = super().cached_get(key, ttl, download)
+        bo = self.key_backoff(key)
+        if bo.get("n", 0) >= FAIL_LIMIT and not bo.get("pending") and not bo.get("long"):
+            self._set_backoff(key, dict(bo, until=self.clock() + FAIL_BACKOFF_S, long=True))
+        return res
+
     def get(self):
         return self.cached_get(self.key, PROFILE_TTL, self._download)
 
@@ -227,7 +333,10 @@ class ProfileClient(CachedClient):
         return super().peek(self.key, PROFILE_TTL)
 
     def refresh(self, spawn=None):
-        """Background refresh, at most one in flight; never blocks the caller."""
+        """Background refresh, at most one in flight; never blocks the caller.
+        Off = nothing scheduled, except a due robots re-check."""
+        if self.off_reason() is not None and not self._gate_due():
+            return False
         return self.refresh_async(self.key, PROFILE_TTL, self._download, spawn)
 
     def is_pending(self):
@@ -909,11 +1018,20 @@ class ProgressService:
             return {"data": None, "freshness": None, "status": "none"}
         if refresh:
             self.profile.refresh(self.spawn)
+        reason = self._off_reason()  # after refresh: a sync refresh may read robots.txt
+        if reason is not None:  # plan 061: one muted line, no data, nothing scheduled
+            return {"data": None, "freshness": None, "status": "off", "state": "off",
+                    "reason": reason}
         res = self.profile.peek()
         status = _profile_status(res, self.profile.is_pending())
         if res is None:
-            return {"data": None, "freshness": None, "status": status}
-        return {"data": res["data"], "freshness": freshness(res), "status": status}
+            return {"data": None, "freshness": None, "status": status, "state": "on"}
+        return {"data": res["data"], "freshness": freshness(res), "status": status,
+                "state": "on"}
+
+    def _off_reason(self):
+        off = getattr(self.profile, "off_reason", None)
+        return off() if off is not None else None
 
     def view(self, refresh=True):
         """GET /api/progress body; POST answers pass refresh=False (peek only)."""
@@ -1014,8 +1132,10 @@ class ProgressService:
         """`/api/state` sources.profile: {updated, ttl_s, status}; never fetches."""
         res = self.profile.peek() if self.profile is not None else None
         pend = self.profile.is_pending() if self.profile is not None else False
+        status = "off" if self.profile is not None and self._off_reason() is not None \
+            else _profile_status(res, pend)
         return {"updated": res["fetched_at"] if res else None, "ttl_s": PROFILE_TTL,
-                "status": _profile_status(res, pend)}
+                "status": status}
 
     # -- writes (each returns the GET body) -----------------------------------
 

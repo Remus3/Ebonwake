@@ -39,4 +39,40 @@ no memory read, no client file.
 
 Depends on: 041, 030.
 
+## As-built deviations
+
+Self-adjudicated by the build lane (2026-10-06); refute-rounds: 0/3 at hand-in.
+
+1. `coupons.robots_verdict` gained a `robots_url` keyword (default the
+   news host, so plans 014 / 059 are unchanged). Alternatives: copy the
+   parser into `progress.py`; a new shared module. Why: one robots parser,
+   smallest diff. Reverses if: a third caller needs more than the URL.
+2. Off reasons are `no_base` and `robots`. `no_base` also covers an
+   unusable base (non-https off loopback, userinfo, query, fragment,
+   whitespace, over 200 chars): before, such a base silently fell back to
+   the public default; now it is off. Alternatives: a separate `bad_base`
+   reason. Why: the operator fix is the same (set a base in Settings).
+   Reverses if: the dashboard needs to tell the two apart.
+3. The robots verdict is persisted per origin in the profile cache dir
+   (`robots_gate.json`, `{verdict, checked_at}`), so a server restart does
+   not re-read robots.txt inside 24 h. Alternatives: in-memory only. Why:
+   restarts are allowed at any time (standing order 11); "every 24 h"
+   should hold across them. Reverses if: never.
+4. "Hourly snapshot job not scheduled": plan 041's snapshot rides the
+   GET-triggered TTL refresh; when off, `ProfileClient.refresh` returns
+   without spawning (except a due robots re-check on a non-loopback base).
+5. 24 h backoff: after the third consecutive failure the plan 002 entry is
+   stretched to `FAIL_BACKOFF_S` and marked `long`; the last good cache is
+   served `stale` with `age_s`. Pending (HTTP 202) answers never count.
+6. `profile.base_url` is a restart key (the client is built at server
+   start, like `profile.family`).
+7. The Life & CP card shows the off line even when an older snapshot is in
+   the history (the plan's "one muted line" for both cards). The
+   no-family `status: "none"` shape is unchanged (no `state` key);
+   `/api/state` `sources.profile.status` reads `off`.
+8. A host whose gitignored `config/local.json` still names the public
+   host is handled by the gate (robots `Disallow: /` -> off, one
+   robots.txt GET per 24 h, zero profile GETs); the lane does not edit
+   per-host config. OPERATOR may blank it or set a loopback base.
+
 Dependency guard: before writing code the lane checks that `server/ew/progress.py` (plan 041) and `server/ew/settings.py` (plan 030) exist. If any is missing, the lane changes nothing, writes `"status": "blocked", "needs": ["041", "030"]` into its progress JSON (`ops/loop/control/progress/p061-build.json`) and exits 0.

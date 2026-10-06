@@ -17,7 +17,8 @@ from server.ew import market, progress
 from server.ew.store import Store
 
 FAMILY = "Testfam"
-FIX = Path(__file__).parent / "fixtures" / "profile"
+LOCAL = progress.SELF_HOST_EXAMPLE  # plan 061: loopback base, robots gate skipped
+FIX =Path(__file__).parent / "fixtures" / "profile"
 DATA = Path(progress.__file__).resolve().parent / "data" / "cp_milestones.json"
 
 
@@ -180,7 +181,7 @@ def test_card_ignores_junk_snapshot_values():
 
 def _svc(tmp_path, body):
     clk = Clock()
-    pc = progress.ProfileClient(FAMILY, fetch=FakeFetch(body), clock=clk,
+    pc = progress.ProfileClient(FAMILY, base_url=LOCAL, fetch=FakeFetch(body), clock=clk,
                                 cache_dir=tmp_path / "pcache")
     hist = progress.ProfileHistory(tmp_path / "rt" / "profile_history.jsonl", clock=clk)
     s = progress.ProgressService(Store(tmp_path / "store"), pc, clock=clk, spawn=_sync,
@@ -217,7 +218,7 @@ def test_broken_milestones_never_break_the_tab(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def srv(tmp_path):
-    pc = progress.ProfileClient(FAMILY, fetch=FakeFetch(PARTIAL), clock=Clock(),
+    pc = progress.ProfileClient(FAMILY, base_url=LOCAL, fetch=FakeFetch(PARTIAL), clock=Clock(),
                                 cache_dir=tmp_path / "pcache")
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
                           sse_interval=0.05, market_seed=[],

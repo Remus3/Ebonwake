@@ -73,7 +73,8 @@ def robots_verdict(fetch, urls=(NEWS_URL,), robots_url=ROBOTS_URL):
     """"allow" when robots.txt lets both `*` and our agent GET every one of
     `urls` (plan 059 passes its list + Detail pages); "disallow" when it does
     not; "unreachable" when it cannot be read or holds no User-agent group (= off).
-    `robots_url` is the policy of the host of `urls` (plan 064: the Steam store)."""
+    `robots_url` is the policy of the host of `urls` (plan 064: the Steam store;
+    plan 061: the profile source origin)."""
     try:
         text = _decode(fetch(robots_url, TIMEOUT_S))
     except Exception:  # noqa: BLE001 - any failure to read the policy = feature off
