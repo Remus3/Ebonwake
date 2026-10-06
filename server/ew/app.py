@@ -6,7 +6,7 @@ assets, browser fallback),
 /api/market/{watch,item,hot} (plan 002), /api/market/search (plan 028), /api/today (plan 003),
 /api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006; plan 014
 adds its `suggested` coupon block),
-/api/deadeye (plan 007; /api/deadeye/enhance GET plan 035), /api/game (plan 008), /api/leveling (plan 011),
+/api/deadeye (plan 007; /api/deadeye/enhance GET plan 035; /api/deadeye/shopping GET plan 037), /api/game (plan 008), /api/leveling (plan 011),
 /api/spots (plan 012, GET only), /api/bosses (plan 031), /api/settings (plan 030), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
 /api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings behind one shared guard.
@@ -27,7 +27,8 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 from . import (__version__, bosses, coupons, deadeye, enhance, events, gamewatch, grind, itemnames,
-               leveling, market, ocr, ports, progress, settings, single, spots, today, weekly)
+               leveling, market, ocr, ports, progress, settings, shopping, single, spots, today,
+               weekly)
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -181,6 +182,13 @@ class EWServer(ThreadingHTTPServer):
         # Plan 036: stack advice reads the same effective rows (overrides included).
         self.deadeye = deadeye.DeadeyeService(self.store, clock=deadeye_clock or time.time,
                                               rates=self.enhance.rows)
+        # Plan 037: open plan steps x EV attempts x materials, cached prices only.
+        self.shopping = shopping.ShoppingService(
+            self.store, plan=lambda: self.deadeye.view()["plan"], enhance=self.enhance,
+            quote=self.market.cached_quote, name=self.names.name,
+            silver_per_h=lambda: shopping.average_silver_per_h(self.grind.view()["spots"]),
+            watched=lambda: {w["id"] for w in self.market.watchlist.items() if w["sid"] == 0},
+            clock=deadeye_clock or time.time)
         if game_watch is None:
             # Only main() passes the real config; a bare make_server (every test)
             # never reads config/local.json (plan 008 refute round 1).
@@ -305,6 +313,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, self.server.enhance.query(parse_qs(query)))
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
+        if path == "/api/deadeye/shopping":
+            return self._send(200, self.server.shopping.view())
         if path == "/api/game":
             return self._send(200, self.server.game.view())
         if path == "/api/leveling":
@@ -380,13 +390,16 @@ class Handler(BaseHTTPRequestHandler):
         ops = {"note", "add_step", "edit_step", "step_done", "delete_step", "move_step",
                "fs_add", "fs_use", "agris_set", "crons_set"}  # plan 036: the last four
         rates = {"rate_set": "override_set", "rate_del": "override_del"}  # plan 035
-        if len(body) != 1 or not ((ops | set(rates)) & set(body)):
+        shop = {"shop_set": "set", "shop_step": "step"}  # plan 037
+        if len(body) != 1 or not ((ops | set(rates) | set(shop)) & set(body)):
             raise ValueError("body must be one of {note|add_step|edit_step|step_done|"
                              "delete_step|move_step|fs_add|fs_use|agris_set|crons_set|"
-                             "rate_set|rate_del: ...}")
+                             "rate_set|rate_del|shop_set|shop_step: ...}")
         (op, arg), = body.items()
         if op in rates:
             return getattr(self.server.enhance, rates[op])(arg)
+        if op in shop:
+            return getattr(self.server.shopping, shop[op])(arg)
         return getattr(self.server.deadeye, op)(arg)
 
     def _post_settings(self, body):

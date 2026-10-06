@@ -205,6 +205,12 @@ class NameIndex:
         return {k: v[1] for k, v in best.items()}
 
     # -- query ------------------------------------------------------------
+    def name(self, item_id, sid=0):
+        """Known name for (id, sid) or None; never fetches (plan 037)."""
+        with self._lock:
+            self._refresh_cache()
+            return self.entries().get((item_id, sid))
+
     def search(self, q):
         q = validate_query(q)
         if q.isdigit() and _ok_id(int(q)):
