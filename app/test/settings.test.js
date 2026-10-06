@@ -12,7 +12,7 @@ const read = (p) => fs.readFileSync(path.join(APP, p), 'utf8');
 test('groups in plan order, every key dotted, no secrets or loop keys', () => {
   assert.deepStrictEqual(C.SETTINGS_GROUPS.map((g) => g.title),
     ['Overlay', 'Hotkeys', 'Profile', 'Appearance', 'Notifications', 'Events', 'Market',
-      'Play session', 'Screenshots (OCR)']);
+      'Play session', 'Screenshots (OCR)', 'Checklist']);
   for (const k of C.SETTINGS_KEYS) {
     assert.match(k, /^[a-z]+(\.[A-Za-z_]+)+$/, k);
     assert.doesNotMatch(k, /^(secrets|loop)\b/, k);

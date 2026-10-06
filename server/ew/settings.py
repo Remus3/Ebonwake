@@ -122,6 +122,8 @@ SPEC.update({
     "ocr.auto": (_is_bool, True),
     "ocr.auto_commit_min": (_num_in(0.75, 0.99), 0.9),
     "ocr.daily_cap": (lambda v: _is_int(v) and 0 <= v <= 1000, 120),
+    # Plan 068: auto-tick inferable Today rows + boss-shot suggestions.
+    "checklist.auto": (_is_bool, True),
 })
 
 

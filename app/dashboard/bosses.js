@@ -4,7 +4,9 @@
    (C.bossTicks). Reads GET /api/bosses (plan 031) every 60 s; ticks go through
    the dashboard preload (window.ewApi, route /api/bosses) because the server
    refuses renderer POSTs. Schedule data is EW's own table; nothing is read
-   from the game. Every node is built with DOM APIs - no HTML from data. */
+   from the game. Plan 068: GET `suggested` (a screenshot near the spawn while
+   logged in) adds a one-click "probably done - tick?", never an auto tick.
+   Every node is built with DOM APIs - no HTML from data. */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -85,7 +87,7 @@
     const rows = C.bossRows(S.data, now, 3);
     const ticks = C.bossTicks(S.data, now);
     const shape = JSON.stringify([rows.map(function (r) { return [r.key, r.names]; }), ticks, S.err, S.msg,
-      Object.keys(S.pending)]);
+      Object.keys(S.pending), S.data && S.data.suggested]);
     if (shape === S.shape) { values(rows); return; }
     S.shape = shape;
     S.vals = [];
@@ -119,6 +121,14 @@
         lab.appendChild(cb);
         lab.appendChild(el('span', t.looted ? 'ew-boss-looted' : '', t.name));
         tk.appendChild(lab);
+        if (C.bossSuggested(S.data, t.day, t.name)) { // plan 068: never auto-ticked
+          const sug = el('button', 'ew-tx', 'probably done - tick?');
+          sug.type = 'button';
+          sug.title = 'a screenshot near this spawn while logged in (plan 068)';
+          sug.disabled = (t.day + '|' + t.name) in S.pending;
+          sug.addEventListener('click', function () { toggle(t); });
+          tk.appendChild(sug);
+        }
       });
       body.appendChild(tk);
     }
