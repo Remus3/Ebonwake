@@ -3138,7 +3138,7 @@
     });
     const c = nowCard('dailies', 'Dailies left', 'today', rows,
       g.total ? 'all ' + g.total + ' dailies done' : 'no dailies - add them on Today');
-    c.meta = g.done + '/' + g.total + ' done';
+    c.meta = countText(g.done, g.total, 'done');
     return c;
   }
 
@@ -3162,7 +3162,7 @@
       const sph = sp && isNum(sp.silver_per_h) ? fmtSilver(sp.silver_per_h) + '/h' : '-';
       rows.push(nowRow('avg silver here', sph));
     }
-    return nowCard('session', 'Grind session', 'grind', rows, 'no session running');
+    return nowCard('session', 'Grind session', 'grind', rows, 'no session - log a grind to see silver/h');
   }
 
   function nowLeveling(d, at, now) {
@@ -3196,7 +3196,7 @@
       rows.push(nowRow(name, fmtSilver(it.price), hit + ' ' + fmtSilver(hit === 'below' ? it.below : it.above), 'ok'));
     });
     return nowCard('alerts', 'Market alerts', 'market', rows,
-      market.items.length ? 'no alert hits' : 'watchlist empty');
+      market.items.length ? 'no alert hits' : 'watch an item on Market to get alerts');
   }
 
   function nowEnding(events, at, now) {
@@ -3243,6 +3243,61 @@
     }
     if (has('bosses', 'next')) cards.push(nowBosses(s.bosses, nowMs));
     return cards;
+  }
+
+  // ---- Density + accessibility (plan 047) ----
+
+  // "n/total suffix", or '' when there is nothing to count (zero states).
+  function countText(done, total, suffix) {
+    if (!isNum(done) || !isNum(total) || total <= 0) return '';
+    return done + '/' + total + (suffix ? ' ' + suffix : '');
+  }
+
+  // Tab badges from the Home snapshots already polled: dailies left on Today,
+  // events ending within 48 h on Events. Zero counts give no badge.
+  function tabBadges(snapshots, nowMs) {
+    const s = plainObject(snapshots) ? snapshots : {};
+    const at = function (k) { return plainObject(s.at) && isNum(s.at[k]) ? s.at[k] : nowMs; };
+    const out = {};
+    if (plainObject(s.today) && Array.isArray(s.today.items)) {
+      const g = groupItems(s.today.items, nowMs).daily;
+      if (g.total - g.done > 0) out.today = (g.total - g.done) + ' left';
+    }
+    if (plainObject(s.events) && Array.isArray(s.events.items)) {
+      const n = eventRows(s.events.items, at('events'), nowMs).filter(function (r) { return r.soon; }).length;
+      if (n > 0) out.events = n + ' ending';
+    }
+    return out;
+  }
+
+  // Tab-strip keys -> the tab id to select, or null. Left/Right wrap and
+  // Home/End act with no modifier (focus on the strip); Ctrl+1..9 picks the
+  // n-th tab from anywhere in the dashboard window.
+  function tabKey(ids, current, ev) {
+    if (!Array.isArray(ids) || !ids.length || !ev || typeof ev.key !== 'string') return null;
+    const mods = !!(ev.altKey || ev.shiftKey || ev.metaKey);
+    if (ev.ctrlKey) {
+      if (mods || !/^[1-9]$/.test(ev.key)) return null;
+      return ids[+ev.key - 1] || null;
+    }
+    if (mods) return null;
+    const i = ids.indexOf(current);
+    const n = ids.length;
+    if (ev.key === 'ArrowRight') return ids[(i + 1) % n];
+    if (ev.key === 'ArrowLeft') return ids[i < 0 ? n - 1 : (i - 1 + n) % n];
+    if (ev.key === 'Home') return ids[0];
+    if (ev.key === 'End') return ids[n - 1];
+    return null;
+  }
+
+  // System is a maintenance tab: moved last and drawn as a right-aligned icon.
+  function orderTabs(tabs) {
+    const list = Array.isArray(tabs) ? tabs : [];
+    const rest = list.filter(function (t) { return t.id !== 'system'; }).map(function (t) { return Object.assign({}, t); });
+    const sys = list.filter(function (t) { return t.id === 'system'; }).map(function (t) {
+      return Object.assign({}, t, { edge: true });
+    });
+    return rest.concat(sys);
   }
 
   // Plan 025 M8: open Events-tab items that end before the next weekly reset,
@@ -4295,6 +4350,10 @@
     deadlineAlert: deadlineAlert,
     composeNow: composeNow,
     eventsThisWeek: eventsThisWeek,
+    countText: countText,
+    tabBadges: tabBadges,
+    tabKey: tabKey,
+    orderTabs: orderTabs,
     overlayWidgets: overlayWidgets,
     widgetsQuery: widgetsQuery,
     widgetsFromQuery: widgetsFromQuery,

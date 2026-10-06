@@ -350,6 +350,7 @@
     const x = el('button', 'ew-tx', 'x');
     x.type = 'button';
     x.title = 'remove track (click twice)';
+    x.setAttribute('aria-label', x.title);
     x.addEventListener('click', function () { removeTrack(t, x); });
     meta.appendChild(x);
     h.appendChild(meta);
@@ -465,6 +466,7 @@
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';
       x.title = 'remove objective (click twice)';
+      x.setAttribute('aria-label', x.title);
       x.addEventListener('click', function () { removeObjective(t, o, x); });
       meta.appendChild(x);
     }
@@ -533,6 +535,7 @@
     const x = el('button', 'ew-tx', 'x');
     x.type = 'button';
     x.title = 'remove track (click twice)';
+    x.setAttribute('aria-label', x.title);
     x.addEventListener('click', function () { removeTrack(t, x); });
     meta.appendChild(x);
     h.appendChild(meta);

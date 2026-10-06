@@ -42,7 +42,7 @@ function fakes(log, opts) {
         const m = /data-tab="([a-z]+)"/.exec(src);
         if (m && src.indexOf('.click()') >= 0) { active = m[1]; log.push('click:' + active); return null; }
         return { scrollH: 700, clientH: 761, scrollW: 1200, clientW: 1264, active: active,
-          activeH: 500, tabs: TABS, pill: 'server ok' };
+          activeH: 500, cardsScroll: opts.cardsScroll || 0, tabs: TABS, pill: 'server ok' };
       },
       capturePage: async () => { log.push('capture:' + active); return fakeImage(false); }
     }
@@ -65,7 +65,7 @@ async function runFake(opts) {
   process.env.EW_SELFTEST_STAY = '1';
   await selftest.run({
     app: { quit() {} }, dashboard: f.dash, overlay: f.ov, keys: { a: 'F9' },
-    globalShortcut: { isRegistered: () => true }, toggleOverlay: f.toggle, out: out,
+    globalShortcut: { isRegistered: () => true }, toggleOverlay: f.toggle, out: out, freshStore: (opts || {}).freshStore,
     notifyShown: (() => { let n = 0; return () => n++; })(),
     wait: () => Promise.resolve(), paintTimeoutMs: 20,
     overlayPlace: Object.assign({ workArea: { x: 0, y: 0, width: 1920, height: 1040 }, defaultAnchor: true },
@@ -138,4 +138,21 @@ test('plan 026: the self-test fires one synthetic alert -> toast + OS notificati
   assert.ok(log.indexOf('notify-selftest') > log.lastIndexOf('capture:system'), 'after the tab captures');
   assert.deepStrictEqual(res.notify, { hits: 1, toasts: 1, bridge: { ok: true }, osShown: 1, ok: true });
   assert.ok(res.ok, 'report-only: never fails the run');
+});
+
+// Plan 047 item 5: on a fresh store no card scrolls at 1264x761; a lived-in
+// store only reports the count.
+test('plan 047: a scrolling card fails a fresh-store self-test, is reported otherwise', async () => {
+  const fresh = await runFake({ freshStore: true });
+  assert.ok(fresh.res.ok, JSON.stringify(fresh.res));
+  assert.strictEqual(fresh.res.freshStore, true);
+  assert.ok(fresh.res.tabs.every((t) => t.cardsFit && t.cardsScroll === 0));
+  const bad = await runFake({ freshStore: true, cardsScroll: 2 });
+  assert.strictEqual(bad.res.ok, false);
+  assert.ok(bad.res.tabs.every((t) => t.cardsFit === false));
+  const lived = await runFake({ cardsScroll: 2 });
+  assert.strictEqual(lived.res.ok, true);
+  assert.strictEqual(lived.res.freshStore, false);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'),
+    /freshStore: process\.env\.EW_SELFTEST_FRESH === '1'/);
 });

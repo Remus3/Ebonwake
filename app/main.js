@@ -318,6 +318,7 @@ if (!app.requestSingleInstanceLock()) {
         app: app, dashboard: dashboard, overlay: overlay, keys: keys,
         globalShortcut: globalShortcut, toggleOverlay: toggleOverlay,
         out: process.env.EW_SELFTEST,
+        freshStore: process.env.EW_SELFTEST_FRESH === '1',
         notifyShown: function () { return notifyShown; },
         overlayPlace: { workArea: overlayWorkArea(), defaultAnchor: overlayCfg.anchor === core.overlayConfig({}).anchor }
       });

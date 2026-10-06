@@ -159,6 +159,7 @@
     const x = el('button', 'ew-tx', 'x');
     x.type = 'button';
     x.title = 'remove (click twice)';
+    x.setAttribute('aria-label', x.title);
     x.addEventListener('click', function () { remove(it, x); });
     r.appendChild(x);
     if (S.rowErr[it.id]) r.appendChild(el('div', 'ew-err ew-terr', S.rowErr[it.id]));
@@ -168,8 +169,9 @@
   function drawList(ui, group, kind) {
     const body = ui.body;
     body.textContent = '';
-    ui.count.textContent = S.data ? group.done + '/' + group.total + ' done' : '-';
+    ui.count.textContent = S.data ? C.countText(group.done, group.total, 'done') : '-';
     ui.count.className = 'ew-pill ' + (S.data && group.total && group.done === group.total ? 'ok' : 'unknown');
+    ui.count.hidden = !ui.count.textContent; // plan 047: no "0/0 done"
     if (S.err) body.appendChild(el('div', 'ew-err', (S.data ? 'last data - ' : '') + S.err));
     if (!S.data) { if (!S.err) body.appendChild(el('div', 'ew-muted', 'loading...')); return; }
     const week = kind === 'event' ? C.eventsThisWeek(S.ev, S.evAt, Date.now()) : [];

@@ -183,5 +183,8 @@
 
   function show() { poll(false); }
 
-  window.EWHome = { mount: mount, show: show };
+  // Plan 047: the shell reads these for its tab badges (read-only use).
+  function snapshots() { return S.snap; }
+
+  window.EWHome = { mount: mount, show: show, snapshots: snapshots };
 })();

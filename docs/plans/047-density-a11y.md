@@ -31,3 +31,39 @@ ToS check: dashboard-only UI; keyboard shortcuts act inside EW's own
 window, never on the game.
 
 Depends on: none.
+
+## As-built deviations
+
+1. Card-scroll self-test gate is opt-in. Decision: `app/selftest.js` always
+   reports `cardsScroll` / `cardsFit` per tab, and fails the run on a
+   scrolling card only when `EW_SELFTEST_FRESH=1` (`freshStore`).
+   Alternatives: always fail on a scrolling card; report only. Why: lists
+   legitimately scroll inside their card once the operator's store fills
+   up, so an unconditional gate would fail every lived-in self-test; the
+   plan's assertion is about a fresh store. Reverses if: the merge
+   self-test gets its own throwaway store, then the gate can be made
+   unconditional.
+2. Tab badges read Home's snapshots (`EWHome.snapshots()`), repainted every
+   5 s by the shell. Alternatives: a shell-level poll of /api/today and
+   /api/events; every module publishing into a bus. Why: Home already polls
+   both every 60 s from mount whatever tab shows ("data already polled"),
+   so no new requests. A tick on the Today tab shows in the badge within
+   one Home poll (<= 60 s). Reverses if: badge lag is reported as
+   confusing, then today.js / events.js publish their fresh bodies too.
+3. Badges: Today counts dailies left only (not weeklies); Events counts
+   open items with `soon` (<= 48 h, same rule as Home's "Ending" card).
+   Why: matches the plan's examples and the existing Home cards.
+4. Ctrl+1..9 map to the visual tab order after System moves last (9 tabs
+   today, so Ctrl+9 = System). Left/Right/Home/End act only while focus is
+   on the strip; Ctrl+digit acts anywhere in the dashboard window
+   (Ctrl+0 is left to Electron's zoom reset). Overlay untouched.
+5. Zero states touched: Home dailies meta (no "0/0 done"), Home session
+   and market-alert empty text, Today list count pill hidden at 0/0, Grind
+   session log empty text. Other empty notes already named their next
+   action and were left as they were.
+6. Text cues beside colour (L8): "ON " before an active buff name, a
+   stopwatch glyph (CSS escape, ASCII source) before a soon event's time
+   and Home warn values, "! " before Home bad values.
+7. Where-next rows were already `<button>`s (plan 012); only the Market
+   hot-list rows changed from `div` to `button` (`.ew-rowbtn` reset).
+   Watchlist rows stay `role=button` divs with tabindex (they already were).

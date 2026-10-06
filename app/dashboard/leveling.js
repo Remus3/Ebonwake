@@ -161,6 +161,7 @@
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';
       x.title = 'delete window';
+      x.setAttribute('aria-label', x.title);
       x.addEventListener('click', function () { send({ hot_del: w.id }, 'window deleted'); });
       r.appendChild(x);
       ui.wins.appendChild(r);
@@ -182,6 +183,7 @@
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';
       x.title = 'delete epoch';
+      x.setAttribute('aria-label', x.title);
       x.addEventListener('click', function () { send({ epoch_del: e.id }, 'epoch deleted'); });
       r.appendChild(x);
       ui.epochs.appendChild(r);
@@ -198,6 +200,7 @@
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';
       x.title = 'delete sample';
+      x.setAttribute('aria-label', x.title);
       x.addEventListener('click', function () { send({ sample_del: s.ts }, 'sample deleted'); });
       r.appendChild(x);
       ui.samples.appendChild(r);
