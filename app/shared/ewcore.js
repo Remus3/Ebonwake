@@ -2872,6 +2872,8 @@
   // Exact shape check for POST /api/ocr bodies (main-process IPC guard): a bare
   // file name as the watcher lists it - never a path. The server checks the list.
   function validOcrBody(body) {
+    if (exact(body, ['review'])) return validOcrReview(body.review);
+    if (exact(body, ['undo'])) return typeof body.undo === 'string' && OCR_UNDO_RE.test(body.undo);
     if (exact(body, ['loot'])) {
       const l = body.loot;
       return exact(l, ['shot', 'spot']) && validShotName(l.shot) &&
@@ -2883,6 +2885,81 @@
   function validShotName(f) {
     return typeof f === 'string' && f.trim().length > 0 && f.length <= OCR_NAME_MAX &&
       !/[\u0000-\u001f\u007f\\/:]/.test(f) && f !== '.' && f !== '..';
+  }
+
+  // ---- auto-OCR review queue (plan 063) ----
+  // GET /api/ocr/auto -> {enabled, commit_min, daily_cap, today, pending,
+  // review: [{id, file, kind, name, value, conf, why, shot_at}], commits: [{id,
+  // file, kind, name, value, at, via}], silver}. POST /api/ocr {review: {id,
+  // action: accept|discard}} / {review: {id, action: 'fix', value}} / {undo: id}.
+
+  const OCR_REVIEW_RE = /^r[0-9]{1,9}$/;
+  const OCR_UNDO_RE = /^u[0-9]{1,9}$/;
+  const OCR_AUTO_KINDS = ['silver', 'buff'];
+  const OCR_REVIEW_MAX = 50;
+
+  function validOcrReview(r) {
+    if (!plainObject(r) || typeof r.id !== 'string' || !OCR_REVIEW_RE.test(r.id)) return false;
+    if (r.action === 'fix') {
+      return exact(r, ['id', 'action', 'value']) && Number.isInteger(r.value) &&
+        r.value >= 0 && r.value <= 1e13;
+    }
+    return (r.action === 'accept' || r.action === 'discard') && exact(r, ['id', 'action']);
+  }
+
+  function ocrAutoRow(r, re) {
+    if (!plainObject(r) || typeof r.id !== 'string' || !re.test(r.id)) return null;
+    if (OCR_AUTO_KINDS.indexOf(r.kind) < 0 || !Number.isInteger(r.value) || r.value < 0) return null;
+    return {
+      id: r.id, kind: r.kind, value: r.value,
+      name: typeof r.name === 'string' ? r.name.slice(0, 60) : r.kind,
+      file: typeof r.file === 'string' ? r.file.slice(0, OCR_NAME_MAX) : '',
+      conf: isNum(r.conf) && r.conf >= 0 && r.conf <= 1 ? r.conf : null,
+      why: typeof r.why === 'string' ? r.why.slice(0, 200) : '',
+      via: typeof r.via === 'string' ? r.via.slice(0, 20) : ''
+    };
+  }
+
+  function normalizeOcrAuto(d) {
+    if (!plainObject(d)) return null;
+    const pick = function (list, re) {
+      return (Array.isArray(list) ? list : []).map(function (r) { return ocrAutoRow(r, re); })
+        .filter(Boolean).slice(0, OCR_REVIEW_MAX);
+    };
+    return {
+      enabled: d.enabled !== false,
+      today: Number.isInteger(d.today) && d.today >= 0 ? d.today : 0,
+      cap: Number.isInteger(d.daily_cap) && d.daily_cap >= 0 ? d.daily_cap : null,
+      pending: Number.isInteger(d.pending) && d.pending >= 0 ? d.pending : 0,
+      review: pick(d.review, OCR_REVIEW_RE),
+      commits: pick(d.commits, OCR_UNDO_RE)
+    };
+  }
+
+  // One review / commit row -> "silver 1,234,567" / "XP scroll 30m" (+ conf).
+  function ocrAutoLabel(r) {
+    // Exact digits: a review decision needs the read number, not a rounded 1.23M.
+    const v = r.kind === 'silver' ? String(r.value).replace(/\B(?=(\d{3})+(?!\d))/g, ',') : r.value + 'm';
+    const c = r.conf === null || r.conf === undefined ? '' : ' (' + Math.round(r.conf * 100) + '%)';
+    return (r.kind === 'silver' ? 'silver' : r.name) + ' ' + v + c;
+  }
+
+  // Header line of the System card: "N to review".
+  function ocrAutoHead(a) {
+    if (!a) return '';
+    const n = a.review.length;
+    return (n ? n + ' to review' : 'nothing to review') + ' - ' + a.today + (a.cap === null ? '' : '/' + a.cap) +
+      ' read today' + (a.enabled ? '' : ' (auto off)');
+  }
+
+  // Operator-typed fix value -> POST body, or null when it is not a whole number.
+  function ocrFixBody(id, kind, text) {
+    const s = String(text === undefined || text === null ? '' : text).replace(/[,.\s]/g, '');
+    if (!/^[0-9]{1,14}$/.test(s)) return null;
+    const v = Number(s);
+    if (kind === 'buff' && (v < 1 || v > 43200)) return null;
+    const body = { review: { id: id, action: 'fix', value: v } };
+    return validOcrBody(body) ? body : null;
   }
 
   // ---- OCR loot import (plan 040) ----
@@ -4276,6 +4353,12 @@
     { id: 'market', title: 'Market', fields: [
       { key: 'market.vp', label: 'Value Pack active', type: 'bool' },
       { key: 'market.fame_pct', label: 'Family fame bonus (0-1.5 %)', type: 'number', min: 0, max: 1.5, step: 0.05 }
+    ] },
+    // Plan 063: auto-OCR of screenshots taken while logged in.
+    { id: 'ocr', title: 'Screenshots (OCR)', fields: [
+      { key: 'ocr.auto', label: 'Read new screenshots automatically', type: 'bool' },
+      { key: 'ocr.auto_commit_min', label: 'Auto-commit confidence (0.75-0.99)', type: 'number', min: 0.75, max: 0.99, step: 0.01 },
+      { key: 'ocr.daily_cap', label: 'Screenshots read per day (0-1000)', type: 'number', min: 0, max: 1000, step: 1, int: true }
     ] }
   ];
   const SETTINGS_FIELDS = {};
@@ -4288,7 +4371,7 @@
       case 'bool': return typeof v === 'boolean';
       case 'anchor': return validAnchor(v) && (typeof v === 'string' || (Math.abs(v.x) <= 100000 && Math.abs(v.y) <= 100000));
       case 'display': return v === null || (Number.isInteger(v) && v >= 0 && v <= 16);
-      case 'number': return isNum(v) && v >= f.min && v <= f.max;
+      case 'number': return isNum(v) && v >= f.min && v <= f.max && (!f.int || Number.isInteger(v));
       case 'hotkey': return validAccelerator(v) && v.length <= 64;
       case 'family': return v === '' || (typeof v === 'string' && FAMILY_RE.test(v));
       case 'enum': return typeof v === 'string' && f.options.indexOf(v) >= 0;
@@ -5676,6 +5759,10 @@
     OCR_NAME_MAX: OCR_NAME_MAX,
     OCR_TEXT_MAX: OCR_TEXT_MAX,
     validOcrBody: validOcrBody,
+    normalizeOcrAuto: normalizeOcrAuto,
+    ocrAutoLabel: ocrAutoLabel,
+    ocrAutoHead: ocrAutoHead,
+    ocrFixBody: ocrFixBody,
     normalizeOcr: normalizeOcr,
     ocrBuffBody: ocrBuffBody,
     ocrSilverInput: ocrSilverInput,

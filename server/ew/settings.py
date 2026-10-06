@@ -113,6 +113,10 @@ SPEC.update({
     # Plan 059: official event-notice suggestions + the maintenance start override.
     "events.notice_check": (_is_bool, True),
     "events.maintenance_start_utc": (valid_maint_start, ""),
+    # Plan 063: auto-OCR of screenshots taken while logged in.
+    "ocr.auto": (_is_bool, True),
+    "ocr.auto_commit_min": (_num_in(0.75, 0.99), 0.9),
+    "ocr.daily_cap": (lambda v: _is_int(v) and 0 <= v <= 1000, 120),
 })
 
 

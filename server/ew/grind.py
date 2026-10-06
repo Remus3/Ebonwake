@@ -1092,6 +1092,22 @@ class GrindService:
             self._save(doc)
         return self.view()
 
+    def restore_buff(self, name, ends, armed=None):
+        """Plan 063 undo: put a buff timer back to `ends` / `armed` (ISO or None =
+        disarmed) as it was before an auto-OCR commit. Not a POST op."""
+        when = _iso_or_none(ends) if ends is not None else None
+        with self._lock:
+            doc = self._load()
+            for b in doc["buffs"]:
+                if isinstance(name, str) and b["name"].lower() == name.lower():
+                    b["ends"] = when
+                    b["armed"] = _iso_or_none(armed) if when is not None and armed else None
+                    break
+            else:
+                raise ValueError(f"unknown buff: {name}")
+            self._save(doc)
+        return self.view()
+
     def clear_buff(self, bid):
         """Disarm a buff timer; the name stays listed for one-tap re-arming."""
         with self._lock:
