@@ -6,7 +6,7 @@ assets, browser fallback),
 /api/market/{watch,item,hot} (plan 002), /api/market/search (plan 028), /api/today (plan 003),
 /api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006; plan 014
 adds its `suggested` coupon block),
-/api/deadeye (plan 007), /api/game (plan 008), /api/leveling (plan 011),
+/api/deadeye (plan 007; /api/deadeye/enhance GET plan 035), /api/game (plan 008), /api/leveling (plan 011),
 /api/spots (plan 012, GET only), /api/bosses (plan 031), /api/settings (plan 030), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
 /api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings behind one shared guard.
@@ -26,8 +26,8 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import (__version__, bosses, coupons, deadeye, events, gamewatch, grind, itemnames, leveling,
-               market, ocr, ports, progress, settings, single, spots, today, weekly)
+from . import (__version__, bosses, coupons, deadeye, enhance, events, gamewatch, grind, itemnames,
+               leveling, market, ocr, ports, progress, settings, single, spots, today, weekly)
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -173,6 +173,8 @@ class EWServer(ThreadingHTTPServer):
         # Plan 031: NA world boss table + operator loot ticks.
         self.bosses = bosses.BossService(self.store, clock=bosses_clock or time.time)
         self.deadeye = deadeye.DeadeyeService(self.store, clock=deadeye_clock or time.time)
+        # Plan 035: EV math on tracked rate rows; prices from the market cache only.
+        self.enhance = enhance.EnhanceService(self.store, prices=self.market.cached_price)
         if game_watch is None:
             # Only main() passes the real config; a bare make_server (every test)
             # never reads config/local.json (plan 008 refute round 1).
@@ -286,6 +288,11 @@ class Handler(BaseHTTPRequestHandler):
                                         suggested=self.server.coupons.view(refresh=True)))
         if path == "/api/deadeye":
             return self._send(200, self.server.deadeye.view())
+        if path == "/api/deadeye/enhance":
+            try:
+                return self._send(200, self.server.enhance.query(parse_qs(query)))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
         if path == "/api/game":
             return self._send(200, self.server.game.view())
         if path == "/api/leveling":
@@ -358,10 +365,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post_deadeye(self, body):
         ops = {"note", "add_step", "edit_step", "step_done", "delete_step", "move_step"}
-        if len(body) != 1 or not (ops & set(body)):
-            raise ValueError("body must be one of "
-                             "{note|add_step|edit_step|step_done|delete_step|move_step: ...}")
+        rates = {"rate_set": "override_set", "rate_del": "override_del"}  # plan 035
+        if len(body) != 1 or not ((ops | set(rates)) & set(body)):
+            raise ValueError("body must be one of {note|add_step|edit_step|step_done|"
+                             "delete_step|move_step|rate_set|rate_del: ...}")
         (op, arg), = body.items()
+        if op in rates:
+            return getattr(self.server.enhance, rates[op])(arg)
         return getattr(self.server.deadeye, op)(arg)
 
     def _post_settings(self, body):

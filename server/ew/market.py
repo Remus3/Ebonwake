@@ -304,6 +304,12 @@ class MarketService:
         items = [dict(x, preorder=preorder_state(x)) if isinstance(x, dict) else x for x in rows]
         return {"items": items, "freshness": _freshness(res)}
 
+    def cached_price(self, item_id, sid=0):
+        """Price from the sublist cache, stale or not, or None; never fetches
+        (plan 035 EV costs)."""
+        res = self.client.peek(self.client._key("sublist", item_id, sid), TTL["sublist"])
+        return price_of(res["data"]) if res else None
+
     def source(self):
         """`/api/state` sources.market: {updated, ttl_s, status: ok|stale|error|none}."""
         ttl = TTL["sublist"]
