@@ -41,7 +41,7 @@ test('historyRows: label, [ms, v] points, last and signed delta; junk dropped', 
 test('progress.js: trend rows from /api/progress/history with SVG sparklines, safe DOM', () => {
   const src = read('dashboard/progress.js');
   assert.match(src, /C\.PROFILE_HISTORY_PATH/);
-  assert.match(src, /C\.historyRows\(/);
+  assert.match(src, /C\.(historyRows|profileTrends)\(/); // plan 042 splits rows per card
   assert.match(src, /C\.sparkPath\(/);
   assert.match(src, /createElementNS/);
   assert.doesNotMatch(src, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);

@@ -98,7 +98,13 @@ SEED_FIELDS = {"id", "title", "kind", "note", "source", "verified", "steps"}
 STEP_FIELDS = {"id", "title", "min_level", "ap", "dp", "note", "source", "verified"}
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MAX_NOTE = 200
-GATES = (("min_level", "level", "lv", LEVEL_RANGE), ("ap", "ap", "AP", GS_RANGE),
+# Plan 042: Life & CP card. In-game life skill order; unknown keys follow.
+CP_MILESTONES = Path(__file__).resolve().parent / "data" / "cp_milestones.json"
+CP_FIELDS = {"note", "source", "verified", "milestones"}
+LIFE_SKILLS = ("gathering", "fishing", "hunting", "cooking", "alchemy", "processing",
+               "training", "trading", "farming", "sailing", "bartering")
+HIDDEN = "hidden"
+GATES =(("min_level", "level", "lv", LEVEL_RANGE), ("ap", "ap", "AP", GS_RANGE),
          ("dp", "dp", "DP", GS_RANGE))
 
 
@@ -327,6 +333,14 @@ class ProfileHistory:
         last = rows[-1]["at"]
         return _main_level([r for r in rows if r["at"] == last])
 
+    def main_snapshot(self):
+        """Plan 042: the main character's row of the newest refresh, or None."""
+        rows = self.rows()
+        if not rows:
+            return None
+        last = rows[-1]["at"]
+        return next((r for r in rows if r["at"] == last and r.get("main") is True), None)
+
     def series(self, fields, days, character=None):
         """{days, character, series: {field: {points: [{at, v}], first, last,
         delta}}}; character defaults to the main of the newest refresh."""
@@ -487,6 +501,74 @@ def load_seeds(path=None):
     rank = {sid: n for n, sid in enumerate(SEED_ORDER)}
     seeds.sort(key=lambda s: (rank.get(s["id"], len(rank)), s["id"]))
     return seeds, errors
+
+
+# -- plan 042 life skills / energy / contribution points -----------------------
+
+def load_cp_milestones(path=None):
+    """Validated tracked CP milestones {note, source, verified, milestones:
+    [{cp, label, verified}]} (cp strictly ascending), or ValueError."""
+    p = Path(CP_MILESTONES if path is None else path)
+    try:
+        doc = json.loads(p.read_text(encoding="ascii"))
+    except (OSError, ValueError) as e:
+        raise ValueError(f"{p.name}: {e}"[:200]) from e
+    if not isinstance(doc, dict) or set(doc) != CP_FIELDS:
+        raise ValueError(f"cp milestones must be {{{', '.join(sorted(CP_FIELDS))}}}")
+    if not _ascii(doc["note"], MAX_NOTE, allow_empty=True) or not _source_ok(doc["source"]) \
+            or not _date_or_false(doc["verified"]):
+        raise ValueError("cp milestones note / source (https) / verified (date or false) invalid")
+    ms = doc["milestones"]
+    if not isinstance(ms, list) or not 1 <= len(ms) <= MAX_STEPS:
+        raise ValueError(f"cp milestones must be a list of 1..{MAX_STEPS}")
+    prev = 0
+    for m in ms:
+        if not isinstance(m, dict) or set(m) != {"cp", "label", "verified"}:
+            raise ValueError("each milestone must be {cp, label, verified}")
+        if not _is_int(m["cp"]) or not prev < m["cp"] <= STAT_MAX:
+            raise ValueError(f"milestone cp must be an int, strictly ascending: {m['cp']!r}")
+        if not _ascii(m["label"], MAX_TITLE) or not _date_or_false(m["verified"]):
+            raise ValueError(f"milestone {m['cp']}: label (ASCII) / verified invalid")
+        prev = m["cp"]
+    return doc
+
+
+def _skills(raw):
+    if not isinstance(raw, dict) or not raw:
+        return HIDDEN
+    rank = {k: n for n, k in enumerate(LIFE_SKILLS)}
+    keys = [k for k, v in raw.items() if isinstance(k, str) and _ascii(k, MAX_NAME)
+            and ((isinstance(v, str) and _ascii(v, MAX_NAME)) or _num(v) is not None)]
+    if not keys:
+        return HIDDEN
+    keys.sort(key=lambda k: rank.get(k.lower(), len(rank)))  # stable: unknowns keep API order
+    return [{"key": k, "name": k[:1].upper() + k[1:], "rank": str(raw[k])} for k in keys]
+
+
+def lifeskill_card(snapshot, milestones):
+    """One plan 041 snapshot (newest main character row) -> the Life & CP
+    card: {status: ok|none, character, at, skills: [{key, name, rank}],
+    energy, cp: {value, next, gap, reached}, source, verified, error}. A
+    field privacy hides (absent or malformed) is "hidden", never zero."""
+    ms = milestones if isinstance(milestones, dict) else {}
+    out = {"status": "none", "character": None, "at": None, "skills": None,
+           "energy": None, "cp": None, "source": ms.get("source"),
+           "verified": ms.get("verified"), "error": ms.get("error")}
+    if not isinstance(snapshot, dict):
+        return out
+    energy, value = _num(snapshot.get("energy")), _num(snapshot.get("contribution"))
+    out.update(status="ok", character=snapshot.get("name"), at=snapshot.get("at"),
+               skills=_skills(snapshot.get("spec_levels")),
+               energy=HIDDEN if energy is None else energy)
+    if value is None:
+        out["cp"] = HIDDEN
+        return out
+    rows = [{"cp": m["cp"], "label": m["label"], "verified": m["verified"]}
+            for m in ms.get("milestones") or ()]
+    nxt = next((m for m in rows if m["cp"] > value), None)
+    out["cp"] = {"value": value, "next": nxt, "gap": None if nxt is None else nxt["cp"] - value,
+                 "reached": [m for m in rows if m["cp"] <= value]}
+    return out
 
 
 def _gates(st, level, gs, ap_rows):
@@ -842,10 +924,24 @@ class ProgressService:
             out.append({"id": t["id"], "title": t["title"], "kind": t["kind"],
                         "seed_id": t["seed_id"], "steps": steps,
                         "done": done, "total": len(steps), "pct": pct(done, len(steps))})
+        profile = self.profile_view(refresh=refresh)  # before lifeskill: a sync refresh lands
         return {"character": character, "tracks": out, "season": season,
-                "profile": self.profile_view(refresh=refresh),
+                "profile": profile,
                 "brackets": self._brackets(character, tables),
-                "seeds": self._seed_list(tracks)}
+                "seeds": self._seed_list(tracks), "lifeskill": self.lifeskill_view()}
+
+    def lifeskill_view(self):
+        """Plan 042 Life & CP card from the newest history snapshot; never
+        fetches. A broken milestone file leaves CP without a next target."""
+        try:
+            ms = load_cp_milestones(CP_MILESTONES)
+        except ValueError as e:
+            ms = {"error": str(e), "milestones": []}
+        try:
+            snap = self.history.main_snapshot() if self.history is not None else None
+        except Exception:  # noqa: BLE001 - a broken history never breaks the Progress tab
+            snap = None
+        return lifeskill_card(snap, ms)
 
     def _seed_list(self, tracks):
         """Plan 034 "Add track" choices; `track` is the store track a seed made."""
