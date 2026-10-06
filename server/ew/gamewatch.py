@@ -182,6 +182,9 @@ class GameWatch:
         self._shots = []
         self._stop = threading.Event()
         self._thread = None
+        # Plan 046: `fn(prev, new, at)` called after each state change, outside
+        # the lock; a failing listener never breaks the poll.
+        self.listeners = []
 
     @classmethod
     def from_config(cls, cfg, clock=time.time, tasklist=None):
@@ -272,10 +275,17 @@ class GameWatch:
                     state, self._log_state = "not_running", None
             self._shots = shots
             self._updated = now
-            if state != self._state:
+            prev, changed = self._state, state != self._state
+            if changed:
                 self._state, self._since = state, now
                 self.seq += 1
                 self._cond.notify_all()
+        if changed:
+            for fn in list(self.listeners):
+                try:
+                    fn(prev, state, now)
+                except Exception:  # noqa: BLE001 - a listener never breaks the poll
+                    pass
         return state
 
     def wait_change(self, seq, timeout):
