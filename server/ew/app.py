@@ -9,10 +9,11 @@ adds its `suggested` coupon block),
 /api/deadeye (plan 007; /api/deadeye/enhance GET plan 035; /api/deadeye/shopping GET plan 037), /api/game (plan 008), /api/leveling (plan 011),
 /api/spots (plan 012, GET only), /api/bosses (plan 031), /api/settings (plan 030), /api/pets
 (plan 043), /api/inventory (plan 045), /api/mounts (plan 044), /api/summary (plan 046),
-/api/onboarding (plan 051), /api/crafting (plan 054), and POST
+/api/onboarding (plan 051), /api/crafting (plan 054), /api/imperial (plan 053), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
 /api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings + /api/pets +
-/api/inventory + /api/mounts + /api/onboarding + /api/crafting behind one shared guard.
+/api/inventory + /api/mounts + /api/onboarding + /api/crafting + /api/imperial behind one
+shared guard.
 """
 
 import datetime as _dt
@@ -31,7 +32,8 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 from . import (__version__, bosses, coupons, crafting, deadeye, enhance, events, gamewatch, grind,
-               inventory, itemnames, leveling, market, mounts, ocr, onboarding, pets, ports,
+               imperial, inventory, itemnames, leveling, market, mounts, ocr, onboarding, pets,
+               ports,
                progress, settings, shopping, single, spots, summary, today, weekly)
 from .store import Store
 
@@ -256,6 +258,11 @@ class EWServer(ThreadingHTTPServer):
         # Plan 051: first-run checklist over the same config file + store.
         self.onboarding = onboarding.OnboardingService(self.store, self.settings.path,
                                                        clock=today_clock or time.time)
+        # Plan 053: imperial delivery planner; CP from plan 042's card, else typed.
+        self.imperial = imperial.ImperialService(
+            self.store, clock=today_clock or time.time,
+            cp=lambda: (self.progress.lifeskill_view().get("cp") or {}).get("value"),
+            prices=self.market.cached_prices, name=self.names.name)
         if game_poll:  # off by default so tests never probe processes; main() turns it on
             self.game.start()
 
@@ -409,6 +416,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.onboarding.view())
         if path == "/api/crafting":
             return self._send(200, self.server.crafting.view())
+        if path == "/api/imperial":
+            return self._send(200, self.server.imperial.view())
         if path == "/events":
             return self._sse()
         if path == "/":  # plan 020: redirect so relative asset paths resolve
@@ -550,6 +559,14 @@ class Handler(BaseHTTPRequestHandler):
         (op, arg), = body.items()
         return getattr(self.server.crafting, op)(arg)
 
+    def _post_imperial(self, body):
+        ops = {"deliver": "deliver", "cp": "set_cp", "mastery": "set_mastery",
+               "box_add": "box_add", "box_del": "box_del"}
+        if len(body) != 1 or not (set(ops) & set(body)):
+            raise ValueError("body must be one of {deliver|cp|mastery|box_add|box_del: ...}")
+        (op, arg), = body.items()
+        return getattr(self.server.imperial, ops[op])(arg)
+
     POST_ROUTES = {"/api/market/watch": _post_market_watch, "/api/today": _post_today,
                    "/api/progress": _post_progress, "/api/grind": _post_grind,
                    "/api/events": _post_events, "/api/deadeye": _post_deadeye,
@@ -557,7 +574,7 @@ class Handler(BaseHTTPRequestHandler):
                    "/api/bosses": _post_bosses, "/api/settings": _post_settings,
                    "/api/pets": _post_pets, "/api/inventory": _post_inventory,
                    "/api/mounts": _post_mounts, "/api/onboarding": _post_onboarding,
-                   "/api/crafting": _post_crafting}
+                   "/api/crafting": _post_crafting, "/api/imperial": _post_imperial}
 
     def do_POST(self):  # noqa: N802
         """Shared guard for every POST route: loopback Host + application/json +
