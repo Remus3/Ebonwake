@@ -185,6 +185,12 @@
     badges.appendChild(ab);
     const pre = badgeEl(it);
     if (pre) badges.appendChild(pre);
+    const auto = C.autoWatchBadge(it); // plan 071
+    if (auto) {
+      const b = el('span', 'ew-badge ew-auto', auto.text);
+      b.title = auto.title;
+      badges.appendChild(b);
+    }
     row.appendChild(badges);
     row.ewPill = el('span', 'ew-pill');
     row.appendChild(row.ewPill);
