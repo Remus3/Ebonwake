@@ -42,7 +42,7 @@
     if (!force && !C.pollDue(S.last, now, POLL_MS)) { draw(); return; }
     S.last = now;
     clearTimeout(S.timer);
-    S.timer = setTimeout(function () { poll(true); }, POLL_MS);
+    S.timer = setTimeout(function () { if (!C.pollPaused(S.panel, document)) poll(true); }, POLL_MS);
     getJSON('/api/bosses').then(accept, function (e) { S.err = e.message; }).then(draw);
   }
 
@@ -149,6 +149,7 @@
 
   // Appends the card to `panel` (the Today tab mounts it).
   function mount(panel) {
+    S.panel = panel;
     const ui = card();
     panel.appendChild(ui.card);
     S.ui = ui;

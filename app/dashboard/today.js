@@ -68,12 +68,19 @@
     if (!force && !C.pollDue(S.last, now, POLL_MS)) { draw(); return; }
     S.last = now;
     clearTimeout(S.timer);
-    S.timer = setTimeout(function () { poll(true); }, POLL_MS);
+    S.timer = setTimeout(function () { if (!C.pollPaused(S.panel, document)) poll(true); }, POLL_MS);
     getJSON('/api/today').then(accept, function (e) { S.err = e.message; }).then(draw);
     // Events-tab items for the read-only Events card; a failure keeps the last list.
     getJSON('/api/events').then(function (d) {
       if (d && Array.isArray(d.items)) { S.ev = d.items; S.evAt = Date.now(); }
     }, function () { /* the Events tab reports its own errors */ }).then(draw);
+  }
+
+  // Plan 049: an SSE `today` / `events` push re-reads now, or on the next
+  // show() while this tab is hidden.
+  function onBus() {
+    if (C.pollPaused(S.panel, document)) S.last = null;
+    else poll(true);
   }
 
   function msg(text) { if (S.ui) S.ui.form.msg.textContent = text; }
@@ -166,41 +173,79 @@
     return r;
   }
 
+  // Plan 049: one persistent err / note / list frame per card; rows are keyed
+  // (C.reconcile) so a poll keeps focus on rows that did not change.
+  function frame(ui) {
+    let f = ui.frame;
+    if (!f || f.list.parentNode !== ui.body) {
+      ui.body.textContent = '';
+      f = ui.frame = { err: el('div', 'ew-err', ''), note: el('div', 'ew-muted', ''), list: el('div', 'ew-list') };
+      [f.err, f.note, f.list].forEach(function (n) { ui.body.appendChild(n); });
+    }
+    return f;
+  }
+
+  function setText(n, text) { n.textContent = text; n.hidden = !text; }
+
+  // Live countdown nodes ride on their row (row.ewLive) and are re-collected
+  // after every reconcile, kept or rebuilt alike.
+  function collectLive(list) {
+    Array.prototype.forEach.call(list.children, function (r) {
+      if (!r.ewLive) return;
+      if (r.ewLive.rule) S.resetEls.push(r.ewLive);
+      else S.evEls.push(r.ewLive);
+    });
+  }
+
+  // r = { ev } (read-only Events-tab row) or { it, kind, pending, err }.
+  function listRow(r) {
+    if (r.ev) {
+      const ev = r.ev;
+      const n = el('div', 'ew-trow');
+      n.title = 'from the Events tab (read-only here)';
+      n.appendChild(el('span', 'ew-mname', ev.title + (typeof ev.code === 'string' ? ' ' + ev.code : '')));
+      const left = el('span', 'ew-muted ew-tdays', '');
+      n.appendChild(left);
+      n.ewLive = { el: left, id: ev.id };
+      return n;
+    }
+    const it = r.it;
+    let extra = null;
+    let live = null;
+    if (r.kind === 'event') {
+      extra = el('span', 'ew-muted ew-tdays', C.fmtDaysLeft(it.days_left));
+    } else if (it.reset) {
+      extra = el('span', 'ew-muted ew-tdays', C.fmtResetCountdown(it.reset, Date.now()));
+      live = { el: extra, rule: it.reset };
+    }
+    const n = row(it, extra);
+    if (live) n.ewLive = live;
+    return n;
+  }
+
   function drawList(ui, group, kind) {
-    const body = ui.body;
-    body.textContent = '';
+    const f = frame(ui);
     ui.count.textContent = S.data ? C.countText(group.done, group.total, 'done') : '-';
     ui.count.className = 'ew-pill ' + (S.data && group.total && group.done === group.total ? 'ok' : 'unknown');
     ui.count.hidden = !ui.count.textContent; // plan 047: no "0/0 done"
-    if (S.err) body.appendChild(el('div', 'ew-err', (S.data ? 'last data - ' : '') + S.err));
-    if (!S.data) { if (!S.err) body.appendChild(el('div', 'ew-muted', 'loading...')); return; }
-    const week = kind === 'event' ? C.eventsThisWeek(S.ev, S.evAt, Date.now()) : [];
-    if (!group.items.length && !week.length) {
-      body.appendChild(el('div', 'ew-muted', kind === 'event'
-        ? 'No events end this week - add events on the Events tab.' : 'Nothing here - add an item.'));
-      return;
+    setText(f.err, S.err ? (S.data ? 'last data - ' : '') + S.err : '');
+    const week = S.data && kind === 'event' ? C.eventsThisWeek(S.ev, S.evAt, Date.now()) : [];
+    const items = S.data ? group.items : [];
+    let hint = '';
+    if (!S.data) hint = S.err ? '' : 'loading...';
+    else if (!items.length && !week.length) {
+      hint = kind === 'event' ? 'No events end this week - add events on the Events tab.' : 'Nothing here - add an item.';
     }
-    const list = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
-    week.forEach(function (ev) {
-      const r = el('div', 'ew-trow');
-      r.title = 'from the Events tab (read-only here)';
-      r.appendChild(el('span', 'ew-mname', ev.title + (typeof ev.code === 'string' ? ' ' + ev.code : '')));
-      const left = el('span', 'ew-muted ew-tdays', C.fmtLeft(ev.left_s));
-      r.appendChild(left);
-      S.evEls.push({ el: left, id: ev.id });
-      list.appendChild(r);
-    });
-    group.items.forEach(function (it) {
-      let extra = null;
-      if (kind === 'event') {
-        extra = el('span', 'ew-muted ew-tdays', C.fmtDaysLeft(it.days_left));
-      } else if (it.reset) {
-        extra = el('span', 'ew-muted ew-tdays', C.fmtResetCountdown(it.reset, Date.now()));
-        S.resetEls.push({ el: extra, rule: it.reset });
-      }
-      list.appendChild(row(it, extra));
-    });
-    body.appendChild(list);
+    setText(f.note, hint);
+    f.list.className = 'ew-list' + (S.err ? ' ew-stale' : '');
+    f.list.hidden = !(items.length || week.length);
+    const rows = week.map(function (ev) {
+      return { ev: { id: ev.id, title: ev.title, code: ev.code } };
+    }).concat(items.map(function (it) {
+      return { it: it, kind: kind, pending: it.id in S.pending, err: S.rowErr[it.id] || '' };
+    }));
+    C.reconcile(f.list, rows, function (r) { return r.ev ? 'ev:' + r.ev.id : 'it:' + r.it.id; }, listRow);
+    collectLive(f.list);
   }
 
   // Plan 033: "This week" - weekly content gated by level and gear. Eligible
@@ -215,36 +260,50 @@
     });
   }
 
+  // d = { r, busy }; the "resets in" text is refreshed after reconcile.
+  function weekRow(d) {
+    const r = d.r;
+    const row = el('div', 'ew-trow ew-wrow ' + r.state + (r.full ? ' done' : ''));
+    row.title = r.title;
+    row.appendChild(el('span', 'ew-mname', r.name));
+    if (r.state !== 'locked') {
+      row.appendChild(el('span', 'ew-pill ' + (r.full ? 'ok' : 'unknown'), r.ticks));
+      [[-1, '-', r.done === 0], [1, '+', r.full]].forEach(function (b) {
+        const btn = el('button', 'ew-tx', b[1]);
+        btn.type = 'button';
+        btn.disabled = b[2] || d.busy;
+        btn.title = b[0] > 0 ? 'count one done this period' : 'undo one';
+        btn.addEventListener('click', function () { weekTick(r, b[0]); });
+        row.appendChild(btn);
+      });
+    }
+    if (r.gap) row.appendChild(el('div', 'ew-muted ew-tdays', r.gap));
+    if (r.reset !== null) {
+      row.ewReset = el('span', 'ew-muted ew-tdays', '');
+      row.appendChild(row.ewReset);
+    }
+    return row;
+  }
+
   function drawWeek(ui, now) {
-    const body = ui.body;
-    body.textContent = '';
+    const f = frame(ui);
     const plan = C.weeklyPlan(S.data, now);
     ui.count.textContent = S.data ? plan.eligible + '/' + plan.total + ' eligible' : '-';
     ui.count.className = 'ew-pill ' + (plan.eligible ? 'ok' : 'unknown');
-    if (plan.error) body.appendChild(el('div', 'ew-err', 'weekly content: ' + plan.error));
-    if (!S.data) { body.appendChild(el('div', 'ew-muted', S.err ? S.err : 'loading...')); return; }
-    if (!plan.rows.length) { body.appendChild(el('div', 'ew-muted', 'No weekly content data.')); return; }
-    const list = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
-    plan.rows.forEach(function (r) {
-      const row = el('div', 'ew-trow ew-wrow ' + r.state + (r.full ? ' done' : ''));
-      row.title = r.title;
-      row.appendChild(el('span', 'ew-mname', r.name));
-      if (r.state !== 'locked') {
-        row.appendChild(el('span', 'ew-pill ' + (r.full ? 'ok' : 'unknown'), r.ticks));
-        [[-1, '-', r.done === 0], [1, '+', r.full]].forEach(function (b) {
-          const btn = el('button', 'ew-tx', b[1]);
-          btn.type = 'button';
-          btn.disabled = b[2] || !!S.weekBusy;
-          btn.title = b[0] > 0 ? 'count one done this period' : 'undo one';
-          btn.addEventListener('click', function () { weekTick(r, b[0]); });
-          row.appendChild(btn);
-        });
-      }
-      if (r.gap) row.appendChild(el('div', 'ew-muted ew-tdays', r.gap));
-      if (r.reset !== null) row.appendChild(el('span', 'ew-muted ew-tdays', 'resets in ' + C.fmtDuration(r.reset - now)));
-      list.appendChild(row);
+    setText(f.err, plan.error ? 'weekly content: ' + plan.error : '');
+    let hint = '';
+    if (!S.data) hint = S.err ? S.err : 'loading...';
+    else if (!plan.rows.length) hint = 'No weekly content data.';
+    setText(f.note, hint);
+    const rows = S.data ? plan.rows : [];
+    f.list.className = 'ew-list' + (S.err ? ' ew-stale' : '');
+    f.list.hidden = !rows.length;
+    C.reconcile(f.list, rows.map(function (r) { return { r: r, busy: !!S.weekBusy }; }),
+      function (d) { return d.r.id; }, weekRow);
+    rows.forEach(function (r, i) {
+      const n = f.list.children[i];
+      if (n && n.ewReset) n.ewReset.textContent = 'resets in ' + C.fmtDuration(r.reset - now);
     });
-    body.appendChild(list);
   }
 
   function draw() {
@@ -381,6 +440,7 @@
   }
 
   function mount(panel) {
+    S.panel = panel;
     panel.classList.add('ew-today');
     const d = listCard('Daily', true);
     const w = listCard('Weekly', true);
@@ -393,6 +453,7 @@
     S.ui = { daily: d, weekly: w, week: wk, event: e, form: fm.form };
     if (!S.timer) {
       setInterval(tick, 1000);
+      if (window.EWBus) { window.EWBus.on('today', onBus); window.EWBus.on('events', onBus); }
       poll(false);
     } else {
       draw();
