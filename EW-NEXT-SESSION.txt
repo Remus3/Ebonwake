@@ -37,10 +37,14 @@ Carried forward (not acted on yet):
   fine"); ADR 0001 reversal condition not met.
 - NOTE: plan 008 System card check DONE by operator 2026-10-07 ("system
   card is good").
-- OPERATOR (plan 009 QA, optional): ~10 real screenshots with silver and
-  buffs visible, press Read on each in System > screenshots. If real silver
-  misreads in >1 of 10, set config ocr.engine=windows and re-bench with real
-  crops. Plan 016 (comma-drop) is merged; watch for regressions.
+- OPERATOR (plan 009 QA, optional, 1/10 so far): 2026-10-07 only ONE
+  screenshot existed (portrait / appearance screen, no silver or buffs);
+  auto-OCR (063) processed it and correctly committed nothing (no false
+  silver; the 4,698 pearl price was not read as silver). Still needed: ~9
+  screenshots with the inventory open (silver) and buffs visible; then a
+  session agent compares each image vs /api/ocr/auto. If real silver
+  misreads in >1 of 10, set config ocr.engine=windows and re-bench.
+  That screenshot is a good plan 083 gallery test image.
 - OPERATOR (plan 010 QA): tray icon shows Show dashboard / Toggle overlay /
   Restart server / Quit; logon task "Ebonwake" starts EW 60 s after login.
 - OPERATOR (plan 011 QA): Progress tab Leveling card - type level + XP pct a
