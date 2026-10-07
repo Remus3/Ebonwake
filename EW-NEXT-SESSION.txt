@@ -37,14 +37,14 @@ Carried forward (not acted on yet):
   fine"); ADR 0001 reversal condition not met.
 - NOTE: plan 008 System card check DONE by operator 2026-10-07 ("system
   card is good").
-- OPERATOR (plan 009 QA, optional, 1/10 so far): 2026-10-07 only ONE
-  screenshot existed (portrait / appearance screen, no silver or buffs);
-  auto-OCR (063) processed it and correctly committed nothing (no false
-  silver; the 4,698 pearl price was not read as silver). Still needed: ~9
-  screenshots with the inventory open (silver) and buffs visible; then a
-  session agent compares each image vs /api/ocr/auto. If real silver
-  misreads in >1 of 10, set config ocr.engine=windows and re-bench.
-  That screenshot is a good plan 083 gallery test image.
+- OPERATOR (plan 009 QA, optional, still unscored): 2026-10-07 the
+  operator took 25 shots (4096x2304) but with the game UI HIDDEN (scenery /
+  character only) - 0 silver / 0 buffs visible, 0 false reads (research
+  0012). Fixed on the way: auto-OCR double-read files BDO was still writing
+  (c3df83e). Still needed: ~10 shots with the UI SHOWN, inventory open,
+  buffs visible; no screenshot key on the operator's keyboard - they
+  rebind Screenshot in BDO Settings > Controls. Then compare vs
+  /api/ocr/auto; >1/10 silver misreads -> ocr.engine=windows.
 - OPERATOR (plan 010 QA): tray icon shows Show dashboard / Toggle overlay /
   Restart server / Quit; logon task "Ebonwake" starts EW 60 s after login.
 - OPERATOR (plan 011 QA): Progress tab Leveling card - type level + XP pct a
