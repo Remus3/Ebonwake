@@ -68,15 +68,15 @@ def _parse(v):
 
 # -- patterns + extraction ---------------------------------------------------------
 
-def load_patterns(path=None):
-    """Compiled patterns of the tracked file; a bad file raises ValueError."""
+def load_patterns(path=None, field="patterns"):
+    """Compiled patterns of the tracked file's `field` list; a bad file raises ValueError."""
     try:
         doc = json.loads(Path(path or PATTERNS_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         raise ValueError(f"maint_loss_patterns.json unreadable: {e}") from e
-    raw = doc.get("patterns") if isinstance(doc, dict) else None
+    raw = doc.get(field) if isinstance(doc, dict) else None
     if not isinstance(raw, list) or not 0 < len(raw) <= MAX_PATTERNS:
-        raise ValueError("maint_loss_patterns.json: patterns must be a non-empty list")
+        raise ValueError(f"maint_loss_patterns.json: {field} must be a non-empty list")
     out = []
     for p in raw:
         if not (isinstance(p, str) and p.strip() and p.isascii()):
@@ -147,6 +147,26 @@ def clean_loss(raw):
                 and t not in out:
             out.append(t)
     return out[:MAX_LOSS]
+
+
+def multi_character_patterns(path=None):
+    """Patterns of warnings only a multi-character account can act on (Tag
+    Characters, alts); an unreadable list suppresses nothing."""
+    try:
+        return load_patterns(path, "multi_character")
+    except ValueError:
+        return []
+
+
+def split_applicable(warns, multi_character, patterns):
+    """(shown, suppressed): with `multi_character` off, a warning matching any
+    pattern concerns a feature the account cannot have and is suppressed."""
+    if multi_character:
+        return list(warns), []
+    shown, hidden = [], []
+    for w in warns:
+        (hidden if any(p.search(w["text"]) for p in patterns) else shown).append(w)
+    return shown, hidden
 
 
 def warning_key(notice_no, text):
@@ -288,18 +308,28 @@ class DigestService:
     DOMAIN). Inputs are zero-arg callables over views EW already serves:
     `loss_rows` (plan 064 Detail cache), `items` (plan 006 events), `hot`
     (plan 064 dated Hot Time windows), `weekly` (plan 011 weekly Hot Time
-    windows), `maint_inputs` -> {slot, notices}."""
+    windows), `maint_inputs` -> {slot, notices}, `multi_character` -> the
+    profile.multi_character setting (off: Tag / alt-only warnings go to
+    `suppressed`, never to `warnings`, the ladder or an ack)."""
 
     def __init__(self, store, loss_rows, items, hot, maint_inputs, clock=time.time,
-                 weekly=None):
+                 weekly=None, multi_character=None):
         self.store = store
         self.loss_rows = loss_rows
         self.items = items
         self.hot = hot
         self.weekly = weekly or (lambda: [])
         self.maint_inputs = maint_inputs
+        self.multi_character = multi_character or (lambda: False)
         self.clock = clock
         self._lock = threading.Lock()
+        self._multi_pats = multi_character_patterns()
+
+    def _multi(self):
+        try:
+            return self.multi_character() is True
+        except Exception:  # noqa: BLE001 - an unreadable setting = the default (one character)
+            return False
 
     def _now(self):
         return _dt.datetime.fromtimestamp(self.clock(), _UTC)
@@ -318,28 +348,29 @@ class DigestService:
             m = {}
         nxt = next_maint(now, m.get("slot"), m.get("notices"))
         if nxt is None:
-            return None, [], []
+            return None, [], [], []
         start = nxt[0]
         hot = self._safe(self.hot) + weekly_hot(self._safe(self.weekly), now, start)
-        return (nxt, warnings(self._safe(self.loss_rows), now, start),
-                ending(self._safe(self.items), hot, now, start))
+        warns, hidden = split_applicable(warnings(self._safe(self.loss_rows), now, start),
+                                         self._multi(), self._multi_pats)
+        return nxt, warns, ending(self._safe(self.items), hot, now, start), hidden
 
     def view(self):
         now = self._now()
-        nxt, warns, ends = self._all(now)
+        nxt, warns, ends, hidden = self._all(now)
         with self._lock:
             acked = {a["key"] for a in _clean_acked(self.store.get(DOMAIN))
                      if _parse(a["until"]) > now}
         base = {"now": _iso(now), "lead_s": LEAD_S}
         if nxt is None:
             return dict(base, maint=None, show=False, in_s=None, warnings=[], ending=[],
-                        acked=[])
+                        acked=[], suppressed=[])
         start, end, source = nxt
         in_s = int((start - now).total_seconds())
         return dict(base, maint={"start_utc": _iso(start), "end_utc": _iso(end), "source": source},
                     show=0 < in_s <= LEAD_S, in_s=in_s,
                     warnings=[w for w in warns if w["key"] not in acked], ending=ends,
-                    acked=[w for w in warns if w["key"] in acked])
+                    acked=[w for w in warns if w["key"] in acked], suppressed=hidden)
 
     def unacked(self):
         """Warnings not acked, whatever the lead (plan 070 ladder timers)."""
@@ -350,7 +381,7 @@ class DigestService:
         if not (isinstance(key, str) and KEY_RE.match(key)):
             raise ValueError("ack must be a warning key (notice:hash)")
         now = self._now()
-        nxt, warns, _ = self._all(now)
+        nxt, warns, _, _ = self._all(now)
         if nxt is None or key not in {w["key"] for w in warns}:
             raise ValueError(f"no current maintenance warning {key}")
         until = _iso(nxt[1])

@@ -57,6 +57,8 @@
     "_doc": "Plan 061. base_url: a self-hosted BDO-REST-API instance (man90/bdo-rest-api, loopback default shown). Blank = profile source off. The public instance is robots-disallowed and is never called; a non-loopback base is used only while its robots.txt allows Ebonwake.",
     "family": "",
     "base_url": "http://127.0.0.1:8001/v1",
-    "auto_level": true
+    "auto_level": true,
+    "_doc_multi_character": "false = one character (no Tag partner, no alts): maintenance loss warnings about Tag Characters / alts are suppressed (plan 074, listed under suppressed in GET /api/maint/digest).",
+    "multi_character": false
   }
 }

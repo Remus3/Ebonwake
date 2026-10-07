@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from server.ew import app as ewapp
-from server.ew import coupons, eventnotices, maintdigest, market, prompts, whatnow
+from server.ew import coupons, eventnotices, maintdigest, market, prompts, settings, whatnow
 from server.ew.store import Store
 
 UTC = dt.timezone.utc
@@ -174,12 +174,15 @@ def test_service_reads_weekly_hot_windows(tmp_path):
 
 # --- service: show window, ack ------------------------------------------------------------
 
-def _digest(tmp_path, clock, rows=None, items=None):
+def _digest(tmp_path, clock, rows=None, items=None, multi=True):
+    # multi=True: the Tag sentence exercises the mechanics; one-character
+    # suppression has its own tests below
     rows = rows if rows is not None else [{"notice_no": NO, "url": eventnotices.detail_url(NO),
                                            "due_utc": START.isoformat(), "loss": [TAG]}]
     return maintdigest.DigestService(
         Store(tmp_path / "store"), loss_rows=lambda: rows, items=lambda: items or [],
-        hot=lambda: [], maint_inputs=lambda: {"slot": SLOT, "notices": NOTICES}, clock=clock)
+        hot=lambda: [], maint_inputs=lambda: {"slot": SLOT, "notices": NOTICES}, clock=clock,
+        multi_character=lambda: multi)
 
 
 def test_digest_shows_from_t_minus_24h(tmp_path):
@@ -224,6 +227,56 @@ def test_ack_rejects_bad_or_unknown_keys(tmp_path, key):
 def test_warning_past_due_is_gone(tmp_path):
     d = _digest(tmp_path, Clock(START + dt.timedelta(seconds=1)))
     assert d.view()["warnings"] == []
+
+
+# --- one character: Tag / alt-only warnings suppressed -------------------------------------
+
+def test_multi_character_patterns_load_and_match_tag_and_alts():
+    pats = maintdigest.multi_character_patterns()
+    assert pats and all(p.pattern.isascii() for p in pats)
+    for text in (TAG, "Unclaimed Tag EXP will be deleted.", "Tagged character EXP will be reset.",
+                 "Items on alt characters will be removed.", "Claim it on your alts before."):
+        assert any(p.search(text) for p in pats), text
+    for text in ("All unclaimed Black Spirit's Pass rewards will be deleted.",
+                 "Coupons will no longer be available.", "Claim your Vantage rewards before."):
+        assert not any(p.search(text) for p in pats), text
+
+
+OTHER = "All unclaimed Season Pass rewards will be deleted after the maintenance."
+
+
+def test_one_character_suppresses_tag_warning_only(tmp_path):
+    rows = [{"notice_no": NO, "url": eventnotices.detail_url(NO), "due_utc": START.isoformat(),
+             "loss": [TAG, OTHER]}]
+    d = _digest(tmp_path, Clock(T_ACCEPT), rows=rows, multi=False)
+    v = d.view()
+    assert [w["text"] for w in v["warnings"]] == [OTHER]
+    assert [w["text"] for w in v["suppressed"]] == [TAG]
+    assert [w["text"] for w in d.unacked()] == [OTHER]
+    with pytest.raises(ValueError):
+        d.ack(maintdigest.warning_key(NO, TAG))
+    on = _digest(tmp_path / "multi", Clock(T_ACCEPT), rows=rows, multi=True).view()
+    assert [w["text"] for w in on["warnings"]] == [TAG, OTHER] and on["suppressed"] == []
+
+
+def test_unreadable_multi_character_list_suppresses_nothing(tmp_path):
+    bad = tmp_path / "p.json"
+    bad.write_text('{"patterns": ["x"]}', encoding="ascii")
+    assert maintdigest.multi_character_patterns(bad) == []
+    w = [{"text": TAG}]
+    assert maintdigest.split_applicable(w, False, []) == (w, [])
+
+
+def test_unreadable_setting_means_one_character(tmp_path):
+    def boom():
+        raise RuntimeError("settings unreadable")
+    rows = [{"notice_no": NO, "url": "u", "due_utc": START.isoformat(), "loss": [TAG]}]
+    d = maintdigest.DigestService(
+        Store(tmp_path / "store"), loss_rows=lambda: rows, items=lambda: [], hot=lambda: [],
+        maint_inputs=lambda: {"slot": SLOT, "notices": NOTICES}, clock=Clock(T_ACCEPT),
+        multi_character=boom)
+    v = d.view()
+    assert v["warnings"] == [] and [w["text"] for w in v["suppressed"]] == [TAG]
 
 
 # --- What now ------------------------------------------------------------------------------
@@ -296,9 +349,11 @@ def _no_network(url, timeout):
     raise AssertionError("test touched the network")
 
 
-@pytest.fixture()
-def srv(tmp_path):
+@pytest.fixture(params=[True])
+def srv(tmp_path, request):
     clock = Clock(T_ACCEPT)
+    (tmp_path / "local.json").write_text(
+        json.dumps({"profile": {"multi_character": request.param}}), encoding="ascii")
     client = eventnotices.NoticeClient(fetch=Net(), clock=clock, cache_dir=tmp_path / "cache")
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
                           sse_interval=0.05, market_seed=[], profile_cfg={},
@@ -360,6 +415,23 @@ def test_acceptance_nothing_shows_at_t_minus_44h(srv):
     st, wn = _req(srv, "GET", "/api/whatnow")
     acts = ([wn["top"]] if wn["top"] else []) + wn["next"]
     assert all(a["source"] != "maint_loss" for a in acts)
+
+
+@pytest.mark.parametrize("srv", [False], indirect=True)
+def test_acceptance_one_character_hides_tag_warning(srv):
+    _req(srv, "GET", "/api/events")
+    st, v = _req(srv, "GET", "/api/maint/digest")
+    assert st == 200 and v["show"] is True
+    assert v["warnings"] == [] and [w["text"] for w in v["suppressed"]] == [TAG]
+    st, wn = _req(srv, "GET", "/api/whatnow")
+    acts = ([wn["top"]] if wn["top"] else []) + wn["next"]
+    assert all(a["source"] != "maint_loss" for a in acts)
+    st, p = _req(srv, "GET", "/api/prompts")
+    assert p["maint_loss"] == []
+
+
+def test_settings_default_is_one_character():
+    assert settings.defaults()["profile.multi_character"] is False
 
 
 def test_post_route_registered():

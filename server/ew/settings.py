@@ -126,6 +126,8 @@ SPEC.update({
     "hotkeys.showDashboard": (valid_accelerator, "Control+Alt+D"),
     "profile.family": (valid_family, ""),
     "profile.base_url": (valid_base_url, ""),
+    # Off = one character: Tag / alt-only loss warnings (plan 074) are suppressed.
+    "profile.multi_character": (_is_bool, False),
     "ui.theme": (_one_of(THEMES), "dark"),
     "ui.scale": (_num_in(0.9, 1.3), 1.0),
 })

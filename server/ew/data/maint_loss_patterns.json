@@ -7,5 +7,13 @@
     "\\bclaim\\b.{0,80}\\bbefore\\b",
     "\\bclaim\\b.{0,80}\\bbeforehand\\b",
     "\\bno longer be (?:available|claimable|obtainable)\\b"
+  ],
+  "_doc_multi_character": "Warnings matching any of these concern a feature only an account with more than one character has (Tag Characters, alts). They are suppressed unless the setting profile.multi_character is on.",
+  "multi_character": [
+    "\\btag(?:ged)?[ -]?characters?\\b",
+    "\\btag(?:ged)? exp\\b",
+    "\\btag partner\\b",
+    "\\balt(?:ernate)? characters?\\b",
+    "\\balts\\b"
   ]
 }

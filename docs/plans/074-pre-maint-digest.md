@@ -133,4 +133,31 @@ Depends on: 064, 069, 070.
     d. Detail cache entries carry 075 `login` plus 074 `loss` / `parse_v`;
        What now gets both `maint_digest` and `logins` inputs / adapters.
 
+11. One character: Tag / alt-only warnings suppressed (operator note
+    2026-10-06: one account, one Deadeye, no alts, no Tag partner).
+    Decision: a new bool setting `profile.multi_character` (default false,
+    Settings > Profile) and a data list `multi_character` in
+    `maint_loss_patterns.json` (Tag Characters / Tag EXP / tag partner /
+    alt characters / alts). While off, a matching warning moves from
+    `warnings` to a new `suppressed` list in GET /api/maint/digest: no Home
+    row, no What now `maint_loss` candidate, no `maintLoss` toast, not
+    ackable. An unreadable setting counts as off; an unreadable list
+    suppresses nothing. Extraction and the Detail cache are unchanged, so
+    flipping the setting needs no re-read. Alternatives: drop Tag sentences
+    from the loss patterns (loses them for multi-character accounts); a
+    hard-coded one-character constant. Why: the operator cannot act on a
+    Tag loss, so warning about it is noise; the setting keeps the public
+    repo correct for other accounts. The acceptance test's server fixture
+    sets the setting on to keep exercising the Tag sentence; a second
+    acceptance test pins the one-character default. Reverses if: the
+    operator adds a character or a Tag partner (set the setting on).
+12. Out-of-scope test fix (refute r1 of the item-11 hand-off): the gate
+    failure `test_dice_never_auto_ticks_today` (plan 056) was not caused by
+    this change; it read the wall clock, and a session opened 3700 s ago
+    straddles the 05:00 UTC dice reset for ~62 min a day, earning 1 die not
+    3. Decision: pin the test's `today_clock` to 12:00 UTC on a fixed day.
+    Alternatives: skip near the reset; change DiceClock. Why: the clock is
+    the flake, the code is right (minutes count from the reset). Reverses
+    if: dice minutes must carry across the reset.
+
 Dependency guard: before writing code the lane checks that `server/ew/eventnotices.py` with maintenance parsing (plan 064), `server/ew/whatnow.py` (plan 069) and `server/ew/prompts.py` (plan 070) exist. If any is missing, the lane changes nothing, writes `"status": "blocked", "needs": ["064", "069", "070"]` into its progress JSON (`ops/loop/control/progress/p074-build.json`) and exits 0.
