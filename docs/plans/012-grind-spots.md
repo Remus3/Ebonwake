@@ -23,3 +23,43 @@ where a Season Deadeye with AP x / DP y at level z should grind next.
 
 Acceptance: ranking unit-tested on a fixture table; data file schema-tested;
 gates green; verifier PASS within 3 rounds; one push.
+
+## As-built deviations (build lane, self-adjudicated 2026-10-05)
+
+Built: `server/ew/data/grind_spots.json` (20 rows), `server/ew/spots.py`,
+`GET /api/spots` in `server/ew/app.py`, ewcore helpers `spotsPath`,
+`spotRecs`, `spotNeedText`, `matchSpot`, Grind tab card "Where next".
+Tests: `tests/test_spots.py`, `app/test/spots.test.js`.
+
+1. Seed rows transcribed without a live fetch.
+   Decision: rows carry the community AP/DP bands as recalled from the Garmoth
+   grind tracker; `verified` is the transcription date, not a live re-check;
+   every row's notes say "community recommendation, verify" and the API sends
+   a `disclaimer`. Alternatives: wait for a web-tool grant (blocks the plan);
+   ship an empty table (card useless). Why: web tools were not granted to the
+   build lane; coarse bands are what the plan asks for and are flagged.
+   Reverses if: a data lane re-checks rows against the live source (robots.txt
+   respected) and updates bands + `verified`.
+2. Character AP is max(ap, aap) from plan 004's `gs`.
+   Alternatives: `ap` only; average. Why: Deadeye fights on the higher of the
+   two and community tables quote a single AP. Reverses if: the operator wants
+   a specific stat, or tables start quoting AAP separately.
+3. Unlock order (plan named only "next 2"). Ineligible spots whose goal tier is
+   at least the best eligible tier come first (a step up, not sideways), then
+   smallest AP + DP missing, fewest levels missing, higher tier, id; filled
+   from lower tiers when fewer than 2 qualify. Alternatives: smallest gap only
+   (suggests sideways moves). Reverses if: operator QA finds the order unhelpful.
+4. `goal` defaults to `xp` when absent; a bad goal / ap / dp / level is a 400.
+   When AP, DP or level is unknown (Progress unset, no what-if) the body lists
+   it in `missing` and returns empty `top` / `unlocks` instead of guessing.
+   A bad or missing table answers 200 with `status: "error"` and empty lists
+   (the card says so) rather than failing server start.
+5. "A spot click pre-fills the session log spot name": the session spot is a
+   select of logged spots, so a click selects the matching logged spot
+   (case-insensitive name) or, if not logged yet, fills the "new spot" field
+   for one-tap Add spot. Nothing is posted. Alternative: auto-add the spot
+   (a write the operator did not ask for). Reverses if: operator prefers
+   auto-add.
+6. Plan 005 silver/h beside the tier is matched by exact case-insensitive
+   name and shown only for spots with at least one logged session
+   (`logged_silver_per_h`, else null). Alternative: fuzzy match (false hits).

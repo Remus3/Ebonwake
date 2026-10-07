@@ -74,7 +74,7 @@ test('validProgressBody accepts exactly the slice A POST shapes', () => {
   for (const b of ok) assert.strictEqual(C.validProgressBody(b), true, JSON.stringify(b));
   const bad = [
     null, 'x', [], {}, { character: {} }, { character: null },
-    { character: { level: 0 } }, { character: { level: 71 } }, { character: { level: 1.5 } },
+    { character: { level: 0 } }, { character: { level: 76 } }, { character: { level: 1.5 } },
     { character: { level: '60' } }, { character: { gs: { ap: -1, aap: 0, dp: 0 } } },
     { character: { gs: { ap: 1000 } } }, { character: { gs: { ap: 1, x: 1 } } }, { character: { gs: 5 } },
     { character: { gs: {} } }, { character: { level: 60, extra: 1 } }, { character: { name: '' } },
@@ -106,7 +106,7 @@ test('parseCharacterForm builds a character body or an operator error', () => {
   assert.deepStrictEqual(C.parseCharacterForm({ level: ' 62 ', ap: '310', aap: '312', dp: '400' }),
     { ok: true, body: { character: { level: 62, gs: { ap: 310, aap: 312, dp: 400 } } } });
   for (const bad of [
-    { level: '', ap: '1', aap: '1', dp: '1' }, { level: '71', ap: '1', aap: '1', dp: '1' },
+    { level: '', ap: '1', aap: '1', dp: '1' }, { level: '76', ap: '1', aap: '1', dp: '1' },
     { level: '0', ap: '1', aap: '1', dp: '1' }, { level: '60', ap: '1000', aap: '1', dp: '1' },
     { level: '60', ap: '-1', aap: '1', dp: '1' }, { level: '60', ap: '1.5', aap: '1', dp: '1' },
     { level: '60', ap: '1', aap: '', dp: '1' }, {}
@@ -211,5 +211,115 @@ test('dashboard loads and mounts progress.js; CSP unchanged', () => {
 
 test('overlay never posts to /api/progress', () => {
   const src = read('overlay/overlay.js');
-  assert.doesNotMatch(src, /\/api\/progress|POST|ewApi/);
+  // plan 013: the opt-in season line GETs /api/progress; still never a POST.
+  assert.doesNotMatch(src, /POST|ewApi|method:/);
+  const uses = src.match(/['"]\/api\/progress['"]/g) || [];
+  assert.strictEqual(uses.length, (src.match(/getJSON\('\/api\/progress'\)/g) || []).length);
+});
+
+// ---- plan 023: AP/DP bracket lines -------------------------------------------
+
+const lk = (x, bmin, bmax, value, nmin, ngain, extra) => Object.assign(
+  { x: x, bracket_min: bmin, bracket_max: bmax, value: value, next_min: nmin, next_gain: ngain }, extra || {});
+const tbl = (reverify) => ({ ap: { override: false, reverify: !!reverify, verified: '2026-08-13' },
+  dp_dr: { override: false, reverify: false, verified: '2026-08-13' },
+  dp_all_dr: { override: false, reverify: false, verified: '2026-08-13' } });
+
+test('bracketLines: plan 023 example line and cliff mark', () => {
+  const b = { ap: lk(251, 249, 252, 57, 253, 12, { cliff: true }), aap: null, dp: null, tables: tbl() };
+  const lines = C.bracketLines(b);
+  assert.strictEqual(lines.length, 1);
+  assert.strictEqual(lines[0].key, 'ap');
+  assert.strictEqual(lines[0].text, 'AP 251 -> +57 bonus; +2 AP to 253 gives +12');
+  assert.strictEqual(lines[0].cliff, true);
+  assert.strictEqual(lines[0].verify, false);
+});
+
+test('bracketLines: AAP uses the ap table; verify flag follows its reverify', () => {
+  const b = { ap: null, aap: lk(245, 245, 248, 48, 249, 9, { cliff: true }), dp: null, tables: tbl(true) };
+  const l = C.bracketLines(b)[0];
+  assert.strictEqual(l.key, 'aap');
+  assert.strictEqual(l.text, 'AAP 245 -> +48 bonus; +4 AAP to 249 gives +9');
+  assert.strictEqual(l.verify, true);
+});
+
+test('bracketLines: DP gives DR % and all-DR lines', () => {
+  const dp = lk(205, 203, 210, 1, 211, null, { cliff: false, all_dr: lk(205, null, 252, 0, 253, 2) });
+  const lines = C.bracketLines({ ap: null, aap: null, dp: dp, tables: tbl() });
+  assert.deepStrictEqual(lines.map((l) => l.text), [
+    'DP 205 -> 1% DR; +6 DP to 211: next bracket not in table',
+    'DP 205 -> all-DR +0; +48 DP to 253 gives +2',
+  ]);
+  assert.deepStrictEqual(lines.map((l) => l.key), ['dp', 'dp_all']);
+});
+
+test('bracketLines: top bracket, unknown span, junk', () => {
+  const top = C.bracketLines({ ap: lk(460, 449, null, 297, null, null), tables: tbl() })[0];
+  assert.strictEqual(top.text, 'AP 460 -> +297 bonus (top bracket)');
+  const gap = C.bracketLines({ ap: lk(290, 277, 308, null, 309, null), tables: tbl() })[0];
+  assert.strictEqual(gap.text, 'AP 290 -> bonus not in table (277-308)');
+  assert.deepStrictEqual(C.bracketLines(null), []);
+  assert.deepStrictEqual(C.bracketLines({ ap: 'x', aap: { x: 'y' } }), []);
+});
+
+test('progress.js renders bracket lines with a verify badge', () => {
+  const src = read('dashboard/progress.js');
+  assert.match(src, /C\.bracketLines\(/);
+  assert.match(src, /'verify'/);
+});
+
+// ---- plan 034: track seeds + gate chips ----
+
+test('validProgressBody accepts track_seed with a seed id only', () => {
+  for (const ok of ['gear_roadmap', 'igor_bartali', 'a']) {
+    assert.strictEqual(C.validPost('/api/progress', { track_seed: ok }), true, ok);
+  }
+  for (const bad of ['', 'Gear', '_x', '../x', 'gear-roadmap', 'a'.repeat(41), 5, null, { id: 'x' }]) {
+    assert.strictEqual(C.validPost('/api/progress', { track_seed: bad }), false, JSON.stringify(bad));
+  }
+  assert.strictEqual(C.validPost('/api/progress', { track_seed: 'a', remove_track: 'b' }), false);
+});
+
+test('seedOptions: labels, added disabled, junk dropped', () => {
+  const opts = C.seedOptions([
+    { id: 'gear_roadmap', title: 'Gear roadmap', added: false, unverified: 0 },
+    { id: 'igor_bartali', title: 'Igor', added: false, unverified: 2 },
+    { id: 'emma_bartali', title: 'Emma', added: true, unverified: 2 },
+    { id: 'BAD', title: 'x' }, 'junk', null,
+  ]);
+  assert.deepStrictEqual(opts, [
+    { id: 'gear_roadmap', label: 'Gear roadmap', added: false },
+    { id: 'igor_bartali', label: 'Igor (2 to verify)', added: false },
+    { id: 'emma_bartali', label: 'Emma - added', added: true },
+  ]);
+  assert.deepStrictEqual(C.seedOptions(undefined), []);
+});
+
+test('gateChips: ready / needs (with bonus AP hint) / unknown', () => {
+  const chips = C.gateChips({ gates: [
+    { stat: 'level', need: 55, have: 56, gap: 0, state: 'ready' },
+    { stat: 'ap', need: 250, have: 245, gap: 5, state: 'needs', bonus_gain: 17 },
+    { stat: 'dp', need: 310, have: null, gap: null, state: 'unknown' },
+    { stat: 'ap', need: 340, have: 300, gap: 40, state: 'needs', bonus_gain: null },
+    { stat: 'level', need: 60, have: 57, gap: 3, state: 'needs' },
+    { stat: 'bogus', need: 1 }, 'junk',
+  ] });
+  assert.deepStrictEqual(chips.map((c) => [c.text, c.cls]), [
+    ['Lv 55 ready', 'ok'],
+    ['AP 250: needs +5 AP (+17 bonus AP)', 'warn'],
+    ['DP 310', 'unknown'],
+    ['AP 340: needs +40 AP', 'warn'],
+    ['Lv 60: needs +3 lv', 'warn'],
+  ]);
+  assert.deepStrictEqual(C.gateChips({ title: 'no gates' }), []);
+  assert.deepStrictEqual(C.gateChips(null), []);
+});
+
+test('progress.js wires the seed select, gate chips and unverified badge', () => {
+  const src = read('dashboard/progress.js');
+  assert.match(src, /track_seed:/);
+  assert.match(src, /C\.seedOptions\(/);
+  assert.match(src, /C\.gateChips\(/);
+  assert.match(src, /s\.verified === false/);
+  assert.doesNotMatch(src, /innerHTML/);
 });

@@ -1,6 +1,7 @@
 /* EW game card (plan 008 slice B) on the System tab: session-log state, since,
    last event and the operator's recent screenshots, from GET /api/game.
-   It never touches the game. Polls every 10 s; the "since" age ticks locally.
+   It never touches the game. Refreshes on the SSE `game` event (plan 049; a
+   60 s fallback poll pauses while the tab is hidden); the "since" age ticks locally.
    Offline keeps the last value, muted. Plan 009 slice B: "Read" per screenshot
    asks the server to OCR that file (POST /api/ocr via the dashboard preload);
    the result panel shows the text, silver and buffs. Nothing is applied on its
@@ -10,10 +11,12 @@
 (function () {
   'use strict';
   const C = window.EWCore;
-  const POLL_MS = 2000; // exit must show within 5 s (operator QA 2026-10-05)
+  // Plan 049: the SSE `game` event (pushed within 0.25 s of a change) keeps the
+  // exit-within-5-s QA bar; this slow poll is only a fallback.
+  const POLL_MS = 60000;
   const SHOTS_SHOWN = 10;
   const S = {
-    data: null, err: null, last: null, timer: null, ui: null,
+    data: null, err: null, last: null, timer: null, ui: null, auto: null, autoErr: null,
     ocr: { file: null, res: null, err: null, busy: false, msg: '' }
   };
 
@@ -26,7 +29,7 @@
 
   function getJSON(path) {
     return fetch(C.SERVER + path).then(function (r) {
-      if (r.status === 404) throw new Error('game API not on this server yet');
+      if (r.status === 404) throw new Error(C.notOnServer(path));
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     }).catch(function (e) {
@@ -39,13 +42,100 @@
     if (!force && !C.pollDue(S.last, now, POLL_MS)) { draw(); return; }
     S.last = now;
     clearTimeout(S.timer);
-    S.timer = setTimeout(function () { poll(true); }, POLL_MS);
+    S.timer = setTimeout(function () {
+      if (!C.pollPaused(S.ui && S.ui.body, document)) poll(true);
+    }, POLL_MS);
     getJSON('/api/game').then(function (d) {
       const g = C.normalizeGame(d);
       if (!g) throw new Error('bad reply from server');
       S.data = g;
       S.err = null;
     }).catch(function (e) { S.err = e.message; }).then(draw);
+    pollAuto();
+  }
+
+  // ---- auto-OCR review card (plan 063) ----
+  // Shots taken while logged in are read by the server on their own; this card
+  // shows "N to review" with accept / fix / discard per field and the recent
+  // auto commits with undo. Refreshes on the SSE `ocr` event.
+
+  function pollAuto() {
+    getJSON('/api/ocr/auto').then(function (d) {
+      const a = C.normalizeOcrAuto(d);
+      if (a) { S.auto = a; S.autoErr = null; }
+    }).catch(function (e) { S.autoErr = e.message; }).then(drawAuto);
+  }
+
+  function autoPost(body) {
+    const b = bridge();
+    if (!b) { S.autoErr = 'reviewing needs the Ebonwake app window'; drawAuto(); return; }
+    if (!C.validOcrBody(body)) { S.autoErr = 'not a valid value'; drawAuto(); return; }
+    window.EWToast.via(b).post('/api/ocr', body).then(function (res) {
+      if (res && res.ok) {
+        const a = C.normalizeOcrAuto(res.data);
+        if (a) S.auto = a;
+        S.autoErr = null;
+        if (window.EWGrind && typeof window.EWGrind.refresh === 'function') window.EWGrind.refresh();
+      } else {
+        S.autoErr = 'failed: ' + ((res && res.error) || 'unknown error');
+      }
+    }, function (e) { S.autoErr = 'failed: ' + (e && e.message || e); }).then(drawAuto);
+  }
+
+  function drawAuto() {
+    const ui = S.ui;
+    if (!ui || !ui.auto.isConnected) return;
+    const box = ui.auto;
+    const a = S.auto;
+    box.textContent = '';
+    box.appendChild(el('div', 'ew-mname', 'Auto-OCR: ' + (a ? C.ocrAutoHead(a) : '-')));
+    if (S.autoErr) box.appendChild(el('div', 'ew-err', S.autoErr));
+    if (!a) return;
+    const sph = C.ocrSilverH(a);
+    if (sph) box.appendChild(el('div', 'ew-muted', sph));
+    a.review.forEach(function (r) {
+      const row = el('div', 'ew-grow');
+      const n = el('span', 'ew-mname', C.ocrAutoLabel(r));
+      n.title = r.file + (r.why ? ' - ' + r.why : '');
+      row.appendChild(n);
+      row.appendChild(btn('accept', function () { autoPost({ review: { id: r.id, action: 'accept' } }); }));
+      const hint = C.ocrFixHint(r.kind);
+      if (hint) {  // plan 066: a book-use suggestion is accept / discard only
+        const inp = el('input', 'ew-in ew-ocrfix');
+        inp.type = 'text';
+        inp.placeholder = hint;
+        row.appendChild(inp);
+        row.appendChild(btn('fix', function () {
+          const body = C.ocrFixBody(r.id, r.kind, inp.value);
+          if (!body) { S.autoErr = 'fix needs: ' + hint; drawAuto(); return; }
+          autoPost(body);
+        }));
+      }
+      row.appendChild(btn('discard', function () { autoPost({ review: { id: r.id, action: 'discard' } }); }));
+      box.appendChild(row);
+    });
+    a.commits.slice(0, 5).forEach(function (c) {
+      const row = el('div', 'ew-grow');
+      const n = el('span', 'ew-muted', 'committed ' + C.ocrAutoLabel(c));
+      n.title = c.file;
+      row.appendChild(n);
+      row.appendChild(btn('undo', function () { autoPost({ undo: c.id }); }));
+      box.appendChild(row);
+    });
+  }
+
+  // SSE `game` carries the full GET body; a bad or null one (a reconnect)
+  // re-reads now, or on the next show() while the tab is hidden.
+  function onGame(d) {
+    const g = C.normalizeGame(d);
+    if (!g) {
+      if (C.pollPaused(S.ui && S.ui.body, document)) S.last = null;
+      else poll(true);
+      return;
+    }
+    S.data = g;
+    S.err = null;
+    draw();
   }
 
   function kv(key, val) {
@@ -138,13 +228,13 @@
     o.file = name; o.res = null; o.err = null; o.busy = true; o.msg = '';
     drawOcr();
     draw();
-    b.post('/api/ocr', body).then(function (res) {
+    window.EWToast.via(b).post('/api/ocr', body).then(function (res) {
       if (res && res.ok) {
         const r = C.normalizeOcr(res.data);
         if (r) o.res = r;
         else o.err = 'bad reply from server';
       } else {
-        o.err = res && res.status === 404 ? 'OCR not on this server yet' : 'failed: ' + ((res && res.error) || 'unknown error');
+        o.err = res && res.status === 404 ? C.notOnServer('ocr') : 'failed: ' + ((res && res.error) || 'unknown error');
       }
     }, function (e) { o.err = 'failed: ' + (e && e.message || e); }).then(function () {
       o.busy = false;
@@ -173,7 +263,7 @@
     if (!body) { ocrMsg('cannot arm ' + b.name); return; }
     if (!api) { ocrMsg('arming needs the Ebonwake app window'); return; }
     ocrMsg('arming ' + b.name + '...');
-    api.post('/api/grind', body).then(function (res) {
+    window.EWToast.via(api).post('/api/grind', body).then(function (res) {
       if (res && res.ok) {
         ocrMsg(b.name + ' armed for ' + b.minutes + 'm');
         if (window.EWGrind && typeof window.EWGrind.refresh === 'function') window.EWGrind.refresh();
@@ -247,15 +337,22 @@
     const ocr = el('div', 'ew-list ew-ocr');
     ocr.hidden = true;
     c.appendChild(ocr);
+    const auto = el('div', 'ew-list ew-ocrauto');
+    c.appendChild(auto);
     panel.appendChild(c);
-    S.ui = { pill: pill, err: err, body: body, ocr: ocr, since: null };
+    S.ui = { pill: pill, err: err, body: body, ocr: ocr, auto: auto, since: null };
     if (!S.timer) {
       setInterval(tick, 1000);
+      if (window.EWBus) {
+        window.EWBus.on('game', onGame);
+        window.EWBus.on('ocr', function () { pollAuto(); });
+      }
       poll(false);
     } else {
       draw();
     }
     drawOcr();
+    drawAuto();
   }
 
   function show() { poll(false); }

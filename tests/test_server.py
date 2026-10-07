@@ -58,15 +58,28 @@ def test_version_contract(srv):
 def test_state_lists_tabs(srv):
     doc = json.loads(_get(srv, "/api/state")[2])
     ids = [t["id"] for t in doc["tabs"]]
-    assert ids[0] == "today" and "system" in ids and len(ids) == 7
+    # plan 025: Home first and default; plan 030: Settings last.
+    assert ids == ["home", "today", "market", "progress", "grind", "events", "deadeye", "system",
+                   "settings"]
 
 
 def test_foreign_host_rejected(srv):
     assert _get(srv, "/api/health", host="evil.example.com")[0] == 403
 
 
+def test_root_redirects_to_dashboard(srv):
+    # Plan 020: relative asset paths only resolve from the real page URL.
+    port = srv.server_address[1]
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.request("GET", "/")
+    r = c.getresponse()
+    r.read()
+    c.close()
+    assert r.status == 302 and r.getheader("Location") == "/app/dashboard/index.html"
+
+
 def test_static_dashboard_and_tokens(srv):
-    st, ct, body = _get(srv, "/")
+    st, ct, body = _get(srv, "/app/dashboard/index.html")
     assert st == 200 and "text/html" in ct and b"EBONWAKE" in body
     st, ct, _ = _get(srv, "/ops/fleet_kit/tokens.css")
     assert st == 200 and "css" in ct
@@ -86,6 +99,59 @@ def test_sse_heartbeat(srv):
     line = r.fp.readline()
     assert line.startswith(b"data: ") and b"heartbeat" in line
     c.close()
+
+
+def _sse_events(r, want, limit=200):
+    """Read SSE frames until every name in `want` was seen; returns {name: data}."""
+    seen, name = {}, None
+    for _ in range(limit):
+        line = r.fp.readline().decode("utf-8").rstrip("\n")
+        if line.startswith("event: "):
+            name = line[len("event: "):]
+        elif line.startswith("data: ") and name:
+            seen[name] = line[len("data: "):]
+        elif not line:
+            name = None
+        if want <= set(seen):
+            break
+    return seen
+
+
+# Plan 049: a successful POST pushes its domain name; clients re-GET.
+@pytest.mark.parametrize("path,body,domain", [
+    ("/api/today", {"tick": "barter-run"}, "today"),
+    ("/api/grind", {"add_spot": "Gyfin"}, "grind"),
+    ("/api/market/watch", {"add": {"id": 4901, "sid": 0, "below": 5}}, "market"),
+    ("/api/progress", {"character": {"level": 61}}, "progress"),
+    ("/api/events", {"purge_expired": True}, "events"),
+    ("/api/leveling", {"sample": {"level": 61, "pct": 10}}, "leveling"),
+])
+def test_sse_domain_event_after_post(srv, path, body, domain):
+    port = srv.server_address[1]
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.request("GET", "/events")
+    r = c.getresponse()
+    assert b"heartbeat" in r.fp.readline()
+    st, doc = _post(srv, path, body)
+    assert st == 200, doc
+    seen = _sse_events(r, {domain})
+    c.close()
+    assert domain in seen
+    if domain != "leveling":  # leveling keeps its plan 011 full-view payload
+        assert seen[domain] == json.dumps(domain)
+
+
+def test_sse_no_domain_event_after_failed_post(srv):
+    port = srv.server_address[1]
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    c.request("GET", "/events")
+    r = c.getresponse()
+    r.fp.readline()
+    assert _post(srv, "/api/today", {"nope": 1})[0] == 400
+    assert _post(srv, "/api/market/watch", {"add": {"id": 4901, "sid": 0, "below": 5}})[0] == 200
+    seen = _sse_events(r, {"market"})
+    c.close()
+    assert "today" not in seen and "market" in seen
 
 
 def _post(s, path, body, ctype="application/json", host=None, extra=None):

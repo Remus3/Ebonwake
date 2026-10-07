@@ -1,0 +1,13 @@
+[
+ {
+  "familyName": "Testfam",
+  "profileTarget": "OPAQUE",
+  "region": "NA",
+  "guild": null,
+  "privacy": 15,
+  "combatFame": 1820,
+  "characters": [
+   {"name": "Shooty", "class": "Deadeye", "main": true}
+  ]
+ }
+]

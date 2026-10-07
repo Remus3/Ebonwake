@@ -1,0 +1,14 @@
+[
+ {
+  "familyName": "Testfam",
+  "profileTarget": "OPAQUE",
+  "region": "NA",
+  "guild": {"name": "Guildy"},
+  "privacy": 4,
+  "contributionPoints": 180,
+  "characters": [
+   {"name": "Shooty", "class": "Deadeye", "main": true, "level": 62,
+    "specLevels": {"trading": "Beginner 1", "sailing": "Apprentice 4", "cooking": "Master 12"}}
+  ]
+ }
+]

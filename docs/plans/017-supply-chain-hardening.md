@@ -49,3 +49,16 @@ Source: MAIN ORDER 2026-10-05-0300 (repo scorecard audit, EW 3.6). Items:
 6. Refute round 1 (ruff unverified by the verifier). Re-run by the producer:
    `ruff check server tools tests` -> "All checks passed!" (ruff 0.15.12).
    No change needed. Reverses if: never - a measurement.
+
+## Post-merge fix (2026-10-05)
+
+First push of the merge (f5d51af) failed `ci`: CI's hash-pinned ruff 0.16.10
+reported 118 findings that the lane's local ruff 0.15.12 did not, because the
+tree had no ruff config and the two versions' built-in default rule sets
+differ. Decision: check in `ruff.toml` with an explicit `[lint] select =
+["E4", "E7", "E9", "F"]` (the rule set the lane gated on) plus
+`tests/test_ruff_config.py`. Alternatives: fix all 118 findings now (rule
+set chosen by a version bump, not by us; large unreviewed diff), or pin the
+local box to 0.16.10 (needs a download, and still drifts on the next
+dependabot bump). Why: the gate's scope becomes a reviewed repo decision.
+Reverses if: a later plan widens the rule set on purpose (edit `select`).

@@ -199,11 +199,15 @@ test('buffRows: every server buff listed (armed or not), defaults only for missi
   assert.ok(r2.every((r) => r.minutes >= 1));
 });
 
-test('grind.js: buff minutes input fits 43200', () => {
+// Plan 048: the buff field holds a short duration ('30d', '1h30m') or minutes.
+test('grind.js: buff minutes input fits 30d / 43200', () => {
   const src = read('dashboard/grind.js');
-  assert.match(src, /min\.maxLength = 5;/);
-  assert.match(src, /1-43200/);
+  assert.match(src, /min\.maxLength = 8;/);
+  assert.match(src, /max 30d/);
+  assert.match(src, /C\.buffRowView\(row\)/);
   assert.doesNotMatch(src, /minutes \(1-1440\)/);
+  assert.ok('43200'.length <= 8 && C.fmtDurationShort(43200).length <= 8);
+  assert.strictEqual(C.parseGrindForm('buff', { name: 'Value Pack', minutes: '43200' }).ok, true);
 });
 
 test('buffRows: server buffs merged with defaults by name, armed first by time left', () => {
@@ -223,7 +227,8 @@ test('buffRows: server buffs merged with defaults by name, armed first by time l
 test('overlayWidgets: grind widgets default on, opt-out via config.overlay.widgets', () => {
   // eventsSoon (plan 006) rides the same mechanism; see events.test.js.
   // leveling (plan 011) is the one opt-in-only widget: default off.
-  const on = { grindSession: true, grindBuff: true, eventsSoon: true, leveling: false };
+  const on = { grindSession: true, grindBuff: true, eventsSoon: true, leveling: false, season: false, marketTicker: false,
+    worldBoss: false, dice: false, whatNow: true };
   assert.deepStrictEqual(C.overlayWidgets({}), on);
   assert.deepStrictEqual(C.overlayWidgets(null), on);
   assert.deepStrictEqual(C.overlayWidgets({ overlay: { widgets: { grindBuff: false } } }), Object.assign({}, on, { grindBuff: false }));
@@ -280,5 +285,7 @@ test('overlay: GET-only grind widgets, opt-in from the query main passes', () =>
   assert.match(html, /id="ov-buff"/);
   const m = read('main.js');
   assert.match(m, /core\.overlayWidgets\(/);
-  assert.match(m, /query:\s*core\.widgetsQuery\(/);
+  // Plan 022: the overlay query also carries scale / opacity.
+  assert.match(m, /const query = Object\.assign\(core\.widgetsQuery\(/);
+  assert.match(m, /\{ query: query \}/);
 });

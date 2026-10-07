@@ -13,7 +13,7 @@ const read = (p) => fs.readFileSync(path.join(APP, p), 'utf8');
 
 test('validLevelingBody: exact shapes for every op', () => {
   const ok = [
-    { sample: { level: 52, pct: 37.512 } }, { sample: { level: 1, pct: 0 } }, { sample: { level: 70, pct: 100 } },
+    { sample: { level: 52, pct: 37.512 } }, { sample: { level: 1, pct: 0 } }, { sample: { level: 75, pct: 100 } },
     { sample_del: '2026-10-05T12:00:00+00:00' },
     { hot_add: { days: [0, 6], start: '22:00', end: '02:00', label: 'Hot Time', pct: 50 } },
     { hot_add: { days: [3], start: '00:00', end: '23:59', label: 'x', pct: 1000 } },
@@ -23,7 +23,7 @@ test('validLevelingBody: exact shapes for every op', () => {
   const hot = { days: [0], start: '11:00', end: '12:00', label: 'a', pct: 5 };
   const bad = [
     null, [], 'x', {}, { bogus: 1 }, { sample: { level: 52, pct: 1 }, hot_del: 'h1' },
-    { sample: { level: 0, pct: 1 } }, { sample: { level: 71, pct: 1 } }, { sample: { level: 52, pct: 100.5 } },
+    { sample: { level: 0, pct: 1 } }, { sample: { level: 76, pct: 1 } }, { sample: { level: 52, pct: 100.5 } },
     { sample: { level: 52, pct: -1 } }, { sample: { level: 52, pct: 1.2345 } }, { sample: { level: 52.5, pct: 1 } },
     { sample: { level: 52, pct: '1' } }, { sample: { level: 52 } }, { sample: { level: 52, pct: 1, x: 1 } },
     { sample: { level: 52, pct: NaN } }, { sample_del: '' }, { sample_del: 5 },
@@ -33,7 +33,7 @@ test('validLevelingBody: exact shapes for every op', () => {
     { hot_add: Object.assign({}, hot, { end: '11:00' }) }, { hot_add: Object.assign({}, hot, { label: '' }) },
     { hot_add: Object.assign({}, hot, { label: 'x'.repeat(41) }) }, { hot_add: Object.assign({}, hot, { pct: 1001 }) },
     { hot_add: Object.assign({}, hot, { pct: 1.5 }) }, { hot_add: Object.assign({}, hot, { x: 1 }) },
-    { milestones: [0] }, { milestones: [71] }, { milestones: [50, 50] }, { milestones: 'x' },
+    { milestones: [0] }, { milestones: [76] }, { milestones: [50, 50] }, { milestones: 'x' },
     { milestones: Array.from({ length: 21 }, (_, i) => i + 1) }
   ];
   for (const b of bad) assert.strictEqual(C.validLevelingBody(b), false, JSON.stringify(b));
@@ -53,8 +53,8 @@ test('parseSampleForm: "52" + "37.512" -> body; operator errors otherwise', () =
     { ok: true, body: { sample: { level: 52, pct: 37.512 } } });
   assert.deepStrictEqual(C.parseSampleForm({ level: ' 52 ', pct: '37,5%' }),
     { ok: true, body: { sample: { level: 52, pct: 37.5 } } });
-  assert.deepStrictEqual(C.parseSampleForm({ level: '70', pct: '100' }).body, { sample: { level: 70, pct: 100 } });
-  for (const f of [{ level: '', pct: '1' }, { level: '71', pct: '1' }, { level: '52', pct: '' },
+  assert.deepStrictEqual(C.parseSampleForm({ level: '75', pct: '100' }).body, { sample: { level: 75, pct: 100 } });
+  for (const f of [{ level: '', pct: '1' }, { level: '76', pct: '1' }, { level: '52', pct: '' },
     { level: '52', pct: '100.1' }, { level: '52', pct: '1.2345' }, { level: '52', pct: 'abc' }, {}]) {
     const r = C.parseSampleForm(f);
     assert.strictEqual(r.ok, false, JSON.stringify(f));
@@ -163,7 +163,7 @@ test('overlayWidgets: leveling is opt-in (default off, only a literal true turns
   const off = C.widgetsQuery({});
   assert.strictEqual(C.widgetsFromQuery('?' + new URLSearchParams(off).toString()).leveling, false);
   const ex = JSON.parse(fs.readFileSync(path.join(APP, '..', 'config', 'local.example.json'), 'utf8'));
-  assert.strictEqual(ex.overlay.widgets.leveling, false);
+  assert.ok(!('widgets' in ex.overlay), 'plan 080: no manual overlay layout in the example');
 });
 
 test('leveling card: DOM-built, bridge writes, SSE leveling event, collapsed editor', () => {
@@ -171,7 +171,7 @@ test('leveling card: DOM-built, bridge writes, SSE leveling event, collapsed edi
   assert.doesNotMatch(src, /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
   assert.doesNotMatch(src, /method:\s*'POST'/, 'renderer never POSTs directly');
   assert.match(src, /\/api\/leveling/);
-  assert.match(src, /addEventListener\('leveling'/);
+  assert.match(src, /EWBus\.on\('leveling'/); // plan 049: via the shared dashboard stream
   assert.match(src, /createElement|el\('details'/);
   assert.match(src, /'details'/);
   assert.doesNotMatch(src, /\.open\s*=\s*true/, 'editor collapsed by default');
@@ -196,4 +196,52 @@ test('overlay: GET-only leveling widget behind its opt-in', () => {
   assert.match(src, /addEventListener\('leveling'/);
   const html = read('overlay/index.html');
   assert.match(html, /id="ov-leveling-row" hidden/);
+});
+
+// ---- plan 041: profile level markers ----
+
+test('fmtLevelLine never prints null; profile marker shows (profile)', () => {
+  assert.strictEqual(C.fmtLevelLine({ level: 52, pct: 37.512, level_source: 'typed' }), 'Lv 52 37.5%');
+  assert.strictEqual(C.fmtLevelLine({ level: 52, pct: 37.512 }, true), 'Lv 52 37.512%');
+  assert.strictEqual(C.fmtLevelLine({ level: 61, pct: null, level_source: 'profile' }), 'Lv 61 (profile)');
+  assert.strictEqual(C.fmtLevelLine({ level: 61, pct: null }), 'Lv 61');
+  assert.strictEqual(C.fmtLevelLine({ level: null, pct: null }), 'no XP sample yet');
+  assert.strictEqual(C.fmtLevelLine(null), 'no XP sample yet');
+  for (const d of [{ level: 61, pct: null, level_source: 'profile' }, { level: 61, pct: null }, { level: 61 }, {}, null]) {
+    assert.doesNotMatch(C.fmtLevelLine(d) + C.fmtLevelLine(d, true), /null|undefined|NaN/);
+  }
+});
+
+test('normalizeLeveling passes level_source; pct null with profile', () => {
+  const d = C.normalizeLeveling(Object.assign({}, BODY, { level: 61, pct: null, level_source: 'profile' }));
+  assert.strictEqual(d.level, 61);
+  assert.strictEqual(d.pct, null);
+  assert.strictEqual(d.level_source, 'profile');
+  assert.strictEqual(C.normalizeLeveling(BODY).level_source, null);
+  assert.strictEqual(C.normalizeLeveling(Object.assign({}, BODY, { level_source: 'x' })).level_source, null);
+});
+
+test('levelingLine: profile marker body keeps rate / ETA / HOT from typed samples', () => {
+  const at = 1000000;
+  const body = Object.assign({}, BODY, { level: 61, pct: null, level_source: 'profile', eta_next_s: null });
+  const line = C.levelingLine(body, at, at);
+  assert.ok(line.startsWith('Lv 61 (profile)'), line);
+  assert.match(line, /4\.1 %\/h/);
+  assert.match(line, /HOT 1h03m/);
+  assert.notStrictEqual(line, 'no XP sample yet');
+  assert.doesNotMatch(line, /null/);
+  assert.strictEqual(C.levelingLine(Object.assign({}, body, { level: null }), at, at), 'no XP sample yet');
+});
+
+test('validLevelingBody rejects a null-pct sample (dashboard cannot forge a marker)', () => {
+  assert.strictEqual(C.validLevelingBody({ sample: { level: 60, pct: null } }), false);
+  assert.strictEqual(C.validLevelingBody({ sample: { level: 60, pct: null, source: 'profile' } }), false);
+  assert.strictEqual(C.validLevelingBody({ sample_del: '2026-10-05T12:00:00+00:00' }), true);
+});
+
+test('leveling.js renders the level through fmtLevelLine and marks profile samples', () => {
+  const src = read('dashboard/leveling.js');
+  assert.match(src, /C\.fmtLevelLine\(/);
+  assert.doesNotMatch(src, /'Lv ' \+ d\.level \+ '  ' \+ d\.pct/);
+  assert.match(src, /\(profile\)/);
 });

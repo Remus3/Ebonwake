@@ -1,5 +1,7 @@
 /* EW Market tab (plan 002 slice B): watchlist, item detail (sparkline + order
-   book depth), add/edit, hot list. Reads only the local EW server; writes go
+   book depth), add/edit, hot list. Plan 027: net-after-tax column, buy/sell
+   pair calculator and a pre-order badge for capped / stock-0 queues. Plan 052:
+   p20/p50/p80 band strip + opt-in below-p20 alert. Reads only the local EW server; writes go
    through the dashboard preload (window.ewApi) because the server refuses
    renderer POSTs. Every node is built with DOM APIs - no HTML from data. */
 (function () {
@@ -23,6 +25,7 @@
 
   function getJSON(path) {
     return fetch(C.SERVER + path).then(function (r) {
+      if (r.status === 404) throw new Error(C.notOnServer(path));
       if (!r.ok) {
         return r.json().catch(function () { return null; }).then(function (b) {
           throw new Error(b && typeof b.error === 'string' ? b.error : 'HTTP ' + r.status);
@@ -42,8 +45,7 @@
   }
 
   function alertOf(it) {
-    const a = 'alert' in it ? it.alert : C.alertFor(it.price, it.below, it.above);
-    return a === 'below' || a === 'above' ? a : null;
+    return C.watchAlert(it);
   }
 
   function pillEl(fr) {
@@ -55,6 +57,31 @@
 
   function note(body, cls, text) { body.appendChild(el('div', cls, text)); }
 
+  // Plan 027: rates from /api/market/watch `tax`; defaults until it loads.
+  function taxOpts() { return S.watch && S.watch.tax ? S.watch.tax : { vp: false, fame_pct: 0 }; }
+
+  function netEl(it) {
+    const n = 'net' in it ? it.net : C.netProceeds(it.price, taxOpts());
+    const s = el('span', 'ew-mprice ew-mnet', C.fmtSilver(n));
+    s.title = n === null || n === undefined ? 'no price' : 'net after tax ' + C.fmtSilverExact(n);
+    return s;
+  }
+
+  function badgeEl(it) {
+    const b = C.preorderBadge(C.preorderState(it));
+    if (!b) return null;
+    const s = el('span', 'ew-badge ' + b.cls, b.label);
+    s.title = b.title;
+    return s;
+  }
+
+  // List cell: short silver, exact value on hover (plan 028).
+  function priceEl(n) {
+    const s = el('span', 'ew-mprice', C.fmtSilver(n));
+    if (typeof n === 'number') s.title = C.fmtSilverExact(n) + ' silver';
+    return s;
+  }
+
   // ---- data ----
 
   function poll(force) {
@@ -63,7 +90,7 @@
     S.last = now;
     // One timer, re-armed after every poll: polls stay >= POLL_MS apart.
     clearTimeout(S.timer);
-    S.timer = setTimeout(function () { poll(true); }, POLL_MS);
+    S.timer = setTimeout(function () { if (!C.pollPaused(S.panel, document)) poll(true); }, POLL_MS);
     getJSON('/api/market/watch').then(function (d) {
       S.watch = d;
       S.watchErr = null;
@@ -76,6 +103,13 @@
       }).catch(function (e) { S.hotErr = e.message; }).then(draw);
     }
     if (S.sel) loadItem();
+  }
+
+  // Plan 049: an SSE `market` push (a watchlist write) re-reads now, or on the
+  // next show() while this tab is hidden.
+  function onBus() {
+    if (C.pollPaused(S.panel, document)) S.last = null;
+    else poll(true);
   }
 
   function loadItem() {
@@ -98,8 +132,11 @@
     if (f) {
       f.id.value = it.id;
       f.sid.value = it.sid || 0;
-      f.below.value = it.below === null || it.below === undefined ? '' : it.below;
-      f.above.value = it.above === null || it.above === undefined ? '' : it.above;
+      f.q.value = it.name || '';
+      f.hits.textContent = '';
+      f.below.value = typeof it.below === 'number' ? C.fmtSilverExact(it.below) : '';
+      f.above.value = typeof it.above === 'number' ? C.fmtSilverExact(it.above) : '';
+      f.p20.checked = it.p20 === true;
     }
     loadItem();
     draw();
@@ -108,7 +145,7 @@
   function send(action) {
     const f = S.ui.form;
     const r = C.parseWatchForm({
-      id: f.id.value, sid: f.sid.value, below: f.below.value, above: f.above.value
+      id: f.id.value, sid: f.sid.value, below: f.below.value, above: f.above.value, p20: f.p20.checked
     }, action);
     if (!r.ok) { f.msg.textContent = r.error; return; }
     const bridge = window.ewApi;
@@ -117,7 +154,7 @@
       return;
     }
     f.msg.textContent = action === 'add' ? 'saving...' : 'removing...';
-    bridge.post('/api/market/watch', r.body).then(function (res) {
+    window.EWToast.via(bridge).post('/api/market/watch', r.body).then(function (res) {
       if (res && res.ok) {
         f.msg.textContent = action === 'add' ? 'saved' : 'removed';
         if (action === 'remove' && key(r.body.remove) === key(S.sel)) { S.sel = null; S.item = null; }
@@ -130,29 +167,82 @@
 
   // ---- render ----
 
+  // r = { it, tax } with `freshness` left out of `it`: its age_s changes on
+  // every GET and would rebuild every row. The pill, stale and sel classes are
+  // applied after the reconcile (paintWatchRow), kept rows included.
+  function watchRow(r) {
+    const it = r.it;
+    const row = el('div', 'ew-mrow ew-wrow');
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    row.appendChild(el('span', 'ew-mname', label(it)));
+    row.appendChild(priceEl(it.price));
+    row.appendChild(netEl(it));
+    const a = alertOf(it);
+    const badges = el('span', 'ew-badges');
+    const ab = el('span', a ? 'ew-badge ' + a : 'ew-badge', a === 'below_p20' ? '< p20' : a || '');
+    if (a === 'below_p20' && it.bands) ab.title = 'under the 90-day p20 ' + C.fmtSilverExact(it.bands.p20);
+    badges.appendChild(ab);
+    const pre = badgeEl(it);
+    if (pre) badges.appendChild(pre);
+    const auto = C.autoWatchBadge(it); // plan 071
+    if (auto) {
+      const b = el('span', 'ew-badge ew-auto', auto.text);
+      b.title = auto.title;
+      badges.appendChild(b);
+    }
+    row.appendChild(badges);
+    row.ewPill = el('span', 'ew-pill');
+    row.appendChild(row.ewPill);
+    row.addEventListener('click', function () { choose(it); });
+    row.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') choose(it); });
+    return row;
+  }
+
+  function paintWatchRow(row, it) {
+    const p = C.marketPill(it.freshness);
+    row.className = 'ew-mrow ew-wrow' + (p.stale ? ' ew-stale' : '') + (key(it) === key(S.sel) ? ' sel' : '');
+    row.ewPill.className = 'ew-pill ' + p.cls;
+    row.ewPill.textContent = p.label;
+    if (p.error) row.ewPill.title = p.error;
+    else row.ewPill.removeAttribute('title');
+  }
+
+  // Plan 049: the list node persists and rows are keyed (C.reconcile), so a
+  // poll keeps focus and scroll on rows that did not change.
   function drawWatch(body) {
-    body.textContent = '';
     const items = S.watch && Array.isArray(S.watch.items) ? S.watch.items : null;
-    if (S.watchErr) note(body, 'ew-err', (items ? 'last data - ' : '') + S.watchErr);
-    if (!items) { if (!S.watchErr) note(body, 'ew-muted', 'loading...'); return; }
-    if (!items.length) { note(body, 'ew-muted', 'Watchlist empty - add an item id.'); return; }
-    const list = el('div', 'ew-list' + (S.watchErr ? ' ew-stale' : ''));
-    items.forEach(function (it) {
-      if (!it) return;
-      const p = C.marketPill(it.freshness);
-      const row = el('div', 'ew-mrow' + (p.stale ? ' ew-stale' : '') + (key(it) === key(S.sel) ? ' sel' : ''));
-      row.tabIndex = 0;
-      row.setAttribute('role', 'button');
-      row.appendChild(el('span', 'ew-mname', label(it)));
-      row.appendChild(el('span', 'ew-mprice', C.fmtSilver(it.price)));
-      const a = alertOf(it);
-      row.appendChild(el('span', a ? 'ew-badge ' + a : 'ew-badge', a || ''));
-      row.appendChild(pillEl(it.freshness));
-      row.addEventListener('click', function () { choose(it); });
-      row.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') choose(it); });
-      list.appendChild(row);
+    let w = S.ui.wl;
+    if (!w || w.list.parentNode !== body) {
+      body.textContent = '';
+      w = S.ui.wl = { err: el('div', 'ew-err', ''), note: el('div', 'ew-muted', ''), list: el('div', 'ew-list') };
+      body.appendChild(w.err);
+      body.appendChild(w.note);
+      body.appendChild(w.list);
+    }
+    w.err.textContent = S.watchErr ? (items ? 'last data - ' : '') + S.watchErr : '';
+    w.err.hidden = !S.watchErr;
+    let hint = '';
+    if (!items) hint = S.watchErr ? '' : 'loading...';
+    else if (!items.length) hint = 'Watchlist empty - add an item id.';
+    w.note.textContent = hint;
+    w.note.hidden = !hint;
+    w.list.className = 'ew-list' + (S.watchErr ? ' ew-stale' : '');
+    w.list.hidden = !(items && items.length);
+    const tax = taxOpts();
+    const live = (items || []).filter(Boolean);
+    const rows = live.map(function (it) {
+      const rest = Object.assign({}, it);
+      delete rest.freshness;
+      if (rest.bands) { rest.bands = Object.assign({}, rest.bands); delete rest.bands.age_s; } // ages every GET too
+      return { it: rest, tax: tax };
     });
-    body.appendChild(list);
+    C.reconcile(w.list, rows, function (r) { return key(r.it); }, watchRow);
+    const byKey = {};
+    live.forEach(function (it) { if (!(key(it) in byKey)) byKey[key(it)] = it; });
+    Array.prototype.forEach.call(w.list.children, function (n) {
+      if (byKey[n.ewKey]) paintWatchRow(n, byKey[n.ewKey]);
+    });
   }
 
   function sparkline(history) {
@@ -167,6 +257,31 @@
     return svg;
   }
 
+  // Plan 052: p20-p80 band as a strip, p50 tick, current price marked.
+  function bandEl(bands, price) {
+    const b = C.bandStrip(bands, price);
+    if (!b) return el('div', 'ew-muted', 'no price band yet');
+    const box = el('div', 'ew-band');
+    const strip = el('div', 'ew-band-strip');
+    const fill = el('span', 'ew-band-fill');
+    fill.style.left = (b.p20 * 100).toFixed(1) + '%'; // CSSOM, allowed by the CSP
+    fill.style.width = ((b.p80 - b.p20) * 100).toFixed(1) + '%';
+    strip.appendChild(fill);
+    const mid = el('span', 'ew-band-p50');
+    mid.style.left = (b.p50 * 100).toFixed(1) + '%';
+    strip.appendChild(mid);
+    if (b.price !== null) {
+      const at = el('span', 'ew-band-at ' + b.zone);
+      at.style.left = (b.price * 100).toFixed(1) + '%';
+      at.title = 'now ' + C.fmtSilverExact(price);
+      strip.appendChild(at);
+    }
+    box.appendChild(strip);
+    const txt = el('div', 'ew-muted', b.text + '  (' + b.source + ')');
+    box.appendChild(txt);
+    return box;
+  }
+
   function depth(orders) {
     const bars = C.depthBars(orders, 5);
     const box = el('div', 'ew-depth');
@@ -179,7 +294,7 @@
         const bar = el('span', 'ew-dbar ' + s[0]);
         bar.style.width = Math.round(l.w * 100) + '%'; // CSSOM, allowed by the CSP
         r.appendChild(bar);
-        r.appendChild(el('span', 'ew-dtxt', C.fmtSilver(l.price) + '  x' + l.count));
+        r.appendChild(el('span', 'ew-dtxt', C.fmtSilverExact(l.price) + '  x' + l.count));
         col.appendChild(r);
       });
       box.appendChild(col);
@@ -205,11 +320,12 @@
     if (st.last === null) wrap.appendChild(el('div', 'ew-muted', 'no 90-day history'));
     else wrap.appendChild(sparkline(d.history));
     const last = sub && typeof sub.lastSoldPrice === 'number' ? sub.lastSoldPrice : st.last;
+    wrap.appendChild(bandEl(d.bands, last));
     const stats = el('div', 'ew-stats');
     [['min', st.min], ['max', st.max], ['last', last]].forEach(function (s) {
       const x = el('span', null);
       x.appendChild(el('span', 'ew-muted', s[0] + ' '));
-      x.appendChild(el('span', 'ew-mprice', C.fmtSilver(s[1])));
+      x.appendChild(el('span', 'ew-mprice', C.fmtSilverExact(s[1])));
       stats.appendChild(x);
     });
     wrap.appendChild(stats);
@@ -229,18 +345,16 @@
     const list = el('div', 'ew-list' + (stale ? ' ew-stale' : ''));
     items.forEach(function (it) {
       if (!it) return;
-      const row = el('div', 'ew-mrow');
-      row.title = 'click to fill the add form';
+      const row = el('button', 'ew-mrow ew-rowbtn');
+      row.type = 'button';
+      row.title = 'fill the add form';
       row.appendChild(el('span', 'ew-mname', label(it)));
       const price = typeof it.lastSoldPrice === 'number' ? it.lastSoldPrice : it.basePrice;
-      row.appendChild(el('span', 'ew-mprice', C.fmtSilver(price)));
-      row.appendChild(el('span', 'ew-muted', 'stock ' + C.fmtSilver(it.currentStock)));
-      row.addEventListener('click', function () {
-        const f = S.ui.form;
-        f.id.value = it.id;
-        f.sid.value = it.sid || 0;
-        f.msg.textContent = 'set thresholds, then Save';
-      });
+      row.appendChild(priceEl(price));
+      // L6: a pre-order queue gets the badge instead of a bare "stock 0".
+      const pre = badgeEl(it);
+      row.appendChild(pre || el('span', 'ew-muted', 'stock ' + C.fmtSilver(it.currentStock)));
+      row.addEventListener('click', function () { pick(it); });
       list.appendChild(row);
     });
     body.appendChild(list);
@@ -252,6 +366,7 @@
     drawWatch(ui.watch);
     drawItem(ui.item);
     drawHot(ui.hot, ui.hotPill);
+    ui.calc(); // tax settings may have arrived with the watch poll
   }
 
   // ---- mount ----
@@ -266,23 +381,122 @@
     return { card: c, body: b };
   }
 
+  // Plan 027 pair calculator. Built once (outside the redrawn detail body) so
+  // a 60 s poll never wipes what the operator is typing.
+  function calcBox() {
+    const box = el('div', 'ew-calc');
+    box.appendChild(el('div', 'ew-muted', 'buy at X, sell at Y -> profit after tax'));
+    const f = {};
+    [['buy', 'buy at'], ['sell', 'sell at']].forEach(function (x) {
+      const lab = el('label', null);
+      lab.appendChild(el('span', 'ew-muted', x[1] + ' '));
+      const inp = el('input');
+      inp.type = 'text';
+      inp.autocomplete = 'off';
+      inp.placeholder = x[0] === 'buy' ? '80m' : '100m';
+      inp.name = 'calc-' + x[0];
+      lab.appendChild(inp);
+      box.appendChild(lab);
+      f[x[0]] = inp;
+    });
+    const out = el('div', 'ew-calc-out ew-muted', '');
+    box.appendChild(out);
+    const update = function () {
+      if (!f.buy.value.trim() && !f.sell.value.trim()) { out.textContent = ''; out.title = ''; return; }
+      const opts = taxOpts();
+      const r = C.pairProfit(f.buy.value, f.sell.value, opts);
+      if (!r.ok) { out.textContent = r.error; out.title = ''; return; }
+      out.textContent = 'net ' + C.fmtSilver(r.net) + ' -> profit ' + C.fmtSilver(r.profit);
+      out.title = 'net ' + C.fmtSilverExact(r.net) + ', profit ' + C.fmtSilverExact(r.profit) +
+        ' (tax ' + Math.round((typeof opts.tax === 'number' ? opts.tax : 0.35) * 100) + '%' + (opts.vp ? ', Value Pack' : '') + (opts.fame_pct ? ', fame +' + opts.fame_pct + '%' : '') + ')';
+    };
+    f.buy.addEventListener('input', update);
+    f.sell.addEventListener('input', update);
+    return { box: box, update: update };
+  }
+
+  // ---- name typeahead (plan 028) ----
+
+  // Fill the form from a search hit or hot row; raw id/sid stay editable.
+  function pick(it) {
+    const f = S.ui.form;
+    f.id.value = it.id;
+    f.sid.value = it.sid || 0;
+    if (it.name) f.q.value = it.name;
+    f.hits.textContent = '';
+    f.msg.textContent = label(it) + ' #' + it.id + ' - set thresholds, then Save';
+  }
+
+  function drawHits(f, rows) {
+    f.hits.textContent = '';
+    rows.forEach(function (r) {
+      const row = el('div', 'ew-mrow ew-hit', r.label);
+      row.tabIndex = 0;
+      row.setAttribute('role', 'option');
+      row.addEventListener('click', function () { pick(r); });
+      row.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); pick(r); } });
+      f.hits.appendChild(row);
+    });
+  }
+
+  function search(f) {
+    const q = C.searchQuery(f.q.value);
+    const seq = ++f.seq;
+    if (q === null) { f.hits.textContent = ''; return; }
+    getJSON(C.searchPath(q)).then(function (d) {
+      if (seq !== f.seq) return; // a newer keystroke won
+      const rows = C.searchRows(d);
+      drawHits(f, rows);
+      if (!rows.length) f.hits.appendChild(el('div', 'ew-muted', 'no match - use advanced id / sid'));
+    }).catch(function (e) {
+      if (seq === f.seq) { f.hits.textContent = ''; f.hits.appendChild(el('div', 'ew-err', e.message)); }
+    });
+  }
+
   function formCard() {
     const c = card('Add / edit');
     const form = el('form', 'ew-form');
-    const f = {};
-    [['id', 'item id'], ['sid', 'enhance (sid)'], ['below', 'alert below'], ['above', 'alert above']]
-      .forEach(function (x) {
-        const lab = el('label', null);
-        lab.appendChild(el('span', 'ew-muted', x[1]));
-        const inp = el('input');
-        inp.type = 'text';
-        inp.inputMode = 'numeric';
-        inp.autocomplete = 'off';
-        inp.name = x[0];
-        lab.appendChild(inp);
-        form.appendChild(lab);
-        f[x[0]] = inp;
-      });
+    const f = { seq: 0, timer: null };
+    function field(parent, name, text, numeric) {
+      const lab = el('label', null);
+      lab.appendChild(el('span', 'ew-muted', text));
+      const inp = el('input');
+      inp.type = 'text';
+      if (numeric) inp.inputMode = 'numeric';
+      inp.autocomplete = 'off';
+      inp.name = name;
+      lab.appendChild(inp);
+      parent.appendChild(lab);
+      f[name] = inp;
+    }
+    field(form, 'q', 'item name', false);
+    f.q.placeholder = 'e.g. cron, or an id';
+    f.q.addEventListener('input', function () {
+      clearTimeout(f.timer);
+      f.timer = setTimeout(function () { search(f); }, C.SEARCH_DEBOUNCE_MS);
+    });
+    f.q.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') ev.preventDefault(); });
+    f.hits = el('div', 'ew-list ew-hits');
+    f.hits.setAttribute('role', 'listbox');
+    form.appendChild(f.hits);
+    const adv = el('details', 'ew-adv');
+    adv.appendChild(el('summary', 'ew-muted', 'advanced: raw id / sid'));
+    field(adv, 'id', 'item id', true);
+    field(adv, 'sid', 'enhance (sid)', true);
+    form.appendChild(adv);
+    // Plan 048: alert prices take 1.2b / 850m / 1,234,567.
+    field(form, 'below', 'alert below', false);
+    field(form, 'above', 'alert above', false);
+    f.below.placeholder = '850m';
+    f.above.placeholder = '1.2b';
+    // Plan 052: opt-in alert when the price drops under its 90-day p20.
+    const p20lab = el('label', 'ew-check');
+    f.p20 = el('input');
+    f.p20.type = 'checkbox';
+    f.p20.name = 'p20';
+    p20lab.appendChild(f.p20);
+    p20lab.appendChild(el('span', 'ew-muted', ' alert under p20 band'));
+    form.appendChild(p20lab);
     const btns = el('div', 'ew-btns');
     const save = el('button', 'ew-btn', 'Save');
     save.type = 'submit';
@@ -300,16 +514,23 @@
   }
 
   function mount(panel) {
+    S.panel = panel;
     panel.classList.add('ew-market');
     const w = card('Watchlist');
+    if (window.EWOverrides) window.EWOverrides.mount(w.card.querySelector('h2'), 'market'); // plan 079
     const it = card('Item detail');
+    const calc = calcBox();
+    it.card.appendChild(calc.box);
     const fm = formCard();
     const hotPill = el('span', 'ew-hpill');
     const hot = card('Hot list', hotPill);
     [w, it, fm, hot].forEach(function (c) { panel.appendChild(c.card); });
-    S.ui = { watch: w.body, item: it.body, hot: hot.body, hotPill: hotPill, form: fm.form };
-    if (!S.timer) poll(false);
-    else draw();
+    S.ui = { watch: w.body, item: it.body, hot: hot.body, hotPill: hotPill, form: fm.form,
+      calc: calc.update };
+    if (!S.timer) {
+      if (window.EWBus) window.EWBus.on('market', onBus);
+      poll(false);
+    } else draw();
   }
 
   function show() { poll(false); }

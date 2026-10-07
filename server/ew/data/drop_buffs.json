@@ -1,0 +1,30 @@
+{
+  "caps": {"base_pct": 300, "bypass_pct": 400, "beyond_pct": 500, "source": "BDFoundry item-drop-rate-buff-list (updated 2024-11-27); official Agris scroll notice (Asia boardNo=19844, NA groupContentNo=10621)", "verified": "2026-10-05"},
+  "agris_scroll": {"price_silver": 1000000000, "minutes": 60, "sale_until_utc": "2026-10-22", "removed_utc": "2026-11-05", "per_week": 10, "source": "NA patch notes groupContentNo=10621; Asia notice boardNo=19844 (research 0002 s3, 0004 s2)", "verified": "2026-10-05"},
+  "buffs": [
+    {"id": "item-collection-scroll", "name": "Item Collection Increase Scroll", "aliases": ["Drop rate scroll", "Loot scroll"], "rate_pct": 100, "amount_pct": 50, "bypass": "none", "source": "BDFoundry 2024-11-27 (rate); grumpygreen preview (amount)", "verified": false, "note": "amount +50 % from a preview page only",
+     "verify": {"title": "^\\[Updates\\] Patch Notes\\b", "expect": ["(?<!Advanced )Item Collection Increase Scroll(?:(?!\\bto\\b|->|=>)[^\\n;,]){0,120}(?:amount|quantity)[^\\n;,]{0,40}?(?<![0-9.])\\+?50 ?%"], "contradict": ["(?<!Advanced )Item Collection Increase Scroll(?:(?!\\bto\\b|->|=>)[^\\n;,]){0,120}(?:amount|quantity)(?:(?!\\bto\\b|->|=>)[^\\n;,]){0,40}(?:\\bto|->|=>)\\s*\\+?(?!50 ?%)[0-9]{1,4} ?%"]}},
+    {"id": "adv-item-collection-scroll", "name": "Advanced Item Collection Increase Scroll", "aliases": ["Blue loot scroll"], "rate_pct": 100, "amount_pct": 100, "bypass": "none", "source": "BDFoundry 2024-11-27 (rate); grumpygreen preview (amount)", "verified": false, "note": "amount +100 % from a preview page only",
+     "verify": {"title": "^\\[Updates\\] Patch Notes\\b", "expect": ["Advanced Item Collection Increase Scroll(?:(?!\\bto\\b|->|=>)[^\\n;,]){0,120}(?:amount|quantity)[^\\n;,]{0,40}?(?<![0-9.])\\+?100 ?%"], "contradict": ["Advanced Item Collection Increase Scroll(?:(?!\\bto\\b|->|=>)[^\\n;,]){0,120}(?:amount|quantity)(?:(?!\\bto\\b|->|=>)[^\\n;,]){0,40}(?:\\bto|->|=>)\\s*\\+?(?!100 ?%)[0-9]{1,4} ?%"]}},
+    {"id": "supreme-old-moon", "name": "Supreme Old Moon Book", "aliases": ["Old Moon book"], "rate_pct": 50, "bypass": "none", "source": "BDFoundry 2024-11-27", "verified": "2026-10-05"},
+    {"id": "glorious-battlefield", "name": "Glorious Battlefield", "rate_pct": 100, "bypass": "none", "source": "BDFoundry 2024-11-27", "verified": "2026-10-05"},
+    {"id": "tent-adventurers-luck", "name": "Tent Adventurer's Luck", "rate_pct": 50, "bypass": "none", "source": "BDFoundry 2024-11-27", "verified": "2026-10-05", "note": "+10..50 % by silver tier (10..50 M); top tier listed, override for lower"},
+    {"id": "kamasylve-blessing", "name": "Kamasylve blessing", "rate_pct": 20, "bypass": "none", "source": "BDFoundry 2024-11-27", "verified": "2026-10-05"},
+    {"id": "girins-tear", "name": "Girin's Tear", "rate_pct": 10, "bypass": "none", "source": "BDFoundry 2024-11-27", "verified": "2026-10-05"},
+    {"id": "ecology-knowledge", "name": "Ecology knowledge", "rate_pct": 30, "bypass": "none", "source": "BDFoundry 2024-11-27 (+30 %); other guides +20 %", "verified": false, "note": "sources disagree (+30 vs +20); not on junk loot or party drops (unverified)",
+     "verify": {"title": "^\\[Updates\\] Patch Notes\\b", "expect": ["Ecology(?:(?!\\bto\\b|->|=>)[^\\n;,]){0,120}(?:drop rate|item drop)[^\\n;,]{0,40}?(?<![0-9.])\\+?30 ?%"], "contradict": ["Ecology(?:(?!\\bto\\b|->|=>)[^\\n;,]){0,120}(?:drop rate|item drop)(?:(?!\\bto\\b|->|=>)[^\\n;,]){0,40}(?:\\bto|->|=>)\\s*\\+?(?!30 ?%)[0-9]{1,4} ?%"]}},
+    {"id": "luck", "name": "Luck", "rate_pct": 12.5, "bypass": "none", "source": "BDFoundry 2024-11-27", "verified": "2026-10-05", "note": "up to +12.5 % at max Luck"},
+    {"id": "family-fame", "name": "Family Fame 7,000+", "rate_pct": 10, "bypass": "none", "source": "BDFoundry 2024-11-27", "verified": "2026-10-05"},
+    {"id": "night", "name": "Night time", "rate_pct": 10, "bypass": "none", "source": "BDFoundry 2024-11-27", "verified": "2026-10-05"},
+    {"id": "guild-buff", "name": "Guild drop buff", "rate_pct": 10, "bypass": "none", "source": "BDFoundry 2024-11-27", "verified": "2026-10-05", "note": "+2 or +10 % by guild skill; top value listed"},
+    {"id": "field-boss", "name": "Field boss buff", "rate_pct": 10, "bypass": "none", "source": "BDFoundry 2024-11-27", "verified": "2026-10-05", "note": "5 h after a field boss"},
+    {"id": "old-moon-treaty", "name": "Old Moon Treaty token", "rate_pct": 5, "bypass": "none", "source": "BDFoundry 2024-11-27", "verified": "2026-10-05"},
+    {"id": "agris-fever", "name": "Agris Fever", "amount_pct": 50, "bypass": "none", "source": "BDFoundry 2024-11-27 (+50 % amount); grumpygreen/altarofgaming preview (+100 / +150 % junk amount)", "verified": false, "note": "sources disagree; amount only, never drop rate",
+     "verify": {"title": "^\\[Updates\\] Patch Notes\\b", "expect": ["Agris Fever(?:(?!\\bto\\b|->|=>)[^\\n;,]){0,120}(?:amount|quantity)[^\\n;,]{0,40}?(?<![0-9.])\\+?50 ?%"], "contradict": ["Agris Fever(?:(?!\\bto\\b|->|=>)[^\\n;,]){0,120}(?:amount|quantity)(?:(?!\\bto\\b|->|=>)[^\\n;,]){0,40}(?:\\bto|->|=>)\\s*\\+?(?!50 ?%)[0-9]{1,4} ?%"]}},
+    {"id": "arsha-server", "name": "Arsha server", "rate_pct": 50, "bypass": "to400", "source": "BDFoundry 2024-11-27", "verified": "2026-10-05"},
+    {"id": "node-investment", "name": "Node investment", "rate_pct": 10, "bypass": "to400", "source": "BDFoundry 2024-11-27", "verified": "2026-10-05"},
+    {"id": "castle-buff", "name": "Castle buff", "rate_pct": 50, "bypass": "to400", "source": "BDFoundry 2024-11-27", "verified": "2026-10-05"},
+    {"id": "thriving-earth", "name": "Blessing of the Thriving Earth", "rate_pct": 20, "bypass": "to400", "source": "BDFoundry 2024-11-27", "verified": "2026-10-05"},
+    {"id": "agris-scroll", "name": "Blessing of Agris Scroll", "aliases": ["Agris scroll"], "rate_pct": 50, "bypass": "to500", "source": "NA patch notes groupContentNo=10621; Asia notice boardNo=19844", "verified": "2026-10-05"}
+  ]
+}

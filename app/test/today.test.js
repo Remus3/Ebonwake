@@ -194,9 +194,11 @@ test('general bridge: one ew:post channel, dashboard-only, validated in main', (
   assert.match(m, /ipcMain\.handle\('ew:post'/);
   assert.match(m, /event\.sender !== dashboard\.webContents/);
   assert.match(m, /core\.validPost\(/);
-  assert.equal((m.match(/preload:/g) || []).length, 1, 'exactly one window has a preload');
+  // Plan 022: the overlay gets only the one-way size preload, not the bridge.
+  assert.equal((m.match(/preload:/g) || []).length, 2, 'dashboard + overlay size preload');
   const ov = m.slice(m.indexOf('function createOverlay'), m.indexOf('function toggleOverlay'));
-  assert.doesNotMatch(ov, /preload/);
+  assert.match(ov, /preload: path\.join\(__dirname, 'overlay', 'preload\.js'\)/);
+  assert.doesNotMatch(read('overlay/preload.js'), /ew:post|invoke|ewApi/);
 });
 
 test('today.js: safe DOM, POST via the bridge only, optimistic with revert', () => {

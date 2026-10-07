@@ -1,0 +1,9 @@
+{
+ "_source": "Plan 082 fixed class list (NA client class names, research 0011). OCR class reads (plan 066) bind only to a name in this list.",
+ "classes": [
+  "Warrior", "Ranger", "Sorceress", "Berserker", "Tamer", "Musa", "Maehwa", "Valkyrie",
+  "Kunoichi", "Ninja", "Wizard", "Witch", "Dark Knight", "Striker", "Mystic", "Lahn",
+  "Archer", "Shai", "Guardian", "Hashashin", "Nova", "Sage", "Corsair", "Drakania",
+  "Woosa", "Maegu", "Scholar", "Dosa", "Deadeye", "Wukong", "Seraph"
+ ]
+}

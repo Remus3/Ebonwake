@@ -1,57 +1,97 @@
-PASTE PROMPT
-------------
-continue. Repo Ebonwake. Read EW-NEXT-SESSION.txt, CLAUDE.md, docs/plans/ROADMAP.md, git log -10 first and obey them (adjudicate, never ask, refute max 3, ETAs, batched pushes, kit lanes). I order the EW loop armed: run python tools/loop_task.py install, read back status Ready / PT15M / IgnoreNew, then write the "Proposed CLAUDE.md rules" block from docs/plans/015-loop.md (loop, inbox, responder diet, idle deep-dive) into CLAUDE.md. Then vendor fleet kit v8 from moon_sync_inbox (supersedes v7; re-embed the FLEET-COMMON block, conformance green). Then work the loop's results: lane items Nfa7953 (scorecard order), N715c44 (kit v8 order), 016 (OCR comma-drop) - check ops/loop/control/loop_items/*.json and progress/loop.json; adjudicate any in state adjudicate. Never send input to the BDO window. Run /done at ~60 percent context.
-
 EW NEXT SESSION
 ---------------
-SESSION: 2
+SESSION: 11
 
-Next action: (1) ARM: `python tools/loop_task.py install` then `status`
-(read back Ready, PT15M, IgnoreNew). Operator ordered it 2026-10-05 ("if it
-runs out of tasks ... deep dive research ... self-continuing"); this session
-was a sub-agent relay, so the install and the CLAUDE.md edit wait for the
-operator's own words in chat - the PASTE PROMPT above carries them.
-(2) CLAUDE.md: paste the "Proposed CLAUDE.md rules" block from
-docs/plans/015-loop.md into the EW rules section (loop, inbox read every
-tick unattended, responder diet, idle deep-dive). (3) Kit v8 (MAIN ORDER
-0310, supersedes v7 0215; both in moon_sync_inbox with bundle dirs):
-vendor ops/fleet_kit/ in one commit, re-embed FLEET-COMMON block, item 13
-checklist + `SESSION: <n>` line, item 14 inbox cost (fleet_inbox.scan /
-classify; EW's loop already escalates ORDER/FIX/RULING, triages sonnet
-low; MAIN's cap is 6 notes a day - set loop.max_notes_per_day 6), answer
-MAIN once. Lanes cannot do (3): GATES forbid CLAUDE.md and ops/fleet_kit
-edits. (4) Collect lane results (In flight below).
+Next action: watch the loop (ROADMAP 074-086 all merged; deep-dive 0013
+done). Read the inbox, progress/loop.json and loop_items/*.json;
+adjudicate anything in adjudicate / merge-conflict / gave-up /
+failed-dirty (session 10: 080 sat in merge-conflict, fixed by a session
+agent b8fbef8 - check for that pattern every session). Plan 018 at the
+2026-10-08 maintenance (cap 75): LEVEL_MAX=75 already in
+server/ew/levels.py; confirm the Leveling card after maintenance.
 
 Carried forward (not acted on yet):
-- Loop (plan 015) minors from verifier r1, open: lane worker ignores HALT /
-  backoff / runs cap after dispatch and does not pass halt_file to spawn; a
-  verifier failing with rc!=0 (not a usage limit) is retried every tick with
-  no round count; a `_launch` exception leaves an item "dispatched" with no
-  pid forever; a lane left dirty is dropped silently after 2 claims; hand-off
-  skip regex lets password / OAuth / per-host items through; checklist ETA
-  uses kind loop-review (never recorded -> always 60 s) - use lane_build /
-  lane-build-code and subtract elapsed.
+- NOTE (new, operator order 2026-10-06): ZERO-TOUCH. EW self-adjusts from
+  the live game; no required toggles or typed entry (a changed setting
+  gets forgotten and skews output). Every new plan follows research 0010
+  and the plan 079 override ledger (visible badge, auto-expiry, live
+  signal supersedes). Settings left after 080: market.vp,
+  profile.multi_character.
+- NOTE (new): operator likes the character portrait (082/083/084, research
+  0011); End Game window = optional OCR source for level + class binding
+  (084 follow-up, not planned). Operator has no PrtSc key; screenshots via
+  a rebound BDO Screenshot key; 24 UI-hidden scenery shots exist for the
+  gallery.
+- NOTE (new, operator 2026-10-06): one account, ONE character (the
+  Deadeye), no alts, no tag partner. Tag EXP / alt-only warnings do not
+  apply; 074's loss warnings should be suppressed for features the
+  operator cannot have (no tagged character).
+- NOTE (new): research 0008 data items, no plan: Lv 70+ monster AP / DR and
+  level-gap DR rows (018 / 023 / 012), HYPERBOOST track seed for 034 once an
+  official stage list is read, My Info (P) EXP OCR region for 066.
+- NOTE (new): research 0009 not planned: shared snapshot store (M9),
+  overlay base rows by context (L3); 21 findings, 076-078 cover the H/M ones.
+- NOTE (new): background agents share one scratchpad - give each agent's
+  helper scripts a unique name (session 9: one agent's prog.py clobbered
+  the other's and wrote the wrong progress file).
 - Scorecard BEFORE/AFTER (MAIN order 0300 section 4): needs the OpenSSF
   scorecard v5.5.0 linux binary downloaded into WSL Ubuntu (none present) -
-  OPERATOR approves that download; BEFORE reference = MAIN audit 3.6 (the
-  tick pushed b08b433 before any lane work merged).
-- OPERATOR: overlay safety check - run BDO borderless/windowed, overlay shown,
-  on an alt account first, watch for XIGNCODE3 complaints (ADR 0001 reversal
-  condition).
-- OPERATOR (plan 008 check): launch BDO, log in, log out; the System card must
-  walk not running -> running -> logged in -> running. A missed step = one
-  classifier row in server/ew/gamewatch.py CLASSIFIERS (data change). Exit
-  now flips to not running within ~2-4 s - confirm on a real exit.
-- OPERATOR (plan 009 QA, optional): ~10 real screenshots with silver and
-  buffs visible, press Read on each in System > screenshots. If real silver
-  misreads in >1 of 10, set config ocr.engine=windows and re-bench with real
-  crops. Also watch for a comma-drop cut (plan 016 is on it).
+  OPERATOR approves that download; BEFORE reference = MAIN audit 3.6. Loop
+  item Hf8969a ended no-change (blocked). Nfa7953 ANSWER already sent with it
+  marked BLOCKED.
+- Loop gate limits: the loop runs one local Python (ci runs 3.11 + 3.14) and
+  cannot run shell operators in ci.yml steps (none today).
+- EW sent two v8 ANSWERs to MAIN (04:00 loop note said "blocked on v6";
+  04:11 supersedes it). If MAIN flags the duplicate, point to 04:11.
+- NOTE: overlay safety check DONE by operator 2026-10-06 ("the overlay is
+  fine"); ADR 0001 reversal condition not met.
+- NOTE: plan 008 System card check DONE by operator 2026-10-07 ("system
+  card is good").
+- OPERATOR (plan 009 QA, optional, still unscored): 2026-10-07 the
+  operator took 25 shots (4096x2304) but with the game UI HIDDEN (scenery /
+  character only) - 0 silver / 0 buffs visible, 0 false reads (research
+  0012). Fixed on the way: auto-OCR double-read files BDO was still writing
+  (c3df83e). Still needed: ~10 shots with the UI SHOWN, inventory open,
+  buffs visible; no screenshot key on the operator's keyboard - they
+  rebind Screenshot in BDO Settings > Controls. Then compare vs
+  /api/ocr/auto; >1/10 silver misreads -> ocr.engine=windows.
 - OPERATOR (plan 010 QA): tray icon shows Show dashboard / Toggle overlay /
   Restart server / Quit; logon task "Ebonwake" starts EW 60 s after login.
 - OPERATOR (plan 011 QA): Progress tab Leveling card - type level + XP pct a
   few times while leveling; add the current Hot Time window from the official
   notice (UTC); optionally enable overlay widget `leveling` in
   config/local.json overlay.widgets.
+- OPERATOR (plans 012-014 QA): grind spot recommender, season pass tracker,
+  coupon check cards in the dashboard - sanity-check against the game.
+- OPERATOR (plans 019-028 QA): Now tab (025), toasts + opt-in Windows
+  notifications (026), overlay placement off the minimap (022), AP/DP bracket
+  card (023), Olvia deadline pill (024), multi-cadence resets (021), market
+  name search + exact silver (028), System freshness card (020).
+- OPERATOR (plans 029-060 QA, new this session): overlay market ticker (029),
+  Settings tab (030), world boss schedule (031), weekly planner (033), gear
+  roadmap (034), enhancement EV / shopping list / price bands (035/037/052),
+  drop-buff cap (038), loot grind log + OCR loot import (039/040), profile
+  history + lifeskill (041/042), pets / mounts / inventory (043-045),
+  session-end summary (046), density/a11y (047), quick-entry parsers (048),
+  command palette Ctrl+K (050), first-run checklist (051), imperial delivery
+  (053), cooking/alchemy margins (054), Jetina/Caphras (055), dice timer
+  (056), Deadeye notes (057), event-notice import (059), Secret Book ledger
+  (060) - sanity-check in the dashboard / overlay.
+- OPERATOR (plans 061-073 QA, new session 7 - autonomy round): auto play
+  session from login/exit (062), auto-OCR of new screenshots with
+  confidence-gated commit (063), official notice auto-import with undo (064),
+  auto-detected game/screenshot folders (065), progress read from OCR (066),
+  context-aware overlay widgets (067), auto-ticked checklist rows (068),
+  "What now" card (069), stale-prompt expiry / quiet when game closed (070),
+  self-curating market watch (071), boss schedule drift banner (072),
+  signal health digest (073) - play a normal session and note anything that
+  still needs a click.
+- NOTE (new): ew/salvage-031 deleted session 7 with git branch -D; 32e8ed5
+  was NOT an ancestor of main (031 landed as a different commit a808a8c);
+  recoverable from the reflog for ~90 days if ever needed.
+- NOTE (new): research 0007 lists Black Desert Foundry / Grumpy Green
+  wp-json feeds and Steam RSS (app 582660) as clean backup sources;
+  bdoplanner robots forbids; garmoth likely bot-challenged - link only.
 - MAIN to record EW's port block 8940-8959 in the machine-wide registry and
   add EW to the roster / lane widget (roster INFO 0230 says EW is a member).
 - NOTE: write gitignored config/leak_needles.json on any new host before
@@ -59,53 +99,74 @@ Carried forward (not acted on yet):
 - NOTE: npm install on this box does NOT fetch the Electron binary; after any
   Electron bump run `node node_modules/electron/install.js` in app/ (and in
   lane worktrees).
-- NOTE: GitHub dependabot banner said 25 alerts right after the Electron 44
-  push (rescan lag); npm audit is 0. Re-check the Security tab.
+- NOTE: GitHub dependabot is configured (npm app/, pip /ci, github-actions);
+  its PRs merge by this tree once ci is green, never auto-merged. Re-check
+  the Security tab alert count.
 - NOTE: non-blocking verifier notes: OCR cache key mtime is whole seconds;
   bridge timeout 10 s vs server OCR timeout 60 s; normalizeOcr hides buffs
   found without a time; main.js postLocal keeps only the first 64 KiB of a
   reply; OCR after a cut can pick the "100" piece when "Silver" sits right of
   the amount; plan 011 client validLabel checks untrimmed length; gamewatch
   tasklist failure falls back to the 120 s log grace.
-- NOTE: lane tests must not hold drive-path literals (leak sweep HALTs).
+- NOTE: lane tests must not hold drive-path literals (leak sweep HALTs);
+  since 56be70f a backslash-escaped letter (\d) is no longer a drive path.
 - NOTE: SS's 2245 ANSWER to MAIN (v6) was misdelivered into EW's inbox; not
   acted on, reported to MAIN in EW's v6 ANSWER; marked seen in the loop watch.
+- NOTE: arsha.io v2 re-probed 2026-10-06 (research 0007): list endpoints
+  (wait/hot/search/category/util db) work; per-item sublist/history/
+  orderbook for tradable items still 500 code 103 (Imperva). Fallbacks stay.
+- NOTE: BDO-REST-API moved to a host whose robots.txt is Disallow: / ; old
+  host dead (research 0007). Plan 061 removed the default and gates any
+  configured host on robots; profile features (004/041/042) are quiet until
+  a self-hosted instance (docker man90/bdo-rest-api, port 8001) is set in
+  config/local.json. Self-hosting = an install, adjudicator call.
+- NOTE: research 0003 dates (Olvia Class 3 enrol 2026-11-05, quests
+  2026-11-11) are BDFoundry-sourced, unverified vs the official notice;
+  NA world boss times after the 2026-11-01 DST change unconfirmed (plan 031
+  data file server/ew/data/world_bosses_na.json).
+- NOTE: deferred candidates (0003 C15/C18/C19, 0004 F18-F21/F25) listed in
+  ROADMAP under the 019-057 paragraph; revisit now that 023/035/037 merged.
+- NOTE: merge 230e8e4 (plan 028) message says `lane-2` but 028 ran on
+  lane-1; pushed, left as is.
+- NOTE: 028 merge kept 028's rounding fmtSilverExact over 027's; 027 test
+  expects fmtSilverExact(1.5) == '2'.
+- NOTE: operator authorized a reset of EW's headless run counter on
+  2026-10-05 ~21:10 (loop had paused at 117/120, lane widget showed idle);
+  ops/loop/control/headless_budget.json set to starts=[], read back; old
+  counts in ops/runtime/headless_budget.pre-reset-*.json. A widget "idle"
+  with inbox_status state "limit" = the 120/24 h cap, not a stall.
+- NOTE: known limit of the 56be70f salvage path: a real leak that
+  main's hook refuses lands in merge-conflict and burns up to 2 resolve
+  runs before stopping.
 
-Context: tools/ew_loop.py (inbox default moon_sync_inbox / moon_sync_outbox,
-ORDER/FIX/RULING -> lane item N<hex> via ops/loop/control/loop_orders.json,
-answered after merge; triage sonnet low; loop.max_notes_per_day; ROADMAP
-"(priority)" rows first), docs/plans/015-loop.md as-built 11-12 + proposed
-CLAUDE.md block, docs/plans/016-ocr-comma-drop.md, ci/requirements-ci.txt
-(hashed pytest+ruff for the scorecard lane). Watch state
-ops/loop/control/loop_inbox_watch.json was seeded (baselined; v6, SS answer,
-v7, roster INFO seen; scorecard left unseen so it escalated).
+Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew, HALT absent at
+/done (session 10 set HALT briefly during a manual main merge, cleared).
+State: ops/loop/control/loop_items/*.json, progress/loop.json,
+progress/lane-<i>.json, inbox_status.json. Merge-stuck items are fixed by
+a session agent (merge refs/ew/keep/<id> onto main, keep both sides, mark
+item merged, delete keep ref, push). EW server restarted at /done onto
+0531237 (version read back = HEAD). Restart: stop the server pid from
+/api/version, then `python tools/launch.py --server-only`.
 
-Acceptance: LaneLoop read back Ready; CLAUDE.md carries the loop rules; kit
-v8 conformance green + one ANSWER to MAIN; scorecard order merged with CI
-green and answered; plan 016 merged (old bench >= 142/144, gap 120/120) or
-its no-signal record.
+Acceptance: loop keeps merging new deep-dive plans with ci green, nothing
+in adjudicate / merge-conflict / gave-up / failed-dirty; 084 card visible
+in the dashboard at default window size.
 
-Do NOT redo: inbox path bug (b08b433: MAIN writes <root>/moon_sync_inbox,
-loop now reads it by default; 33 loop tests pass), responder diet in the
-loop (b08b433), one real tick fired 03:11 (rc 0, 82 s; read back: 28 new
-[pin] lines for account B in the proxy activity log, progress/loop.json
-written state running, push ok b08b433), plan 016 written + ROADMAP row,
-hashed CI requirements, hotfix 008, OCR word-gap fix, plans 011-015 build,
-Electron 44.5.1, kit v6 adoption.
+Do NOT redo: session 10 (2026-10-06/07): research 0010 zero-touch audit
+(plans 079-081), research 0011 portrait UX (082-083), plan 084 larger
+portrait card, research 0012 OCR QA (25 UI-hidden shots, auto-OCR
+partial-file fix c3df83e), 080 merge-conflict fix b8fbef8, headless run
+counter reset 2026-10-06 ~21:00 on operator order (backup in
+ops/runtime/headless_budget.pre-reset-*.json, read back starts=[]). Loop
+merged 074-086 (085/086 from deep-dive 0013). Tag EXP item retracted
+(single character).
 
-In flight (dispatched 03:11 by the tick, detached lane workers; progress
-ops/loop/control/progress/lane-<build|data|review>.json, items
-ops/loop/control/loop_items/<ID>.json; ETA ~11m each, then a tick runs
-verify/merge/push - with the loop not armed, run
-`python tools/ew_loop.py tick` to process them):
-- Nfa7953 lane build: MAIN supply-chain ORDER 0300 (dependabot, SHA pins
-  pre-resolved in the order record, CodeQL, permissions, ruff, ROADMAP.md,
-  fuzzing record).
-- N715c44 lane data: MAIN kit-v8 ORDER 0310 (expect little: lanes may not
-  edit ops/fleet_kit or CLAUDE.md - next action (3) owns it).
-- 016 lane review: OCR comma-drop regression.
+In flight: none started by this session. Loop lanes per
+progress/lane-<i>.json.
 
-Status: pushed b08b433 (by the tick). CI 37282200361 green on b08b433.
-Gates before commit: pytest pass, node 151 pass, leak sweep ARMED.
+Status: main 0531237 pushed, in sync with origin. Gates this /done: pytest
+exit 0, node 693/693, leak sweep ARMED (19). CI: ci 37605042510 + codeql
+37605042515 on 0531237 success. Server health ok, version 0531237. Runs
+39/120 in window. Session jsonl ~1.9 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.

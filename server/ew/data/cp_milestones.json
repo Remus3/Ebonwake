@@ -1,0 +1,10 @@
+{
+ "note": "Plan 042 contribution point milestones, transcribed via research 0003 C10. Thresholds only; nothing is read from the game.",
+ "source": "https://www.blackdesertfoundry.com/contribution-points-guide/",
+ "verified": "2026-07-01",
+ "milestones": [
+  {"cp": 220, "label": "Weekly CP quests open (220-349 CP band, Thursday reset)", "verified": "2026-07-01"},
+  {"cp": 250, "label": "Worker empire comfort (250+ CP)", "verified": "2026-07-01"},
+  {"cp": 350, "label": "Top of the 220-349 weekly CP quest band", "verified": false}
+ ]
+}

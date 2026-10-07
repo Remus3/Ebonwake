@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""EW laned headless driver (operator standing order 10, fleet kit v6).
+"""EW laned headless driver (operator standing order 10, fleet kit v8).
 
     ew_lane.py status
     ew_lane.py run <lane> --prompt-file F [--writes-code] [--timeout S] [--dry-run]
@@ -41,7 +41,6 @@ CODE_EXTRA = ("--permission-mode", "acceptEdits", "--allowedTools",
               "Bash(python tools/ocr_bench.py:*)")
 sys.path.insert(0, str(ROOT / "tools"))
 import eta  # noqa: E402
-import ew_inbox  # noqa: E402
 
 
 def _load(name, rel):
@@ -78,43 +77,54 @@ def seed_config(worktree, root=ROOT):
     return copied
 
 
+def progress_task(index):
+    """FLEET item 13 d: a lane's progress file is progress/lane-<i>.json, i = its
+    lane-lock index (kit `fleet_checklist.lane_task`), so the widget reads one
+    named file per live lane. The lane name rides in the step text."""
+    return _load("fleet_checklist", "ops/fleet_kit/fleet_checklist.py").lane_task(index)
+
+
 def run_lane(lane, prompt, writes_code=False, timeout=3600, dry_run=False, root=ROOT,
              spawn=None, lane_ctx=None, progress=None, record=eta.record,
              clock=time.time):
-    """One headless run on one lane. Returns the kit usage line plus "worktree"."""
+    """One headless run on one lane. Returns the kit usage line plus "worktree".
+    Progress goes to the MAIN checkout's progress/lane-<i>.json once the lane
+    index is claimed; a dry run or a refused claim has no index and writes none."""
     check_lane(lane)
-    task = f"lane-{lane}"
+    run_id = f"lane-{lane}"
     if progress is None:
         progress = kit().write_progress
     kind = f"lane-{lane}-{'code' if writes_code else 'read'}"
     eta_s = eta.estimate(kind)
-    progress(root, task, 5, "claiming lane", eta_s, "running")
     if dry_run:
-        progress(root, task, 100, "dry run", 0, "done")
         return {"lane": lane, "dry_run": True, "eta": eta.fmt(eta_s)}
     if lane_ctx is None:
         lane_ctx = lanes().run_lane
     if spawn is None:
         spawn = kit().spawn
+    main = lanes().main_tree(root)
+    task = None
     t0 = clock()
     ok = False
     try:
-        with lane_ctx(root, CODE, lane, task, cap=LANE_CAP) as claim:
+        with lane_ctx(root, CODE, lane, run_id, cap=LANE_CAP) as claim:
+            task = progress_task(claim["index"])
             wt = Path(claim["worktree"])
             seed_config(wt, root)
-            progress(root, task, 20, f"running headless in {wt.name}", eta_s, "running")
-            kw = dict(note=task, writes_code=writes_code, timeout=timeout, cwd=wt,
-                      stdin=True, extra=CODE_EXTRA if writes_code else (),
-                      governor="queued", governor_timeout=timeout)
-            # kit v8 usage line carries kind; a v6 spawn never sees it
-            line = spawn(root, CODE, prompt, **ew_inbox.with_kind(spawn, kw, "build"))
+            progress(main, task, 20, f"{lane}: running headless in {wt.name}", eta_s,
+                     "running")
+            line = spawn(root, CODE, prompt, note=run_id, writes_code=writes_code,
+                         timeout=timeout, cwd=wt, stdin=True,
+                         extra=CODE_EXTRA if writes_code else (),
+                         governor="queued", governor_timeout=timeout, kind="build")
         line = dict(line, worktree=str(wt))
         ok = line.get("rc") == 0 and not line.get("error")
         return line
     finally:
         record(kind, clock() - t0, ok=ok)
-        progress(root, task, 100, "finished" if ok else "failed", 0,
-                 "done" if ok else "failed")
+        if task is not None:
+            progress(main, task, 100, f"{lane}: {'finished' if ok else 'failed'}", 0,
+                     "done" if ok else "failed")
 
 
 def status(root=ROOT):

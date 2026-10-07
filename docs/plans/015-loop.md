@@ -1,6 +1,8 @@
 # Plan 015 - EW loop tick: inbox, lanes, review, merge, idle deep-dive
 
-Status: built in lane (operator order 2026-10-05). One lane (`build`).
+Status: LANDED 2026-10-05 (operator order 2026-10-05): armed as
+`\EbonwakeOps\LaneLoop` (PT15M, IgnoreNew); rules in CLAUDE.md "Loop (plan
+015)". One lane (`build`).
 
 The operator is mostly away (standing order 1). A scheduled, idempotent tick
 does what the main session otherwise does by hand: answer the channel inbox,
@@ -146,8 +148,10 @@ checklist ends in `[ ] /done`; one push.
     so `run_source` re-offers them every tick (idempotent: the outbox
     `-re-<stem>.md` check). ROADMAP rows whose status contains `priority`
     dispatch before other rows.
-13. Kit v8 inbox cost discipline (MAIN ORDER 2026-10-05, FLEET-COMMON item
-    14; lane item N715c44). The tick already reads the inbox on every fire
+13. SUPERSEDED 2026-10-05 by 14 (kit v8 vendored: 13a's reversal condition
+    met, `tools/ew_inbox.py` and its test removed; 13c and 13d reversed, see
+    14a and 14d). Kept as the record. Kit v8 inbox cost discipline (MAIN ORDER
+    2026-10-05, FLEET-COMMON item 14; lane item N715c44). The tick already reads the inbox on every fire
     (14 rule 1: no separate responder exists, none disabled). New
     `tools/ew_inbox.py` does the item-14 rules: `classify` -> skip (own /
     TERMINAL / no-reply) | ack (ACK / INFORMATION / TERMINAL / ANSWER class,
@@ -181,8 +185,157 @@ checklist ends in `[ ] /done`; one push.
     d. A triage result with no `VERDICT:` line is treated as ANSWER (handled,
        never dropped; rule 0). Reverses if: the kit's `parse_verdict` defines
        otherwise.
+14. Kit v8 inbox cost on the vendored kit (MAIN ORDER 0310, FLEET-COMMON
+    item 14; kit vendored 2026-10-05; replaces 13). The tick calls the kit's `fleet_inbox` directly:
+    `classify()` first (free); skip / ack = one `mark_seen` line in
+    `ops/loop/control/inbox_seen.jsonl`, never a note; ORDER / FIX / RULING ->
+    lane item (deviation 12); anything else ONE spawn with
+    `**fleet_inbox.TRIAGE_SPAWN` (sonnet, effort low, bare), `kind="triage"`,
+    `triage_prompt()`, `parse_verdict()` (NOREPLY / ACK = ledger line only).
+    ANSWERs to one destination in one tick go in ONE `batch_note` (HOP:
+    incoming + 1); the order-closing answer is one note `-re-<stem>.md` with a
+    `HOP:` line under its title, `kind="inbox"`. Every outbound note is
+    checked with `OutboundCap.allow` and recorded (`outbound_notes.jsonl`);
+    `loop.max_notes_per_day` defaults to 6 and config can lower it, never
+    raise it. Lane, review and fix spawns pass `kind="build"`. No separate
+    responder task exists; none disabled.
+    a. Order-closing answers COUNT against the cap (kit-literal: only notes
+       whose own class is ORDER / FIX / RULING are exempt). Alternative: exempt
+       them. Why: MAIN's drift sweep reads the ledger with the kit's rule; 6 a
+       day is far above EW's order rate. Reverses if: MAIN rules order answers
+       exempt.
+    b. Root cause of `inbox: deliver-failed 2 2 pending` (loop.json
+       2026-10-05 03:15): the two pending notes were ORDERs waiting for their
+       lane items - pending by design, mislabelled as a delivery failure. And
+       because `fleet_watch.run_source` re-offers the WHOLE batch while any
+       note is pending, every other note in it was re-processed each tick (a
+       triage-ACK note would be re-triaged, one paid spawn per tick). Fix: the
+       kit seen ledger short-circuits handled notes, and the step reads
+       `inbox: pending N new; pending: A order(s) awaiting lane, C capped, P
+       paused, F failed` (`deliver-failed` only when F > 0). Escalation is
+       `classify()`'s WORK decision only: a filename that quotes an order's
+       name (an ACK / ANSWER re- it) is not escalated (verifier r2). Tests:
+       `test_pending_orders_are_not_delivery_failures_and_handled_notes_stay_handled`.
+    c. FLEET item 13 d (kit v7, rides with v8): loop.json "checklist" is now
+       kit rows `{id, task, state, eta_s}`, remaining tasks only, at most 20,
+       built with `fleet_checklist.item`; open rows carry no state (no
+       parenthesis); "fire" counts ticks and is the block's session number;
+       `ew_loop.py checklist` prints the kit block. Lane prompts ask for the
+       same row shape. Lanes still write `progress/lane-<name>.json`, not
+       `lane-<i>.json`. Reverses if: MAIN's lane widget needs the index name -
+       then `ew_lane.run_lane` writes `fleet_checklist.lane_task(claim index)`.
+       REVERSED by 17.
+    d. A triage result with no `VERDICT:` line is ACK (kit `parse_verdict`:
+       a triage that cannot decide never generates a note; the note is
+       marked seen, so it is handled, not dropped). Reverses 13d. Reverses
+       if: MAIN changes the kit.
+    e. Migration: `handled()` also reads 13's ledger
+       (`ops/loop/control/inbox_ledger.jsonl`) and the outbox `-re-<stem>.md`
+       names, so a note settled by the 13 code is never re-triaged; 13's cap
+       ledger (`outbound_cap.jsonl`) is not read - at worst one extra note on
+       the day of the switch. Reverses if: never (read-only shim).
+15. Verifier r1 minors (hand-off item, 2026-10-05).
+    a. Lane worker re-checks HALT / backoff / runs cap (`spawn_block`, shared
+       with the tick) before `run_lane` and passes `halt_file` to every
+       spawn. A block, or a kit refusal while HALT exists, sets state
+       `paused` and gives the attempt back; `paused` is always dispatchable.
+       Alternative: `refused` (burns one of the 2 attempts on a pause). Why: a
+       pause is not a failure. Reverses if: never.
+    b. A verifier run with rc != 0 that is not a usage limit counts
+       `verify_errors` (separate from refute rounds: no verdict was given);
+       at MAX_ROUNDS (3) the item goes to `adjudicate`, WIP unmerged.
+       Alternative: count it as a FAIL round and run a fix (a fix against a
+       crash has no findings to fix). Reverses if: verifier crashes are
+       measured to be transient enough that 3 is too few.
+    c. A `_launch` exception marks the item `lost` (error kept) and frees the
+       lane for the next item; `reap_lost` also reaps a `dispatched` record
+       with no pid (safe: it runs under the tick lock, so no launch is in
+       flight).
+    d. A refused / lost item out of attempts becomes `gave-up` (attention
+       state, error kept, logged). A claim refused for a dirty lane worktree
+       is `lane-dirty` at once (attention state, never retried). Alternative:
+       retry on another index. Why: the kit claims the lowest free index, so a
+       retry hits the same dirty worktree and burns the attempt; a person
+       resolves the crashed run's work (kit rule: never cleaned). Reverses
+       if: the kit gains targeted-index claims.
+    e. Hand-off items naming a password, OAuth or per-host value are tagged
+       `operator` (FLEET item 1). `config/local.json` alone is not a tag (a
+       lane may change code that reads it). Reverses if: the hand-off gains
+       explicit per-item tags.
+    f. Checklist ETA = median of `lane-<lane>-code` (what `ew_lane.run_lane`
+       records; `lane-build-code` for an item not yet on a lane) less the
+       time since dispatch for dispatched / ran / committed items, floored at
+       0; attention states 0. `loop-review` was never recorded (always the
+       60 s default).
 
-## Proposed CLAUDE.md rules (EW rules section; land on the operator's own go)
+16. Gates = ci, and ROADMAP rows are flipped in main at merge (fix-0130,
+    2026-10-05).
+    a. Pre-merge gates run exactly the `run:` commands of the tree's own
+       `.github/workflows/ci.yml` (in order, minus `pip install` setup):
+       action-pin check, `python -m ruff check server tools tests` (repo
+       `ruff.toml`), pytest, `npm test --prefix app`, `leak_sweep --tree`. No
+       ci.yml or no command = gates fail closed. Why: f5f8857 merged a lane
+       whose unused import (ruff F401) ci rejected; the loop gated on pytest +
+       node only. Alternatives: hard-code ruff into the old list (drifts the
+       next time ci gains a step). Reverses if: ci gains a step that cannot
+       run on this host - then that step is skipped by name, with a test.
+    b. Merge conflicts: 0e4393f (Nfa7953), 013 and 014 all conflicted in
+       `docs/plans/ROADMAP.md`. Root cause: `commit()` flipped the item's row
+       to `[x] done` INSIDE the lane commit, on a worktree cut from an older
+       main; parallel lanes flip ADJACENT rows of one table, which git always
+       reports as one conflicting hunk. Decision: (1) the lane commit never
+       touches ROADMAP.md - `merge()` runs `merge --no-ff --no-commit`, flips
+       the row in main, and commits once; (2) plan and hand-off lane prompts
+       say "Do NOT edit docs/plans/ROADMAP.md"; (3) a conflict whose ONLY
+       unmerged path is ROADMAP.md is resolved row by row
+       (`resolve_roadmap`: rows keyed by plan id; a row only the lane changed
+       or added takes the lane's line, a row both sides changed keeps main's,
+       prose changed on both sides is not guessed -> still `merge-conflict`).
+       (3) covers deep-dive / order lanes, which legitimately add rows, and
+       lanes already in flight with the old flip. Alternatives: rebase the
+       lane commit onto main before merging (still conflicts on adjacent
+       rows; rewrites the verified commit); `merge=union` gitattribute
+       (duplicates both versions of a flipped row); one ROADMAP file per plan
+       (churns every reader of the table). Why: removes the collision at its
+       source with no new file layout, and the fallback never drops a side's
+       row. Real code conflicts (014 vs 012 in `server/ew/app.py`) still
+       abort to `merge-conflict` for a session. Reverses if: a ROADMAP row
+       is measured lost or duplicated by the resolver.
+17. Loop gate limits (hand-off He6bbd0, 2026-10-05). (a) The loop runs the
+    gates on ONE local Python (`_python()`); ci runs the 3.11 + 3.14 matrix.
+    A version-only break is caught by ci after push, not before merge.
+    Accepted, no code: installing and switching interpreters per tick costs
+    minutes per gate run for a class of break not yet seen. (b) Gates run as
+    argv without a shell (`shlex.split`), so a ci step using `&&`, `||`, `|`,
+    `;` or a redirect would hand the operator to the first program as an
+    argument and silently skip the rest - the loop could merge what ci
+    rejects. None exists today; `_gates` now fails closed on any unquoted
+    shell operator (`_shell_operator`, test
+    `test_loop_gates_fail_closed_on_shell_operators`). Alternatives: run
+    steps through `bash -c` (no bash guaranteed on this host; Git Bash path
+    is per-host); split `a && b` into two gates (wrong for `||`, pipes,
+    redirects). Why: fail closed is the fix-0130 posture and costs nothing
+    while ci has no such step. Reverses if: ci gains a step that needs a
+    shell - then that step is rewritten as a `tools/*.py` script, or the loop
+    gains a per-host shell, with a test.
+
+17. Lane progress file = `progress/lane-<i>.json` (hand-off item Ha1f38b,
+    2026-10-05; reverses 14c). `ew_lane.run_lane` writes
+    `fleet_checklist.lane_task(claim["index"])` under the MAIN checkout
+    (`fleet_lanes.main_tree(root)`), never inside the lane worktree; the
+    step text starts `<lane name>: ` so the widget shows the lane name. No
+    progress file before the index is claimed: a dry run or a refused
+    claim writes none (no live lane to show). The kit claim `run_id` stays
+    `lane-<name>` (exclusive-name check, usage note label, ETA kinds
+    `lane-<name>-code|read` unchanged). Alternatives: keep `lane-<name>`
+    (14c; contradicts the byte-pinned FLEET item 13 d, which the widget
+    reads); write both names (two files per lane, the stale one never
+    cleared); write a pre-claim `lane-<name>` file then switch (same
+    staleness). Why: FLEET item 13 d is the kit rule and one named file per
+    live lane is exactly the lock index. Reverses if: MAIN ships a kit
+    version naming lane progress files otherwise.
+
+## CLAUDE.md rules - LANDED 2026-10-05 (CLAUDE.md "Loop (plan 015)"; text below is the proposal, CLAUDE.md is authoritative: cap 6, not 12)
 
 ```
 ## Loop (plan 015) - armed as \EbonwakeOps\LaneLoop, every 15 min
