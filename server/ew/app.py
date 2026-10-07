@@ -275,7 +275,7 @@ class EWServer(ThreadingHTTPServer):
             hot=lambda: self.leveling.view()["hot_auto"],
             weekly=lambda: self.leveling.view()["hot_windows"],
             maint_inputs=self._maint_inputs, clock=today_clock or time.time,
-            multi_character=lambda: self.settings.view()["settings"]["profile.multi_character"])
+            multi_character=self._multi_character)
         # Plan 031: NA world boss table + operator loot ticks.
         self.bosses = bosses.BossService(self.store, clock=bosses_clock or time.time)
         # Plan 072: daily robots-gated diff against a public NA table; off
@@ -471,6 +471,20 @@ class EWServer(ThreadingHTTPServer):
                 return {"value": True, "signal": "vp_timer"}
         return None
 
+    def _multi_live(self):
+        """Characters on the family in the newest profile refresh (BDO-REST-API)."""
+        hist = self.progress.history
+        n = hist.character_count() if hist is not None else None
+        return {"value": n > 1, "signal": "profile_characters"} if n else None
+
+    def _multi_character(self):
+        """Plan 074 one-character fact for the digest: config imported by
+        fixed_settings() (no other live probe - plan 080 deviation 7), then
+        profile characters > unexpired override > default."""
+        self.fixed_settings()
+        return self.overrides.effective("profile.multi_character", self._live(self._multi_live),
+                                        settings.defaults()["profile.multi_character"])["value"]
+
     def _maint_live(self):
         """A plan 064 maintenance notice for the next maintenance date."""
         notices = self.notices.maint_notices()
@@ -553,7 +567,7 @@ class EWServer(ThreadingHTTPServer):
             mtime = float(self.overrides.clock())
         self.overrides.sync_config(s, dflt, mtime)
         live = ({"market.vp": self._vp_live, "events.maintenance_start_utc": self._maint_live,
-                 "market.fame_pct": self._fame_live}
+                 "market.fame_pct": self._fame_live, "profile.multi_character": self._multi_live}
                 if live else {})
         spec = {k: (self._live(live[k]) if k in live else None, dflt[k]) for k in s}
         for k, out in self.overrides.effective_many(spec).items():

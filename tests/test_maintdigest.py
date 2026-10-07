@@ -14,7 +14,8 @@ from pathlib import Path
 import pytest
 
 from server.ew import app as ewapp
-from server.ew import coupons, eventnotices, maintdigest, market, prompts, settings, whatnow
+from server.ew import (coupons, eventnotices, maintdigest, market, progress, prompts, settings,
+                       whatnow)
 from server.ew.store import Store
 
 UTC = dt.timezone.utc
@@ -430,6 +431,50 @@ def test_acceptance_one_character_hides_tag_warning(srv):
     assert all(a["source"] != "maint_loss" for a in acts)
     st, p = _req(srv, "GET", "/api/prompts")
     assert p["maint_loss"] == []
+
+
+def _profile_refresh(srv, names):
+    # Plan 041 history beside the store: one row per character of a refresh.
+    at = "2026-10-06T12:00:00+00:00"
+    path = srv.progress.history.path
+    path.write_text("".join(json.dumps({"at": at, "name": n, "main": i == 0}) + "\n"
+                            for i, n in enumerate(names)), encoding="ascii")
+
+
+def test_typed_multi_character_is_a_badged_expiring_override(srv):
+    # Zero-touch (research 0010 / plan 079): a forgotten config true shows a
+    # badge and expires after 30 days instead of skewing the digest forever.
+    st, o = _req(srv, "GET", "/api/overrides")
+    row = next(i for i in o["items"] if i["key"] == "profile.multi_character")
+    assert row["value"] is True and "shell" in row["cards"]
+    assert row["expires_in_s"] is not None and 29 * 86400 < row["expires_in_s"] <= 30 * 86400
+
+
+def test_one_character_profile_supersedes_typed_multi_character(srv):
+    _profile_refresh(srv, ["Deadeye"])
+    _req(srv, "GET", "/api/events")
+    st, v = _req(srv, "GET", "/api/maint/digest")
+    assert st == 200 and v["warnings"] == [] and [w["text"] for w in v["suppressed"]] == [TAG]
+    st, o = _req(srv, "GET", "/api/overrides")
+    assert all(i["key"] != "profile.multi_character" for i in o["items"])
+
+
+@pytest.mark.parametrize("srv", [False], indirect=True)
+def test_several_profile_characters_show_tag_warning(srv):
+    _profile_refresh(srv, ["Deadeye", "Alt"])
+    _req(srv, "GET", "/api/events")
+    st, v = _req(srv, "GET", "/api/maint/digest")
+    assert st == 200 and [w["text"] for w in v["warnings"]] == [TAG]
+
+
+def test_character_count_reads_newest_refresh(tmp_path):
+    h = progress.ProfileHistory(tmp_path / "h.jsonl")
+    assert h.character_count() is None
+    (tmp_path / "h.jsonl").write_text(
+        "".join(json.dumps({"at": at, "name": n}) + "\n" for at, n in (
+            ("2026-10-01T00:00:00+00:00", "A"), ("2026-10-01T00:00:00+00:00", "B"),
+            ("2026-10-02T00:00:00+00:00", "A"))), encoding="ascii")
+    assert h.character_count() == 1
 
 
 def test_settings_default_is_one_character():

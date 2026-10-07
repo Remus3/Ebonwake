@@ -147,6 +147,26 @@ Self-adjudicated by the build lane (2026-10-06); each reverses only as stated.
     the conflicts were textual. Reverses if: the operator wants the
     one-character fact fixed instead of settable.
 
+13. Zero-touch follow-up (hand-off order 2026-10-06, task Hbd9479): of the
+    two settings left after 080, `market.vp` already met research 0010 / plan
+    079 (ledger, 30 d expiry, VP timer supersedes). `profile.multi_character`
+    did not: a plain config bool with no badge, no expiry, no live signal - a
+    forgotten `true` kept Tag / alt warnings in the plan 074 digest forever.
+    Decision: it becomes a plan 079 ledger key (`days:30`, cards `shell`,
+    `events`, `home`); live signal = the newest BDO-REST-API profile refresh
+    (`ProfileHistory.character_count()`, signal `profile_characters`: more
+    than one character on the family -> true, one -> false), which supersedes
+    a typed / config value. The digest resolves this one key alone
+    (`App._multi_character`, after `fixed_settings()` imports config) so it
+    takes no other live probe (deviation 7 deadlock). Settings keeps the
+    field (typing it is still allowed; it is now a badged override).
+    Alternatives: drop the setting and derive only (a private / hidden
+    profile would then have no way to say "alts"); leave as-is (violates the
+    zero-touch order). Why: derive first, typed value is a visible expiring
+    override - the research 0010 shape. Reverses if: the BDO-REST-API
+    character list proves to omit characters (then the live signal goes and
+    the override stays).
+
 Verification: refute-rounds 3/3. Round 1: stale signal hints / docs and the
 start-read badge wording (fixed). Round 2: three stale "setting" docstrings
 (fixed). Round 3: two more comment-only docstrings (`playsession.py`,
