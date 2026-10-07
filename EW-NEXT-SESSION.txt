@@ -164,7 +164,7 @@ run counter reset 2026-10-06.
 In flight: Hea62ec (loop lane data, committed, awaiting loop merge).
 
 Status: main 8d5b483 pushed, in sync with origin. Gates: ruff clean,
-pytest exit 0, node 693/693, leak sweep ARMED (19). CI on 8d5b483: CIRESULT.
+pytest exit 0, node 693/693, leak sweep ARMED (19). CI on 8d5b483: ci 37633732314 + codeql 37633732239 success.
 Server health ok, version 8d5b483. Session jsonl ~0.7 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
