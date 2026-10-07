@@ -86,7 +86,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 079 | Override ledger: source, set-at, expiry, superseded by live signals; override badges + digest list | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 080 | Settings purge: delete automation kill switches, manual overlay layout, per-rule notify toggles, tunables | [ ] open |
 | 081 | Derive typed planner inputs from live signals: silver, hours/day, inventory weight, CP, fame, loot counts, Hot Time ends | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
-| 082 | Class portrait: FaceTexture archive, characterNo -> class binding from the session log, top-left class chip with empty state | [ ] open |
+| 082 | Class portrait: FaceTexture archive, characterNo -> class binding from the session log, top-left class chip with empty state | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 083 | Deadeye portrait gallery: portrait history + class-attributed screenshots, optional pick as a plan 079 override (depends on 079, 082) | [ ] open |
 
 Deep dive 2026-10-06b (research 0008): two plans. 074 first (priority) -

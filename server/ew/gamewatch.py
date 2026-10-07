@@ -66,6 +66,11 @@ CLASSIFIERS = (
 TERMINAL = "exited"
 _CAMEL = re.compile(r"([a-z0-9])([A-Z])")
 _CLASSIFIERS = tuple((re.compile(p), s) for p, s in CLASSIFIERS)
+# Plan 082: a character load names its per-character UI cache path in the log
+# (research 0011 F1). A side-channel, never a state: only the log STRING is
+# parsed; nothing under that folder is ever opened.
+CHAR_LOAD_RE = re.compile(r"UserCache[/\\](\d+)[/\\]\d+[/\\](\d{6,20})[/\\]gameVariable\.xml")
+MAX_CHAR_LOADS = 20
 
 
 def _iso(ts):
@@ -94,6 +99,12 @@ def classify(text):
         if pattern.search(low):
             return state
     return None
+
+
+def char_load(text):
+    """Plan 082: `Log` text -> the loaded characterNo (string), or None."""
+    m = CHAR_LOAD_RE.search(text) if isinstance(text, str) else None
+    return m.group(2) if m else None
 
 
 def split_lines(raw):
@@ -184,6 +195,8 @@ class GameWatch:
         self._last_event = None
         self._line_at = None  # plan 073: clock time the tail last read a complete line
         self._shots = []
+        self._char_loads = []  # plan 082: last MAX_CHAR_LOADS {char_no, at}, any session
+        self._char_no = None  # plan 082: newest load of the current log session
         self._stop = threading.Event()
         self._thread = None
         # Plan 046: `fn(prev, new, at)` called after each state change, outside
@@ -208,7 +221,7 @@ class GameWatch:
             if log_dir != self.log_dir:
                 self._log_file, self._offset = None, 0
                 self._log_state, self._last_event = None, None
-                self._line_at = None
+                self._line_at, self._char_no = None, None
             self.log_dir = log_dir
             self.shot_dir = Path(documents_dir) / "ScreenShot" if documents_dir else None
 
@@ -233,12 +246,13 @@ class GameWatch:
             self._log_file, self._offset = name, 0
             self._log_state, self._last_event = None, None
             self._line_at = None  # plan 073: a new session's silence counts from its state
+            self._char_no = None
         path = self.log_dir / name
         try:
             with open(path, "rb") as f:  # read-only; default share mode never blocks the game
                 st = os.fstat(f.fileno())
                 if st.st_size < self._offset:
-                    self._offset, self._log_state = 0, None
+                    self._offset, self._log_state, self._char_no = 0, None, None
                 f.seek(self._offset)
                 raw = f.read(MAX_READ)
         except OSError:
@@ -250,6 +264,12 @@ class GameWatch:
             self._line_at = self.clock()
         for line in lines:
             doc = parse_line(line)
+            char_no = char_load(doc["Log"]) if doc else None
+            if char_no is not None:  # plan 082 side-channel; never a state
+                self._char_no = char_no
+                self._char_loads.append({"char_no": char_no,
+                                         "at": _clean(doc.get("Date")) or _iso(self.clock())})
+                del self._char_loads[:-MAX_CHAR_LOADS]
             state = classify(doc["Log"]) if doc else None
             if state is None:
                 continue
@@ -295,7 +315,7 @@ class GameWatch:
                 elif listed:  # shutting down: terminal line seen, process lingers
                     state = "not_running"
                 else:
-                    state, self._log_state = "not_running", None
+                    state, self._log_state, self._char_no = "not_running", None, None
             self._shots = shots
             self._updated = now
             prev, changed = self._state, state != self._state
@@ -360,7 +380,16 @@ class GameWatch:
                     "log_file": self._log_file,
                     "last_event": dict(self._last_event) if self._last_event else None,
                     "screenshots": [dict(s) for s in self._shots],
-                    "configured": self.configured}
+                    "configured": self.configured,
+                    "char_loads": [dict(c) for c in self._char_loads],
+                    "char_no": self._char_no if state not in ("not_running", "unconfigured")
+                    else None}
+
+    @property
+    def documents_dir(self):
+        """Plan 082: the Documents folder (parent of ScreenShot), or None."""
+        with self._lock:
+            return self.shot_dir.parent if self.shot_dir is not None else None
 
     def health(self):
         """Plan 073 signal inputs; never polls. Folder checks are stat-only."""

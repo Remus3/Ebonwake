@@ -62,6 +62,13 @@ keep it offline, read-only, game closed.
 - Screenshots: PrtSc writes to `%USERPROFILE%\Documents\Black Desert\ScreenShot\`
   (created on first screenshot). A folder watcher plus OCR on these files is the
   cleanest legal "game state" feed: the operator chooses when to capture.
+- `Documents\Black Desert\FaceTexture\<characterNo>.bmp` - the in-game
+  character portrait (plan 082; adjudicator ruling 2026-10-06, research 0011
+  s3): an allowed READ-ONLY input like ScreenShot - listed, read once through a
+  short-lived read-only handle, copied to `ops/runtime/portraits/`, never
+  written, renamed, deleted or touched; the characterNo comes only from the
+  session-log string; nothing under UserCache, Customization or the install
+  dir is opened; portrait data feeds no input path.
 
 ## 5. Anti-cheat and ToS
 

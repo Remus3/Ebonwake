@@ -593,7 +593,8 @@ def test_view_shape_and_no_paths(dirs):
     _write(inst / "Log" / LOGNAME, _line("Login ok"), mtime=clk.t)
     w.poll()
     v = w.view()
-    assert set(v) == {"state", "since", "log_file", "last_event", "screenshots", "configured"}
+    assert set(v) == {"state", "since", "log_file", "last_event", "screenshots", "configured",
+                      "char_loads", "char_no"}  # plan 082: the character-load side-channel
     text = json.dumps(v)
     assert str(inst) not in text and "\\\\" not in text
     src = w.source()
@@ -875,3 +876,73 @@ def test_dice_never_auto_ticks_today(tmp_path):
         assert dice and dice[0]["done"] is False  # a suggestion only, never a tick
     finally:
         s.server_close()
+
+
+# -- plan 082: character-load side-channel -------------------------------------
+
+CHAR_A = "12345678901234567"
+CHAR_B = "76543210987654321"
+
+
+def _load_line(char_no, date="2026-10-06 20:00:00", sep="/"):
+    path = sep.join(["<documents>", "black desert", "UserCache", "999", "500", char_no,
+                     "gameVariable.xml"])
+    return _line(f"GameVariableManager load({path})", date=date)
+
+
+def test_char_load_regex_parses_string_only():
+    log = ("GameVariableManager x(<documents>/black desert/UserCache/42/500/12345678901234567/"
+           "gameVariable.xml)")
+    assert gamewatch.char_load(log) == "12345678901234567"
+    assert gamewatch.char_load(log.replace("/", "\\")) == "12345678901234567"
+    for bad in ["", "UserCache/42/500/123/gameVariable.xml", "Login success", None,
+                "UserCache/42/500/12345678901234567/other.xml"]:
+        assert gamewatch.char_load(bad) is None
+
+
+def test_char_load_line_sets_char_no_and_is_not_a_state(dirs):
+    inst, _ = dirs
+    clk = Clock()
+    w = _watch(dirs, clk, listed=True)
+    p = inst / "Log" / LOGNAME
+    _write(p, _line("Login success") + _load_line(CHAR_A), mtime=clk.t)
+    w.poll()
+    v = w.view()
+    assert v["state"] == "logged_in" and v["last_event"]["log"] == "Login success"
+    assert v["char_no"] == CHAR_A
+    assert v["char_loads"] == [{"char_no": CHAR_A, "at": "2026-10-06 20:00:00"}]
+    _append(p, _load_line(CHAR_B, date="2026-10-06 20:05:00", sep="\\"), mtime=clk.t)
+    w.poll()
+    v = w.view()
+    assert v["char_no"] == CHAR_B
+    assert [c["char_no"] for c in v["char_loads"]] == [CHAR_A, CHAR_B]
+
+
+def test_char_no_none_when_not_running_or_new_log(dirs):
+    inst, _ = dirs
+    clk = Clock()
+    tl = Tasklist(True)
+    w = gamewatch.GameWatch(install_dir=str(inst), documents_dir=None, clock=clk, tasklist=tl)
+    p = inst / "Log" / LOGNAME
+    _write(p, _line("Login success") + _load_line(CHAR_A), mtime=clk.t)
+    w.poll()
+    assert w.view()["char_no"] == CHAR_A
+    tl.listed = False
+    w.poll()
+    v = w.view()
+    assert v["char_no"] is None and len(v["char_loads"]) == 1  # history kept
+    tl.listed = True
+    _write(inst / "Log" / "Client_2026-10-06_120000.json", _line("Login success"), mtime=clk.t)
+    w.poll()
+    assert w.view()["char_no"] is None  # a new session has loaded no character yet
+
+
+def test_char_loads_capped(dirs):
+    inst, _ = dirs
+    w = _watch(dirs, listed=True)
+    p = inst / "Log" / LOGNAME
+    _write(p, "".join(_load_line(str(10_000_000 + i)) for i in range(25)))
+    w.poll()
+    v = w.view()
+    assert len(v["char_loads"]) == gamewatch.MAX_CHAR_LOADS == 20
+    assert v["char_loads"][-1]["char_no"] == str(10_000_024) == v["char_no"]

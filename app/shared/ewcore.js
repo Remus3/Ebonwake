@@ -5952,6 +5952,51 @@
       ', / to search';
   }
 
+  // Plan 082: top-left class chip. The class is the active class tab, else the
+  // class of the loaded characterNo, else the Progress class. A class with no
+  // bound portrait gets an EMPTY chip - never another class's image.
+  const PORTRAIT_HINT = 'Take your character portrait in game; EW picks it up automatically.';
+
+  function classKey(s) { return String(s).toLowerCase().replace(/[^a-z0-9]/g, ''); }
+
+  // Tab id -> class name known to the portraits view (e.g. 'deadeye' -> 'Deadeye'), or null.
+  function classOfTab(tabId, view) {
+    if (typeof tabId !== 'string' || !tabId || !view || typeof view !== 'object') return null;
+    const names = Object.keys(view.classes && typeof view.classes === 'object' ? view.classes : {});
+    [view.loaded_cls, view.progress_cls].forEach(function (c) {
+      if (typeof c === 'string' && c && names.indexOf(c) < 0) names.push(c);
+    });
+    const want = classKey(tabId);
+    for (let i = 0; i < names.length; i++) if (classKey(names[i]) === want) return names[i];
+    return null;
+  }
+
+  // Class name -> the tab id showing it, or null.
+  function tabOfClass(cls, tabIds) {
+    if (typeof cls !== 'string' || !cls || !Array.isArray(tabIds)) return null;
+    const want = classKey(cls);
+    for (let i = 0; i < tabIds.length; i++) if (classKey(tabIds[i]) === want) return tabIds[i];
+    return null;
+  }
+
+  function portraitChip(view, activeCls, opts) {
+    const v = view && typeof view === 'object' ? view : {};
+    const pick = [activeCls, v.loaded_cls, v.progress_cls].filter(function (c) {
+      return typeof c === 'string' && c;
+    });
+    const cls = pick.length ? pick[0] : null;
+    const name = cls || 'Character';
+    const row = cls && v.classes && typeof v.classes === 'object' ? v.classes[cls] : null;
+    const cur = row && row.current && typeof row.current === 'object' ? row.current : null;
+    if (!cur || typeof cur.id !== 'string' || !/^\d{6,20}-\d{1,12}$/.test(cur.id)) {
+      return { cls: cls, src: null, alt: name + ': no portrait yet', title: PORTRAIT_HINT, empty: true };
+    }
+    const f = typeof cur.at === 'string' ? fmtLocal(cur.at, opts) : null;
+    const when = f ? f.text : '';
+    return { cls: cls, src: SERVER + '/api/portraits/img/' + encodeURIComponent(cur.id) + '?size=s',
+      alt: name + ' portrait', title: name + ' portrait' + (when ? ', taken ' + when : ''), empty: false };
+  }
+
   function squash(s) { return String(s).toLowerCase().replace(/\s+/g, ' ').trim(); }
 
   // Match tier of query q in name n (both squashed): 4 exact, 3 prefix,
@@ -7027,6 +7072,10 @@
     paletteSearch: paletteSearch,
     paletteKey: paletteKey,
     paletteTitle: paletteTitle,
+    portraitChip: portraitChip,
+    classOfTab: classOfTab,
+    tabOfClass: tabOfClass,
+    PORTRAIT_HINT: PORTRAIT_HINT,
     MOUNT_KINDS: MOUNT_KINDS,
     validMountsBody: validMountsBody,
     mountLabel: mountLabel,

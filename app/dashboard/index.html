@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src http://127.0.0.1:8940; style-src 'self'; script-src 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src http://127.0.0.1:8940; img-src 'self' http://127.0.0.1:8940; style-src 'self'; script-src 'self'">
 <title>Ebonwake</title>
 <link rel="stylesheet" href="../../ops/fleet_kit/tokens.css">
 <link rel="stylesheet" href="../shared/ew.css">
@@ -11,7 +11,7 @@
 <body>
 <div class="ew-shell">
   <header class="ew-top">
-    <span class="ew-brand">EBONWAKE</span>
+    <button class="ew-chip" id="class-chip" type="button"><span class="ew-chip-img ew-chip-empty" role="img" aria-label="Character: no portrait yet"></span><span class="ew-chip-name">EBONWAKE</span></button>
     <nav class="ew-tabs" id="tabs" role="tablist"></nav>
     <button class="ew-btn ew-palbtn" id="palette-open" type="button" aria-label="Command palette">Ctrl+K</button>
     <span class="ew-pill unknown" id="server-pill">server ?</span>

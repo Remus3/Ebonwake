@@ -20,6 +20,8 @@
   // Plan 049: the one /events stream fans out here; modules subscribe in mount().
   const bus = window.EWBus = C.createBus();
   const DOMAINS = ['today', 'grind', 'game', 'leveling', 'market', 'progress', 'events', 'whatnow', 'ocr'];
+  DOMAINS.push('portraits'); // plan 082: a new archive / binding
+  let portraits = null; // plan 082: last /api/portraits body
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -104,6 +106,37 @@
     if (id === 'deadeye' && window.EWDeadeye) window.EWDeadeye.show();
     if (id === 'system' && window.EWGame) window.EWGame.show();
     if (id === 'settings' && window.EWSettings) window.EWSettings.show();
+    paintChip();
+  }
+
+  // Plan 082: top-left class chip - newest portrait of the class in view, or
+  // an empty dashed frame (never another class's image). Zero-touch.
+  function paintChip() {
+    const b = document.getElementById('class-chip');
+    if (!b) return;
+    const chip = C.portraitChip(portraits, C.classOfTab(active, portraits));
+    const sig = [chip.cls, chip.src, chip.title].join('|');
+    if (b.dataset.sig === sig) return;
+    b.dataset.sig = sig;
+    b.textContent = '';
+    let pic;
+    if (chip.empty) {
+      pic = el('span', 'ew-chip-img ew-chip-empty');
+      pic.setAttribute('role', 'img');
+      pic.setAttribute('aria-label', chip.alt);
+    } else {
+      pic = el('img', 'ew-chip-img');
+      pic.src = chip.src;
+      pic.alt = chip.alt;
+    }
+    b.appendChild(pic);
+    b.appendChild(el('span', 'ew-chip-name', chip.cls || 'EBONWAKE'));
+    b.title = chip.title;
+  }
+
+  function loadPortraits() {
+    return getJSON('/api/portraits').then(function (v) { portraits = v; }, function () { /* keep last */ })
+      .then(paintChip);
   }
 
   function render(state) {
@@ -368,6 +401,17 @@
     pb.title = C.paletteTitle();
     pb.addEventListener('click', function () { if (window.EWPalette) window.EWPalette.open(); });
   }
+  // Plan 082: the chip selects its class tab when there is one (optional).
+  const chipBtn = document.getElementById('class-chip');
+  if (chipBtn) {
+    chipBtn.addEventListener('click', function () {
+      const chip = C.portraitChip(portraits, C.classOfTab(active, portraits));
+      const id = C.tabOfClass(chip.cls, tabIds());
+      if (id) select(id);
+    });
+  }
+  ['portraits', 'progress', 'game'].forEach(function (d) { bus.on(d, loadPortraits); });
+  loadPortraits();
   document.addEventListener('keydown', onKey);
   // Timers skip while hidden (C.pollPaused); coming back re-shows the tab.
   document.addEventListener('visibilitychange', function () { if (!document.hidden) select(); });
