@@ -78,6 +78,20 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 071 | Self-curating market watch: seeded from shopping list / loot / recipes, thresholds from price bands | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 072 | World boss schedule drift check against a public NA table (robots-gated, banner only) | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 073 | Signal health digest: per-signal liveness with one-line fix hints | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
+| 074 | Before-maintenance digest: loss warnings from maintenance notices + everything ending at the next maintenance, T-24 h | [ ] open (priority) |
+| 075 | Login-day reward tracker: qualifying login days per event, days left, at-risk alert | [ ] open |
+
+Deep dive 2026-10-06b (research 0008): two plans. 074 first (priority) -
+the official 2026-10-08 maintenance notice says unclaimed Tag Characters
+EXP is deleted at the update and EW showed neither that nor the events
+ending at the maintenance; it reuses plan 064's Detail GETs (no new GET).
+075 second - 14-day Special Login Reward (to 2026-10-28) and the four-week
+Dream Horse login event need a per-event count of qualifying days from the
+plan 008 / 056 logged-in signal. Data items (no plan): Lv 70+ monster AP /
+DR and level-gap DR rows (018 / 023 / 012), HYPERBOOST track seed for 034
+once an official stage list is read, My Info EXP OCR region for 066.
+Dropped: "All Events at glance" single-page index (064 cap suffices),
+Deadeye patch tracker (dup 007), Season graduation countdown (dup 024).
 
 Autonomy deep dive 2026-10-06 (research 0007, operator order: self-aware,
 low-input EW): 13 plans 061-073 ranked by operator inputs removed per play
