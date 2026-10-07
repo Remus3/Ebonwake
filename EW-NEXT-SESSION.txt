@@ -35,10 +35,8 @@ Carried forward (not acted on yet):
   04:11 supersedes it). If MAIN flags the duplicate, point to 04:11.
 - NOTE: overlay safety check DONE by operator 2026-10-06 ("the overlay is
   fine"); ADR 0001 reversal condition not met.
-- OPERATOR (plan 008 check): launch BDO, log in, log out; the System card must
-  walk not running -> running -> logged in -> running. A missed step = one
-  classifier row in server/ew/gamewatch.py CLASSIFIERS (data change). Exit
-  now flips to not running within ~2-4 s - confirm on a real exit.
+- NOTE: plan 008 System card check DONE by operator 2026-10-07 ("system
+  card is good").
 - OPERATOR (plan 009 QA, optional): ~10 real screenshots with silver and
   buffs visible, press Read on each in System > screenshots. If real silver
   misreads in >1 of 10, set config ocr.engine=windows and re-bench with real
