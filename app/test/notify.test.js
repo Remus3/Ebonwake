@@ -57,9 +57,11 @@ test('postToast: every POST result -> one toast (ok / 404 warn / bad)', () => {
 
 test('NOTIFY_RULES: stable names, marketAlert + buffEnding on by default', () => {
   assert.deepStrictEqual(C.NOTIFY_RULES.map((r) => r.name),
-    ['marketAlert', 'buffEnding', 'hotTime', 'resetPassed', 'newCoupon', 'gameExit', 'bossSoon', 'resetSoon']);
+    ['marketAlert', 'buffEnding', 'hotTime', 'resetPassed', 'newCoupon', 'gameExit', 'bossSoon', 'resetSoon',
+      'loginRisk']);
   assert.deepStrictEqual(C.notifyPrefs({}), { marketAlert: true, buffEnding: true, hotTime: false,
-    resetPassed: false, newCoupon: false, gameExit: false, bossSoon: false, resetSoon: false });
+    resetPassed: false, newCoupon: false, gameExit: false, bossSoon: false, resetSoon: false,
+    loginRisk: false });
   const p = C.notifyPrefs({ notify: { gameExit: true, buffEnding: false, hotTime: 'yes', bogus: true } });
   assert.strictEqual(p.gameExit, true);
   assert.strictEqual(p.buffEnding, false);

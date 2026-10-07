@@ -10,7 +10,7 @@
  },
  "quiet": {
   "states": ["not_running"],
-  "allow": ["marketAlert", "couponExpiry", "gameExit"]
+  "allow": ["marketAlert", "couponExpiry", "gameExit", "loginRisk"]
  },
  "ladder_min": [15, 5, 1]
 }

@@ -5,7 +5,7 @@ Routes: /api/health, /api/version (fleet P0-5), /api/state, /events (SSE),
 assets, browser fallback),
 /api/market/{watch,item,hot} (plan 002), /api/market/search (plan 028), /api/today (plan 003),
 /api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006; plan 014
-adds its `suggested` coupon block),
+adds its `suggested` coupon block; plan 075 its `login_days` block + `login_mark` POST),
 /api/deadeye (plan 007; /api/deadeye/enhance GET plan 035; /api/deadeye/shopping GET plan 037;
 /api/deadeye/calc GET plan 055), /api/game (plan 008), /api/leveling (plan 011),
 /api/spots (plan 012, GET only), /api/bosses (plan 031; plan 072 adds its `drift`
@@ -40,7 +40,7 @@ from urllib.parse import parse_qs
 
 from . import (__version__, autotick, autowatch, bossdrift, bosses, context, coupons, crafting, deadeye,
                detect, enhance, eventnotices, events, gamewatch, grind, imperial, inventory, itemnames,
-               leveling, maint, market, mounts, ocr, ocrauto, onboarding, pets,
+               leveling, logindays, maint, market, mounts, ocr, ocrauto, onboarding, pets,
                ports,
                playsession, progress, prompts, settings, shopping, signals, single, spots, summary,
                today, weekly, whatnow, xpbooks)
@@ -312,15 +312,19 @@ class EWServer(ThreadingHTTPServer):
                 now, maint.slot(self.settings.view()["settings"]["events.maintenance_start_utc"]),
                 self.notices.maint_notices()),
             reset_at=today.next_daily_reset, hot=self.leveling.hot_active)
+        # Plan 075: logged-in minutes per UTC date -> qualifying login days per event.
+        self.logindays = logindays.LoginDays(self.store, clock=events_clock or time.time)
         listeners = getattr(self.game, "listeners", None)
         if isinstance(listeners, list):
             listeners.append(self.summary.on_game)
             listeners.append(self.dice.on_game)
             listeners.append(self.play.on_game)
+            listeners.append(self.logindays.on_game)
             listeners.append(lambda prev, new, at: self.context.invalidate())
         pollers = getattr(self.game, "pollers", None)
         if isinstance(pollers, list):
             pollers.append(self.play.tick)
+            pollers.append(self.logindays.tick)
         if ocr_cache_dir is None:  # beside the store, so a test store keeps OCR in tmp too
             ocr_cache_dir = Path(store_root).parent / "ocr" if store_root else RUNTIME / "ocr"
         # Plan 040: loot import matches against the spot's grind loot list.
@@ -368,7 +372,8 @@ class EWServer(ThreadingHTTPServer):
             "bosses": self.bosses.view, "today": self.today_view, "grind": self.grind.view,
             "leveling": self.leveling.view, "maint": self._maint_inputs,
             "events": self.events.view, "market": self._market_alerts,
-            "ocr": lambda: self.ocr_auto_out(self.ocr_auto.view())},  # plan 070 gate
+            "ocr": lambda: self.ocr_auto_out(self.ocr_auto.view()),  # plan 070 gate
+            "logins": lambda: self.login_days(self.events.view()["items"])},  # plan 075
             clock=today_clock or time.time)
         # Plan 073: per-signal liveness over local state only (never fetches or polls).
         self.signals = signals.SignalService({
@@ -455,7 +460,13 @@ class EWServer(ThreadingHTTPServer):
             "coupon", sug.get("candidates"), lambda c: c["code"].upper()))
         sug_ev = dict(sug_ev, candidates=self.prompts.keep(
             "event_suggestion", sug_ev.get("candidates"), lambda c: str(c["group_no"])))
-        return dict(out, suggested=sug, suggested_events=sug_ev)
+        return dict(out, suggested=sug, suggested_events=sug_ev,
+                    login_days=self.login_days(out.get("items")))
+
+    def login_days(self, items):
+        """Plan 075 `login_days` block: tracked rows + notice rule suggestions
+        (cached Detail reads only, never a fetch)."""
+        return self.logindays.rows(items, self.notices.login_suggestions())
 
     def grind_out(self, out):
         pend = out.get("pending_stop")
@@ -728,12 +739,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post_events(self, body):
         ops = {"add", "edit", "done", "delete", "purge_expired", "dismiss_notice",
-               "undo_notice"}
+               "undo_notice", "login_mark"}
         if len(body) != 1 or not (ops & set(body)):
             raise ValueError("body must be one of {add|edit|done|delete|purge_expired|"
-                             "dismiss_notice|undo_notice: ...}")
+                             "dismiss_notice|undo_notice|login_mark: ...}")
         (op, arg), = body.items()
-        if op in ("dismiss_notice", "undo_notice"):  # plan 059 / plan 064
+        if op == "login_mark":  # plan 075: "I logged in that day" (operator data)
+            self.server.logindays.mark(arg)
+            sug_ev = self.server.notices.view(refresh=False)
+            out = self.server.events.view()
+        elif op in ("dismiss_notice", "undo_notice"):  # plan 059 / plan 064
             getattr(self.server.notices, "dismiss" if op == "dismiss_notice" else "undo")(arg)
             sug_ev = self.server.notices.view(refresh=False)
             out = self.server.events.view()

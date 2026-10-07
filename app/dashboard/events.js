@@ -339,6 +339,7 @@
     const body = ui.eventBody;
     body.textContent = '';
     const dls = deadlines();
+    const ld = C.loginDays(S.data && S.data.login_days);
     const soon = list.filter(function (r) { return r.soon; }).length + dls.length;
     ui.eventPill.textContent = S.data ? (soon ? soon + ' ending soon' : list.length + ' items') : '-';
     ui.eventPill.className = 'ew-pill ' + (soon ? 'warn' : 'unknown');
@@ -371,9 +372,48 @@
       head.appendChild(delBtn(r));
       row.appendChild(head);
       if (r.rewards) row.appendChild(el('div', 'ew-mname ew-muted ew-gnum', r.rewards));
+      loginLine(row, r, ld);
       box.appendChild(row);
     });
     body.appendChild(box);
+  }
+
+  // Plan 075: "Login days 6/14 - 22 days left" + pill, today's minutes, a past-day
+  // mark; or a one-click "track logins? (N days)" from the notice text.
+  function loginLine(row, r, ld) {
+    const t = ld.byId[r.id];
+    const s = ld.suggest[r.id];
+    if (!t && s) {
+      const b = el('button', 'ew-btn ew-bbtn', s.label || 'track logins?');
+      b.type = 'button';
+      b.title = 'suggested from the official notice; check the count before tracking';
+      b.addEventListener('click', function () { send(C.loginTrackBody(s), 'tracking logins'); });
+      row.appendChild(b);
+      return;
+    }
+    if (!t) return;
+    const line = el('div', 'ew-ehead');
+    line.appendChild(el('span', 'ew-mname ew-gnum', C.loginDayText(t)));
+    const p = C.loginPill(t);
+    line.appendChild(el('span', 'ew-pill ' + p.cls, p.text));
+    row.appendChild(line);
+    const extra = [C.loginTodayText(t, ld.loggedIn), C.loginWeekendText(t),
+      t.counting_since ? 'counting since ' + t.counting_since : null].filter(Boolean);
+    if (extra.length) row.appendChild(el('div', 'ew-mname ew-muted ew-gnum', extra.join(' - ')));
+    if (t.complete || t.days_left <= 0) return;
+    const mark = el('div', 'ew-ehead');
+    const d = el('input');
+    d.type = 'date';
+    d.title = 'a past UTC date you logged in that EW did not see';
+    mark.appendChild(d);
+    const b = el('button', 'ew-btn ew-bbtn', 'I logged in that day');
+    b.type = 'button';
+    b.addEventListener('click', function () {
+      const body = C.loginMarkBody(d.value);
+      if (body) send(body, 'day marked'); else msg('pick a date');
+    });
+    mark.appendChild(b);
+    row.appendChild(mark);
   }
 
   function drawSources() {

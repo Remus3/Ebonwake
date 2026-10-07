@@ -1,0 +1,23 @@
+{
+ "_doc": "Plan 075: login-rule SUGGESTION patterns over official notice text (plan 064 Detail reads). A notice is considered only when `gate` matches somewhere in its text; lines matching `weekend` feed only weekend rules. Each rule: field (days_needed | min_minutes | weekend_minutes), re (case-insensitive, named group n = a number or a word from `numbers`), scale (multiplier: 7 for weeks, 60 for hours). First match per field wins. The result is only ever SUGGESTED (one click to track); notice counts are worded loosely, so it is never auto-applied.",
+ "gate": "\\blog(?:ged|ging)?[ -]?in\\b|\\blogins?\\b",
+ "weekend": "\\bweekends?\\b|\\bsaturdays?\\b|\\bsundays?\\b",
+ "numbers": {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+             "eight": 8, "nine": 9, "ten": 10, "fourteen": 14, "thirty": 30},
+ "rules": [
+  {"field": "weekend_minutes", "weekend": true,
+   "re": "\\b(?P<n>[0-9]{1,3})[ -]?(?:mins?|minutes?)\\b", "scale": 1},
+  {"field": "weekend_minutes", "weekend": true,
+   "re": "\\b(?P<n>[0-9]{1,2}|one|two|three)[ -]?(?:hours?|hrs?|h)\\b", "scale": 60},
+  {"field": "min_minutes", "weekend": false,
+   "re": "\\b(?P<n>[0-9]{1,3})[ -]?(?:mins?|minutes?)\\b", "scale": 1},
+  {"field": "min_minutes", "weekend": false,
+   "re": "\\b(?:for|play|played|playing)\\s+(?P<n>[0-9]{1,2}|one|two|three)[ -]?(?:hours?|hrs?)\\b",
+   "scale": 60},
+  {"field": "days_needed", "weekend": false,
+   "re": "\\b(?P<n>[0-9]{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|fourteen|thirty)[ -](?:reward |login |attendance |separate )?days?\\b",
+   "scale": 1},
+  {"field": "days_needed", "weekend": false,
+   "re": "\\b(?P<n>[0-9]|one|two|three|four|five|six|seven|eight)[ -]weeks?\\b", "scale": 7}
+ ]
+}
