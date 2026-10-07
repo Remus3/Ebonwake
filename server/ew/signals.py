@@ -1,7 +1,8 @@
 """Plan 073: signal health digest - one liveness row per passive signal.
 
 Rows: session log (plan 008), screenshot watcher (008), OCR (063), official
-notices (059 / 064), market (002), profile (061), boss drift (072). Each row is
+notices (059 / 064), market (002), profile (061), boss drift (072), data rows vs
+the official patch notes (085, with evidence `lines`). Each row is
 `ok | warn | off | bad` with an age and one fix hint from the tracked
 `data/signal_hints.json`. A signal that is quiet because the game is closed or
 its feature is off is `off`, never `bad`.
@@ -23,7 +24,7 @@ GENERIC_HINT = "see the System tab"
 
 NAMES = {"session_log": "Session log", "screenshots": "Screenshot watcher", "ocr": "OCR",
          "notices": "Official notices", "market": "Market", "profile": "Profile",
-         "boss_drift": "Boss drift"}
+         "boss_drift": "Boss drift", "data": "Data rows"}
 # Every reason a row can carry; the hints file must cover each (test-enforced).
 REASONS = {
     "session_log": ("unconfigured", "log_dir_missing", "watcher_stalled", "quiet", "silent",
@@ -34,7 +35,9 @@ REASONS = {
     "market": ("empty", "blocked", "stale"),
     "profile": ("no_family", "no_base", "robots", "stale", "error"),
     "boss_drift": ("not_built", "drift", "error"),
+    "data": ("contradicted", "error"),
 }
+MAX_LINES = 10  # plan 085: evidence lines on the System card
 ACTIVE = ("running", "logged_in", "disconnected")  # plan 008 states with the client up
 
 _DEFAULT = {
@@ -204,8 +207,31 @@ def _boss_drift(s, now, th):
     return "ok", None, age, "matches"
 
 
+def _data(s, now, th):
+    """Plan 085: hinted data rows vs the official patch notes. Returns a fifth
+    item, the evidence lines (`<file>#<id>: <evidence>`)."""
+    last = _d(s.get("last_notice"))
+    bad = [c for c in (s.get("contradicted") or []) if isinstance(c, dict)]
+    if s.get("error"):
+        return "warn", "error", None, f"hint table: {s['error']}"[:120], []
+    if bad:
+        dates = sorted(c["date"] for c in bad if isinstance(c.get("date"), str))
+        n = len(bad)
+        detail = (f"{n} data row{'s' if n != 1 else ''} contradicted by patch notes "
+                  f"{dates[-1] if dates else '?'} - see System")
+        lines = [f"{c.get('key')}: {c.get('evidence') or ''}"[:240] for c in bad[:MAX_LINES]]
+        return "warn", "contradicted", None, detail, lines
+    unchecked = s.get("unchecked") if isinstance(s.get("unchecked"), int) else 0
+    if not last:
+        return "ok", None, None, f"no patch notes read yet; {unchecked} unchecked", []
+    confirmed = s.get("confirmed") if isinstance(s.get("confirmed"), int) else 0
+    return "ok", None, None, (f"patch notes {last.get('date') or '?'}: {confirmed} confirmed, "
+                              f"{unchecked} unchecked"), []
+
+
 _ROWS = {"session_log": _session_log, "screenshots": _screenshots, "ocr": _ocr,
-         "notices": _notices, "market": _market, "profile": _profile, "boss_drift": _boss_drift}
+         "notices": _notices, "market": _market, "profile": _profile, "boss_drift": _boss_drift,
+         "data": _data}
 
 
 def _overrides(raw):
@@ -216,8 +242,8 @@ def _overrides(raw):
 
 
 def digest(inputs, now, hints=None, overrides=None):
-    """{rows: [{id, name, level, age_s, reason, detail, hint}], bad, worst, at,
-    overrides: {count, items}}."""
+    """{rows: [{id, name, level, age_s, reason, detail, hint, lines}], bad, worst,
+    at, overrides: {count, items}}; `lines` = plan 085 evidence (data row only)."""
     hints = hints or load_hints()
     inputs = _d(inputs)
     rows = []
@@ -226,12 +252,13 @@ def digest(inputs, now, hints=None, overrides=None):
         try:
             if raw is not None and not isinstance(raw, dict):
                 raise ValueError("unreadable")
-            level, reason, age, detail = _ROWS[rid](_d(raw), now, hints["thresholds"])
+            level, reason, age, detail, *more = _ROWS[rid](_d(raw), now, hints["thresholds"])
+            lines = more[0] if more else []
         except Exception:  # noqa: BLE001 - junk input is a warn row, never a 500
-            level, reason, age, detail = "warn", None, None, "unreadable state"
+            level, reason, age, detail, lines = "warn", None, None, "unreadable state", []
         rows.append({"id": rid, "name": NAMES[rid], "level": level, "age_s": age,
                      "reason": reason, "detail": detail,
-                     "hint": hint(hints, rid, reason) if reason else None})
+                     "hint": hint(hints, rid, reason) if reason else None, "lines": lines})
     worst = max((r["level"] for r in rows), key=_RANK.__getitem__)
     at = _dt.datetime.fromtimestamp(now, _dt.timezone.utc).replace(microsecond=0).isoformat()
     return {"rows": rows, "bad": sum(r["level"] == "bad" for r in rows), "worst": worst, "at": at,

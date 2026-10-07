@@ -375,13 +375,17 @@ def _clean_auto(w):
             "pct": pct, "source": src, "group_no": gno, "auto": True}
 
 
-def _epoch_brief(e, now):
-    """View row of one epoch: no kill caps, plus seconds until (or since, < 0) it starts."""
+def _epoch_brief(e, now, patch=None):
+    """View row of one epoch: no kill caps, plus seconds until (or since, < 0) it
+    starts. Plan 085: `patch` = the row's patch-notes verdict {verdict, date,
+    evidence, url} or None; a confirmed verdict counts as verified."""
     if e is None:
         return None
     starts_in = int((_parse_iso(e["starts_utc"]) - now).total_seconds())
+    confirmed = patch is not None and patch["verdict"] == "confirmed"
     return {"id": e["id"], "starts_utc": e["starts_utc"], "label": e["label"],
-            "source": e["source"], "verified": e["verified"], "starts_in_s": starts_in}
+            "source": e["source"], "verified": e["verified"] or confirmed,
+            "starts_in_s": starts_in, "patch": patch}
 
 
 def _clean_epoch(e):
@@ -438,6 +442,8 @@ class LevelingService:
         # Plan 081: maint_end(now utc datetime) -> end of the next maintenance
         # (utc datetime) or None: the default `until` of a typed Hot Time window.
         self.maint_end = maint_end
+        # Plan 085: verdict(key) -> a tracked row's patch-notes verdict or None.
+        self.verdict = None
         self.seq = 0
         self.epoch_error = None
         self.deadline_error = None
@@ -530,6 +536,15 @@ class LevelingService:
         """Decorated deadlines (the GET body's `deadlines`) for the Events tab."""
         return self.view()["deadlines"]
 
+    def _patch(self, file, rid):
+        """Plan 085 verdict of tracked row `<file>#<rid>`, or None (a fault: None)."""
+        if self.verdict is None:
+            return None
+        try:
+            return self.verdict(f"{file}#{rid}")
+        except Exception:  # noqa: BLE001 - a verdict fault never breaks the card
+            return None
+
     def active_epoch(self):
         """Newest started XP epoch or None (plan 012 spot re-verify badge)."""
         return levels.active_epoch(self.epochs(), self._now())
@@ -560,6 +575,13 @@ class LevelingService:
                  + [{"name": b.get("name"), "pct": b["xp_pct"]} for b in buffs])
         nxt_ms = next_milestone(level, doc["milestones"])
         tracked = {e["id"] for e in self.tracked_epochs}
+        added = {e["id"] for e in doc["epochs_added"]}
+
+        def brief(e):  # an operator row replacing a tracked one carries no verdict
+            on = e is not None and e["id"] in tracked and e["id"] not in added
+            return _epoch_brief(e, now, self._patch(levels.EPOCHS_FILE.name, e["id"])
+                                if on else None)
+
         deadlines = self._deadline_rows(doc, now, level, pct, rate)
         books = None if self.books is None else self.books.view(level, pct, rate, deadlines)
         return {"now": _iso(now), "level": level, "pct": pct, "level_source": level_source,
@@ -579,10 +601,9 @@ class LevelingService:
                 # plan 064: notice windows not over yet, soonest end first
                 "hot_auto": sorted((w for w in doc["hot_auto"] if _parse_iso(w["end"]) > now),
                                    key=lambda w: (w["end"], w["id"])),
-                "epoch": _epoch_brief(epoch, now),
-                "epoch_next": _epoch_brief(upcoming, now),
-                "epochs": [dict(_epoch_brief(e, now), tracked=e["id"] in tracked)
-                           for e in epochs],
+                "epoch": brief(epoch),
+                "epoch_next": brief(upcoming),
+                "epochs": [dict(brief(e), tracked=e["id"] in tracked) for e in epochs],
                 "epoch_error": self.epoch_error,
                 "deadlines": deadlines,
                 "books": books,

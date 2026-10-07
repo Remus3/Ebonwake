@@ -316,6 +316,8 @@
         row.appendChild(p);
         if (r.hint && r.level !== 'ok') row.appendChild(el('span', 'ew-muted', r.hint));
         fr.appendChild(row);
+        // Plan 085: the data row's evidence lines (patch notes vs tracked rows).
+        r.lines.forEach(function (ln) { fr.appendChild(el('div', 'ew-muted ew-sigline', ln)); });
       });
       // Plan 079: the override ledger's active entries, each with clear.
       C.overrideRows(H.signals.overrides).forEach(function (o) {

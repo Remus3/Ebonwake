@@ -1888,3 +1888,26 @@ def test_dirty_failed_dirty_lane_zero_no_longer_wedges_dispatch(tmp_path):
     ew_loop.tick(deps=d, no_push=True)
     assert items.get("099")["state"] == "merged"
     assert d.seen["launch"] == ["012"]
+
+
+def test_contradicted_data_rows_become_work_items(tmp_path):
+    """Plan 085: the server's runtime verdicts list contradicted rows; each is a
+    data item a lane works (tracked data is only ever edited by a lane)."""
+    root = dep_root(tmp_path, {"013": "none."})
+    ok = {"verdict": "confirmed", "evidence": "fine", "date": "2026-10-08", "url": "u"}
+    bad = {"verdict": "contradicted", "evidence": 'Adventure "Blessing" 15% to 30%.',
+           "date": "2026-10-08", "url": "https://example.invalid/d?no=1"}
+    p = root.joinpath(*ew_loop.VERDICTS_REL)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"verdicts": {"a.json#x": ok, "xp_buffs.json#adventure-blessing": bad,
+                                          "../evil#x": bad}}), newline="\n")
+    items = ew_loop.data_items(root)
+    assert len(items) == 1 and items[0]["id"].startswith("D") and items[0]["skip"] is None
+    assert "server/ew/data/xp_buffs.json" in items[0]["text"]
+    assert "'Blessing'" in items[0]["text"]
+    assert items == ew_loop.data_items(root), "stable id across ticks"
+    rows, work, skipped = ew_loop.Tick(deps(root)).work_list()
+    assert [w["id"] for w in work][-1] == items[0]["id"]
+    assert work[-1]["kind"] == "handoff" and work[-1]["text"] == items[0]["text"]
+    p.write_text("junk", newline="\n")
+    assert ew_loop.data_items(root) == []

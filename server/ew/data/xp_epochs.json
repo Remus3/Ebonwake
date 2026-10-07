@@ -1,5 +1,9 @@
 [
   {"id": "cap75-xp-rescale", "starts_utc": "2026-10-08T00:00:00+00:00", "label": "Lv 75 cap + combat XP rescale", "source": "Global Lab notice 2026-10-02 (blackdesertfoundry.com summary); NA live date = next maintenance, verify against patch notes", "verified": false,
+   "verify": {"title": "^\\[Updates\\] Patch Notes - October 8, 2026\\b",
+              "expect": ["\\blevel\\b(?:(?!\\bto\\b|->|=>)[^\\n;,]){0,60}(?:\\bto|->|=>)\\s*\\+?(?:Lv\\.? ?)?75\\b"],
+              "contradict": ["\\blevel cap\\b(?:(?!\\bto\\b|->|=>)[^\\n;,]){0,60}(?:\\bto|->|=>)\\s*\\+?(?:Lv\\.? ?)?(?!75\\b)[0-9]{2}\\b",
+                             "\\bmaximum (?:character )?level\\b(?:(?!\\bto\\b|->|=>)[^\\n;,]){0,60}(?:\\bto|->|=>)\\s*\\+?(?:Lv\\.? ?)?(?!75\\b)[0-9]{2}\\b"]},
    "kill_xp_cap": [
      {"level_min": 1, "level_max": 5, "note": "per-kill XP cap ~20% of the level (buffs included), verify"},
      {"level_min": 50, "level_max": 55, "note": "per-kill XP cap ~2% of the level (buffs included), verify"},

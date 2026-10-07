@@ -279,8 +279,9 @@ def test_digest_shape_and_order():
     doc = signals.digest(_inputs(), NOW)
     assert [r["id"] for r in doc["rows"]] == list(signals.REASONS)
     for r in doc["rows"]:
-        assert set(r) == {"id", "name", "level", "age_s", "reason", "detail", "hint"}
+        assert set(r) == {"id", "name", "level", "age_s", "reason", "detail", "hint", "lines"}
         assert r["level"] in signals.LEVELS
+        assert r["lines"] == [] or r["id"] == "data"  # plan 085: evidence on the data row only
     assert doc["bad"] == 0 and doc["worst"] in ("ok", "off")
     assert set(doc) == {"rows", "bad", "worst", "at", "overrides"}
     assert doc["overrides"] == {"count": 0, "items": []}  # plan 079: none by default

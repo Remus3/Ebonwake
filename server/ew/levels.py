@@ -13,6 +13,7 @@ import json
 import re
 from pathlib import Path
 
+from . import patchverify
 from .today import _iso, _parse_iso
 
 LEVEL_MAX = 75
@@ -59,8 +60,9 @@ def _read(path, what):
 
 def validate_epoch(row, tracked=False):
     """Normalised copy of one epoch row, or ValueError. A tracked row may also
-    carry `kill_xp_cap` [{level_min, level_max, note}]; an operator row may not."""
-    extra = {"kill_xp_cap"} if tracked else set()
+    carry `kill_xp_cap` [{level_min, level_max, note}] and a plan 085 `verify`
+    hint (checked here, not copied); an operator row may not."""
+    extra = {"kill_xp_cap", "verify"} if tracked else set()
     if not isinstance(row, dict) or not set(EPOCH_FIELDS) <= set(row) <= set(EPOCH_FIELDS) | extra:
         raise ValueError(f"epoch must be {{{', '.join(EPOCH_FIELDS)}}}")
     if not isinstance(row["id"], str) or not ID_RE.match(row["id"]):
@@ -80,6 +82,8 @@ def validate_epoch(row, tracked=False):
         raise ValueError(f"{row['id']}: verified must be true or false")
     out = {"id": row["id"], "starts_utc": starts, "label": row["label"].strip(),
            "source": row["source"].strip(), "verified": row["verified"]}
+    if "verify" in row:
+        patchverify.compile_hint(row["verify"], f"{row['id']}.verify")
     if "kill_xp_cap" in row:
         caps = row["kill_xp_cap"]
         if not isinstance(caps, list) or len(caps) > MAX_CAPS:
@@ -231,8 +235,10 @@ def merge_deadlines(tracked, added, deleted):
 # -- XP buff presets -------------------------------------------------------------
 
 def validate_preset(row):
-    if not isinstance(row, dict) or set(row) != set(PRESET_FIELDS):
-        raise ValueError(f"preset must have exactly {', '.join(PRESET_FIELDS)}")
+    if not isinstance(row, dict) or set(row) - {"verify"} != set(PRESET_FIELDS):
+        raise ValueError(f"preset must have exactly {', '.join(PRESET_FIELDS)} (+ optional verify)")
+    if "verify" in row:  # plan 085 patch-notes hint
+        patchverify.compile_hint(row["verify"], f"{row.get('id')}.verify")
     if not isinstance(row["id"], str) or not ID_RE.match(row["id"]):
         raise ValueError("preset id must match ^[a-z0-9-]{1,40}$")
     for k in ("name", "source"):

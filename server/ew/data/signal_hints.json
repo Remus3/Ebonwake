@@ -36,6 +36,8 @@
     "profile.error": "profile fetch failing - check the family name and base URL in Settings > Profile",
     "boss_drift.not_built": "no drift check yet - runs after the next schedule fetch",
     "boss_drift.drift": "boss table differs from the public schedule - review Events > World bosses",
-    "boss_drift.error": "boss schedule drift check failed - retried later"
+    "boss_drift.error": "boss schedule drift check failed - retried later",
+    "data.contradicted": "patch notes disagree with a tracked value - kept with a check badge until a data fix",
+    "data.error": "a patch-notes hint in the tracked data is broken - checks paused until a data fix"
   }
 }
