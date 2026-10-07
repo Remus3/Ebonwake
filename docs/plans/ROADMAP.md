@@ -80,6 +80,9 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 073 | Signal health digest: per-signal liveness with one-line fix hints | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 074 | Before-maintenance digest: loss warnings from maintenance notices + everything ending at the next maintenance, T-24 h | [ ] open (priority) |
 | 075 | Login-day reward tracker: qualifying login days per event, days left, at-risk alert | [ ] open |
+| 076 | Home consolidation: full-width What now, one Timers card, quiet line for empty cards, no repeated facts | [ ] open |
+| 077 | One status truth: onboarding, profile card and stale styling derived from the signal digest | [ ] open |
+| 078 | Settings and formatting consistency: one control per overlay widget, human labels, local-time entry, palette button | [ ] open |
 
 Deep dive 2026-10-06b (research 0008): two plans. 074 first (priority) -
 the official 2026-10-08 maintenance notice says unclaimed Tag Characters
@@ -92,6 +95,15 @@ DR and level-gap DR rows (018 / 023 / 012), HYPERBOOST track seed for 034
 once an official stage list is read, My Info EXP OCR region for 066.
 Dropped: "All Events at glance" single-page index (064 cap suffices),
 Deadeye patch tracker (dup 007), Season graduation countdown (dup 024).
+
+UI/UX audit 2026-10-06 (research 0009): 21 findings, three consolidation
+plans, no new features, no dependency between them (any lane order). 076:
+Home shows What now truncated, the same boss / reset fact in 3-4 cards and
+6 empty cards. 077: three surfaces disagree about one signal and a Get
+started link dead-ends (smallest, highest correctness value). 078 (Settings duplicate overlay controls with a manual-mode default bug,
+raw identifier labels, remaining UTC entry, palette button). 047 and 050
+are extended only for gaps found live. Not planned: shared snapshot store
+(0009 M9), overlay base rows by context (L3).
 
 Autonomy deep dive 2026-10-06 (research 0007, operator order: self-aware,
 low-input EW): 13 plans 061-073 ranked by operator inputs removed per play
