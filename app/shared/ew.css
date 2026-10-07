@@ -376,6 +376,7 @@ html, body {
 .ew-hrow.bad .ew-hval::before { content: "! "; }
 .ew-erow.done .ew-ecode, .ew-erow.done .ew-ehead .ew-mname { color: var(--fk-text-muted); text-decoration: line-through; }
 .ew-erow.expired { color: var(--fk-text-muted); opacity: .9; } /* plan 077: its clock reads "ended" */
+.ew-erow.claim { box-shadow: inset 2px 0 0 var(--fk-status-warn); } /* plan 086: claim window open */
 .ew-srcrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 2px 4px; }
 .ew-srctxt { min-width: 0; }
 .ew-srcurl { user-select: all; }

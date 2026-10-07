@@ -30,6 +30,12 @@ Plan 074: a maintenance notice's Detail read also keeps its loss-warning
 sentences (`maintdigest.loss_lines`, `loss` + `parse_v` in the Detail
 cache); a maintenance entry with an older `parse_v` is re-read once, inside
 the same MAX_DETAILS budget.
+
+Plan 086: every Detail read also keeps its reward claim-window sentences
+(`claimwindows.claim_lines`, `claims`); `parse_v` 3, so any older entry is
+re-read once inside the same budget. Each read syncs the latest claim
+deadline onto the stored events / coupons of that notice (`claim_until`,
+`claim_text`) when it outlives their end.
 """
 
 import datetime as _dt
@@ -41,7 +47,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import __version__, logindays, maint, maintdigest, patchverify
+from . import __version__, claimwindows, logindays, maint, maintdigest, patchverify
 from .coupons import HOST, MAX_BYTES, ROBOTS, TIMEOUT_S, UA_TOKEN, robots_verdict
 from .coupons import _TOKEN_RE, _clean_title, copy_codes, is_code, is_word_code, parse_date
 from .httpcache import CachedClient, UpstreamError, freshness, read_json
@@ -578,9 +584,11 @@ def parse_codes(page, lines):
 def parse_notice(page, title, ref_year, ref_month=None):
     """Everything plan 059 + 064 + 074 read from one Detail page: {window,
     maint, hot, codes, loss, parse_v}; `loss` only on a maintenance notice;
-    + plan 075 `login` (a suggested login rule, or None)."""
+    + plan 075 `login` (a suggested login rule, or None); + plan 086 `claims`
+    [{text, until}] (raw claim deadlines)."""
     text = page if isinstance(page, str) else _decode(page)
     lines = _lines(text)
+    unwrapped = _lines(text, unwrap=True)
     window = next((w for w in (parse_window(ln, ref_year, ref_month) for ln in lines)
                    if w is not None), None)
     m = parse_maint(text, title, ref_year, ref_month)
@@ -588,7 +596,8 @@ def parse_notice(page, title, ref_year, ref_month=None):
             "hot": parse_hot(lines, title, ref_year, ref_month),
             "codes": parse_codes(text, lines),
             "login": logindays.suggest_rule([title] + lines if isinstance(title, str) else lines),
-            "loss": maintdigest.loss_lines(_lines(text, unwrap=True)) if m is not None else [],
+            "loss": maintdigest.loss_lines(unwrapped) if m is not None else [],
+            "claims": claimwindows.claim_lines(unwrapped, ref_year, ref_month),
             "parse_v": maintdigest.PARSE_V}
 
 
@@ -693,9 +702,9 @@ def _clean_codes(raw):
 
 
 def _clean_detail(entry):
-    """{stamp, fetched_at, window, maint, hot, codes, login, loss, parse_v} or None (a
-    pre-064 entry has no maint / hot / codes: None, None, []; a pre-074 one no
-    loss / parse_v: [], 1)."""
+    """{stamp, fetched_at, window, maint, hot, codes, login, loss, claims, parse_v}
+    or None (a pre-064 entry has no maint / hot / codes: None, None, []; a
+    pre-074 one no loss / parse_v: [], 1; a pre-086 one no claims: [])."""
     if not isinstance(entry, dict):
         return None
     at = entry.get("fetched_at")
@@ -719,6 +728,7 @@ def _clean_detail(entry):
             "codes": _clean_codes(entry.get("codes")),
             "login": logindays.clean_suggestion(entry.get("login")),  # plan 075; pre-075 None
             "loss": maintdigest.clean_loss(entry.get("loss")) if cm is not None else [],
+            "claims": claimwindows.clean_claims(entry.get("claims")),  # plan 086
             "parse_v": pv}
 
 
@@ -854,8 +864,8 @@ class NoticeClient(CachedClient):
             # plan 085: a page read before its text was kept - once, and only when it
             # would land in the newest-MAX_PATCH_NOTES window (refute r1 #1)
             return True
-        if cached["parse_v"] < maintdigest.PARSE_V and _MAINT_TITLE_RE.match(notice["title"]):
-            return True  # plan 074: a maintenance notice read before loss parsing, once
+        if cached["parse_v"] < maintdigest.PARSE_V:
+            return True  # plan 074 / 086: read before loss / claim parsing, once
         if notice["stamp"] is not None:
             return notice["stamp"] != cached["stamp"]
         return now - cached["fetched_at"] >= DETAIL_MAX_AGE_S
@@ -1153,15 +1163,44 @@ class NoticeService:
                 continue  # full store, a code added meanwhile: skip that one
         return ev_ids, hot_ids
 
+    @staticmethod
+    def claim_windows(notices, details, slot, mn):
+        """Plan 086: {notice url: (claim_until UTC datetime, text) | None} - the
+        latest resolvable claim deadline of each listed notice's cached Detail
+        read; None when that read holds none (a stored window is cleared)."""
+        out = {}
+        for n in notices:
+            d = details.get(n["group_no"])
+            if d is None:
+                continue  # not read yet: leave what is stored
+            out[n["url"]] = claimwindows.latest(d["claims"],
+                                                lambda pt: _point_utc(pt, slot, True, mn))
+        return out
+
+    def claimed(self, group_no):
+        """Plan 086 ack: the operator claimed a notice's rewards (Mail / Safe);
+        its claim window is hidden everywhere. Returns the events view."""
+        if not _is_no(group_no):
+            raise ValueError("claimed must be a notice number (groupContentNo)")
+        return self.events.claim_ack(detail_url(group_no))
+
     def _import(self, notices, details, slot, now):
-        """Maintenance notices always; the rest only with auto_add() true."""
+        """Maintenance notices always; the rest only with auto_add() true.
+        Plan 086: claim windows sync onto the stored items of their notice
+        always (they decorate what is there, they add nothing)."""
         mn = self._import_maint(notices, details)
+        self._auto_import(notices, details, slot, mn, now)
+        self.events.sync_claims({url: None if c is None else (_iso(c[0]), c[1]) for url, c in
+                                 self.claim_windows(notices, details, slot, mn).items()})
+        return mn
+
+    def _auto_import(self, notices, details, slot, mn, now):
         try:
             on = self.auto_add() is True
         except Exception:  # noqa: BLE001 - an unreadable setting = off
             on = False
         if not on:
-            return mn
+            return
         doc = self._doc()
         done = set(doc["dismissed"]) | {a["group_no"] for a in doc["auto"]}
         new = []
@@ -1176,7 +1215,6 @@ class NoticeService:
         if new:
             self.store.put(DOMAIN, {"dismissed": doc["dismissed"],
                                     "auto": (doc["auto"] + new)[-MAX_AUTO:]})
-        return mn
 
     def login_suggestions(self):
         """Plan 075: {notice url: suggested login rule} from cached Detail reads

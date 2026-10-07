@@ -2,7 +2,8 @@
 
 Pure inference over views EW already serves (bosses 031, resets 021, grind
 buffs 005, Hot Time 011 / 064, maintenance 059 / 064, coupons 006, dice 056,
-market alerts 002, level deadlines 024, OCR review 063, login days 075) plus an injected
+market alerts 002, level deadlines 024, OCR review 063, login days 075,
+reward claim windows 086) plus an injected
 clock; nothing reads the game. Each adapter turns one view into candidates
 {source, text, why, due, left_s}; `rank` scores them
 
@@ -27,8 +28,10 @@ from .today import _parse_iso
 
 WEIGHTS_FILE = Path(__file__).resolve().parent / "data" / "whatnow_weights.json"
 SOURCES = ("boss", "reset", "buff", "hot", "maint", "coupon", "dice", "market", "deadline", "ocr",
-           "maint_loss", "event")
+           "maint_loss", "event", "claim")
 DEFAULT_WEIGHTS = {
+    # plan 086: rewards left in Mail / Safe past the event, gone at the deadline
+    "claim": {"weight": 0.9, "horizon_s": 259200, "nominal_s": 86400},
     # plan 074: a loss warning outranks the plain maintenance row at the same due
     "maint_loss": {"weight": 2.0, "horizon_s": 86400, "nominal_s": 3600},
     "event": {"weight": 0.5, "horizon_s": 86400, "nominal_s": 86400},
@@ -295,6 +298,37 @@ def from_events(view, now):
     return out
 
 
+def claim_place(text):
+    """Where a claim sentence says the rewards wait: Mail, Safe, or both."""
+    t = text.lower() if isinstance(text, str) else ""
+    mail, safe = "mail" in t, "safe" in t
+    return "Mail" if mail and not safe else "Safe" if safe and not mail else "Mail / Safe"
+
+
+def claims(view, now):
+    """Plan 086: one candidate per notice (url, else title) with an open claim
+    window (not acked), due the claim deadline; `<n> days left` counts whole
+    days started, so the text changes once a day at most."""
+    out, seen = [], set()
+    for it in _list(_dict(view).get("items")):
+        it = _dict(it)
+        until = _parse_iso(it.get("claim_until"))
+        title = it.get("title")
+        if until is None or until <= now or it.get("claimed") is True or it.get("claim_open") is False:
+            continue
+        if not isinstance(title, str) or not title:
+            continue
+        key = it["url"] if isinstance(it.get("url"), str) else title
+        if key in seen:
+            continue
+        seen.add(key)
+        days = max(1, -(-int((until - now).total_seconds()) // 86400))
+        tail = f" ({claim_place(it.get('claim_text'))}) - {days} day{'' if days == 1 else 's'} left"
+        name = _clip(title, TEXT_MAX - len("Claim  rewards") - len(tail))
+        out.append(_cand("claim", f"Claim {name} rewards{tail}", "claim window closes", until, now))
+    return out
+
+
 def login_days(view, now):
     """Plan 075: a login-day event at risk (today not yet credited), due the
     end of today's UTC date."""
@@ -375,7 +409,7 @@ ADAPTERS = {
     "grind": [from_grind],
     "leveling": [hot_time, deadlines],
     "maint": [lambda d, now: maintenance(now, _dict(d).get("slot"), _dict(d).get("notices"))],
-    "events": [from_events],
+    "events": [from_events, claims],
     "maint_digest": [maint_loss],
     "market": [market_alerts],
     "ocr": [ocr_review],
