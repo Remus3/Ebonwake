@@ -420,7 +420,9 @@ GATES = ("Gates before you finish (exactly what ci runs): `python -m ruff check 
          "wait. Write the v7 checklist (FLEET item 13 d) into your progress JSON "
          "ops/loop/control/progress/{task}.json: the FLEET item 12 fields plus "
          "\"checklist\": [{{\"id\", \"task\", \"state\", \"eta_s\"}}, ...] - "
-         "remaining steps only, ASCII, updated after each step.")
+         "remaining steps only, ASCII, updated after each step. Background agents "
+         "share one scratchpad: name every helper or scratch script after your "
+         "task ({task}_*.py), never a generic name like prog.py.")
 
 
 NO_ROADMAP = ("Do NOT edit docs/plans/ROADMAP.md: the loop flips your row in main when "
