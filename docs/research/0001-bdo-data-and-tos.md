@@ -59,7 +59,8 @@ keep it offline, read-only, game closed.
 - `%USERPROFILE%\Documents\Black Desert\GameOption.txt` - key=value options
   (window mode, screenshot format). Read-only, used to warn when the game is in
   exclusive fullscreen (the overlay needs borderless/windowed).
-- Screenshots: PrtSc writes to `%USERPROFILE%\Documents\Black Desert\ScreenShot\`
+- Screenshots: the in-game Screenshot key (PrtSc by default, rebindable in
+  the game's key settings; never pressed by EW) writes to `%USERPROFILE%\Documents\Black Desert\ScreenShot\`
   (created on first screenshot). A folder watcher plus OCR on these files is the
   cleanest legal "game state" feed: the operator chooses when to capture.
 - `Documents\Black Desert\FaceTexture\<characterNo>.bmp` - the in-game
