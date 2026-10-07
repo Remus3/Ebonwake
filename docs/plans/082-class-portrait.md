@@ -96,3 +96,47 @@ Dependency guard: before writing code the lane checks that
 changes nothing, writes `"status": "blocked", "needs": ["062", "065",
 "066"]` into its progress JSON (`ops/loop/control/progress/p082-build.json`)
 and exits 0.
+
+## As-built deviations
+
+Guard: 062 / 065 / 066 present; built. Each item below was self-adjudicated
+by the lane (decision / alternatives / why / reverses if).
+
+1. Log regex accepts `/` or `\` separators.
+   Alternatives: the plan's `/`-only pattern. Why: research 0011 saw `/`, but
+   a Windows client may write either; a strict superset costs nothing and the
+   match is still a string parse only. Reverses if: a false match is seen.
+2. `char_no` is reported while the current log session is live (state not
+   `not_running` / `unconfigured`), cleared on a new log file, truncation or
+   game exit - not only while `logged_in`. Alternatives: logged_in only. Why:
+   the load line can arrive before or without a classified login line; a
+   character stays loaded through a brief disconnect. Reverses if: the chip
+   is seen naming a character from a closed session.
+3. A2 is the `bind_ocr(char_no, cls, conf)` hook only (gate 0.9 = plan 063
+   AUTO_COMMIT_MIN, class must be in `data/classes.json`, a `typed` binding is
+   never replaced). No plan 066 `class` extractor is wired: ocrinfer has no
+   class-name region yet. Alternatives: add an OCR region + extractor now.
+   Why: no verified screen region; an unverified read would bind wrongly and
+   the empty-slot rule depends on bindings being right. Reverses if: a plan
+   adds the class region (it then calls `bind_ocr`).
+4. Binding A1 keeps an existing `single` binding when a second characterNo
+   appears later (the second stays unknown); it never moves or spreads.
+   Alternatives: unbind both. Why: the first was the only character when it
+   was bound, so the binding was right then; unbinding would blank the chip
+   on a host that only ever plays one Deadeye. Reverses if: the operator adds
+   a character and the first one is shown under the wrong class.
+5. Archive cap drops the oldest version with a direct unlink of EW's OWN
+   derived PNGs in `ops/runtime/portraits/` (never FaceTexture). Alternatives:
+   Recycle Bin. Why: the plan fixes the cap; the files are runtime copies EW
+   created, and a shell Recycle-Bin call would add a non-stdlib path to a
+   2 s poller. Reverses if: plan 083 (gallery) wants every version kept.
+6. `GET /api/portraits` also carries `char_no`, `loaded_cls` and
+   `progress_cls`, and a class whose Progress class has no portrait appears
+   with `current: null` (the empty chip needs both). `portraitChip(view,
+   activeCls, opts)` takes an optional `opts.zone` for the hover time
+   (plan 078 local time). Additive; reverses if: never.
+7. The plan 049 `DOMAINS` literal is left as is and `portraits` is pushed
+   after it (two older static tests pin the literal). Reverses if: those
+   tests are relaxed.
+8. Progress class is read per poll from the store (`progress._load()`), not
+   `progress.view()`, to keep the 2 s poller cheap. Reverses if: never.

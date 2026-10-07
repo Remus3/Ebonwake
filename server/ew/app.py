@@ -15,7 +15,8 @@ block), /api/settings (plan 030), /api/pets
 /api/overlay/context (plan 067; SSE `overlay_context` on change),
 /api/whatnow (plan 069; SSE `whatnow` carries the full view on change),
 /api/signals (plan 073, GET only; plan 079 adds its `overrides` section),
-/api/overrides (plan 079, GET only; POST /api/settings {"clear": key} retires one), /api/prompts (plan 070: quiet gate, alert ladder,
+/api/overrides (plan 079, GET only; POST /api/settings {"clear": key} retires one),
+/api/portraits + /api/portraits/img/<id> (plan 082, GET only; SSE `portraits`), /api/prompts (plan 070: quiet gate, alert ladder,
 live prompts; stale suggestions / review rows / pending stops are left out of their own
 payloads), /api/maint/digest (plan 074: before-maintenance digest), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
@@ -44,7 +45,8 @@ from . import (__version__, autotick, autowatch, bossdrift, bosses, context, cou
                leveling, logindays, maint, maintdigest, market, mounts, ocr, ocrauto, onboarding, overrides,
                pets,
                ports,
-               playsession, progress, prompts, settings, shopping, signals, single, spots, summary,
+               playsession, portraits, progress, prompts, settings, shopping, signals, single,
+               spots, summary,
                today, weekly, whatnow, xpbooks)
 from .store import Store
 
@@ -363,6 +365,16 @@ class EWServer(ThreadingHTTPServer):
             listeners.append(self.autotick.on_game)
         if isinstance(pollers, list):
             pollers.append(self.autotick.on_poll)
+        # Plan 082: FaceTexture portraits archived (read-only on the game's file),
+        # characterNo from the session-log tail, bound to the Progress class.
+        self.portraits = portraits.PortraitService(
+            self.store, (Path(store_root).parent if store_root else RUNTIME) / "portraits",
+            documents=lambda: getattr(self.game, "documents_dir", None),
+            loads=lambda: self.game.view().get("char_loads") or [],
+            progress_cls=lambda: self.progress._load()[0]["cls"],  # store read only, per poll
+            clock=grind_clock or time.time, on_change=lambda: self.bus.bump("portraits"))
+        if isinstance(pollers, list):
+            pollers.append(self.portraits.poll)
         # Plan 070: prompt registry (expiry, dedupe) + game-closed quiet + ladder.
         self.prompts = prompts.PromptRegistry(
             self.store, clock=today_clock or time.time,
@@ -815,6 +827,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.signals.view())
         if path == "/api/overrides":
             return self._send(200, self.server.overrides_view())
+        if path == "/api/portraits":
+            return self._send(200, self.server.portraits.view(
+                char_no=self.server.game.view().get("char_no")))
+        if path.startswith("/api/portraits/img/"):  # plan 082: an indexed id, never a path
+            size = parse_qs(query).get("size", ["full"])[0]
+            png = self.server.portraits.image(path[len("/api/portraits/img/"):], size)
+            if png is None:
+                return self._send(404, {"error": "not found"})
+            return self._send(200, png, "image/png")
         if path == "/events":
             return self._sse()
         if path == "/":  # plan 020: redirect so relative asset paths resolve
