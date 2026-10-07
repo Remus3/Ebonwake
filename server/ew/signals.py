@@ -204,8 +204,16 @@ _ROWS = {"session_log": _session_log, "screenshots": _screenshots, "ocr": _ocr,
          "notices": _notices, "market": _market, "profile": _profile, "boss_drift": _boss_drift}
 
 
-def digest(inputs, now, hints=None):
-    """{rows: [{id, name, level, age_s, reason, detail, hint}], bad, worst, at}."""
+def _overrides(raw):
+    """Plan 079: {count, items} of the override ledger's active entries."""
+    items = raw.get("items") if isinstance(raw, dict) else None
+    items = [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
+    return {"count": len(items), "items": items}
+
+
+def digest(inputs, now, hints=None, overrides=None):
+    """{rows: [{id, name, level, age_s, reason, detail, hint}], bad, worst, at,
+    overrides: {count, items}}."""
     hints = hints or load_hints()
     inputs = _d(inputs)
     rows = []
@@ -222,17 +230,19 @@ def digest(inputs, now, hints=None):
                      "hint": hint(hints, rid, reason) if reason else None})
     worst = max((r["level"] for r in rows), key=_RANK.__getitem__)
     at = _dt.datetime.fromtimestamp(now, _dt.timezone.utc).replace(microsecond=0).isoformat()
-    return {"rows": rows, "bad": sum(r["level"] == "bad" for r in rows), "worst": worst, "at": at}
+    return {"rows": rows, "bad": sum(r["level"] == "bad" for r in rows), "worst": worst, "at": at,
+            "overrides": _overrides(overrides)}
 
 
 class SignalService:
     """GET /api/signals. `sources` maps a row id to fn() -> its input dict (or
     None); a failing source becomes a warn row, never a 500."""
 
-    def __init__(self, sources, clock=time.time, hints_path=None):
+    def __init__(self, sources, clock=time.time, hints_path=None, overrides=None):
         self.sources = sources
         self.clock = clock
         self.hints_path = hints_path
+        self.overrides = overrides  # plan 079: () -> {count, items}
 
     def inputs(self):
         out = {}
@@ -244,4 +254,10 @@ class SignalService:
         return out
 
     def view(self):
-        return digest(self.inputs(), self.clock(), load_hints(self.hints_path))
+        ovr = None
+        if self.overrides is not None:
+            try:
+                ovr = self.overrides()
+            except Exception:  # noqa: BLE001 - a ledger fault lists none, never a 500
+                ovr = None
+        return digest(self.inputs(), self.clock(), load_hints(self.hints_path), ovr)

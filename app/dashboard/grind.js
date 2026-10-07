@@ -739,6 +739,7 @@
 
   function sessionCard() {
     const c = card('Session');
+    if (window.EWOverrides) window.EWOverrides.mount(c.card.querySelector('h2'), 'grind'); // plan 079
     const f = {};
     const err = el('div', 'ew-err', '');
     c.body.appendChild(err);

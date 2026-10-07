@@ -72,6 +72,56 @@ read.
 
 Depends on: 005, 027, 030, 064, 065, 067, 073.
 
+## As-built deviations
+
+1. Folders (`bdo.install_dir` / `documents_dir`): rule `until:path_missing`
+   with NO live signal. Alternatives: 065 detection as the live value (the
+   plan text). Why: a "use other" folder exists precisely to beat detection;
+   treating detection as live would retire every such override on the next
+   read. The ledger badges and retires them (folder gone); the game watcher
+   still reads the configured folder as before (plan 065 path unchanged).
+   Reverses if: detection gains a confidence signal that should outrank a
+   typed folder.
+2. Gear AP / AAP / DP and manual watch thresholds are listed in
+   `GET /api/overrides` as derived rows (`clearable: false`) built from
+   `gs_src` and the watchlist, not stored in the `overrides` domain.
+   Alternatives: copy them into the ledger. Why: their own stores already are
+   the record (no behaviour change, as the plan asks); a copy could drift.
+   Reverses if: either gains an expiry rule.
+3. Config import de-duplicates on the config VALUE (`seen[key]`), not the
+   file mtime. Alternatives: re-import on every mtime change. Why: any
+   settings write bumps the mtime, which would resurrect an expired or
+   superseded value; keyed on value, it stays retired until the file changes
+   that key. Reverses if: config gains a per-key timestamp.
+4. `{"clear": key}` also writes the key's default back to config/local.json
+   (so the Settings tab agrees). Expiry and live supersession do NOT touch
+   the file; the resolver output is what every reader uses. Alternatives:
+   rewrite config on expiry too. Why: a GET path never writes the operator's
+   config. Reverses if: the Settings tab is made to show effective values.
+5. `market.fame_pct` and `profile.family` carry rule `none` and are listed
+   (badge) whenever set away from their default. Alternatives: track
+   without listing. Why: plan text lists them as `none` keys; a set fame
+   changes every net figure, so it is shown. Reverses if: the operator finds
+   the permanent badge noise.
+6. Badge placement: Grind `Session`, Crafting margin, Inventory, Market
+   `Watchlist`, Events `Events and drops` card headers, from one shared
+   `app/dashboard/overrides.js` (cached `/api/overrides`). The overlay is not
+   badged (overlay mode keys list card `overlay`; Signal health and the Home
+   pill show them). Reverses if: the overlay gains a header.
+7. No plan 078 `LABELS` exist yet; labels come from the tracked policy file
+   (`settings.LABELS` wins when present).
+8. Merge onto main after plan 074 (resolve lane, 2026-10-06): union of both
+   sides in the two conflicted files. `server/ew/app.py` import list keeps
+   main's `logindays` and `maintdigest` plus the lane's `overrides`.
+   `app/dashboard/home.js` header comment names both plan 079 and plan 074;
+   `shapeOf` keys on main's `S.mdMsg` (Before-maintenance ack error) AND the
+   lane's `overridePill`, and the lane's `overrideNode()` is kept as is.
+   Alternatives: take either side (drops plan 074's digest wiring or plan
+   079's Home pill, both used elsewhere in the auto-merged code). Why: the
+   hunks were independent additions to the same lines. Reverses if: never;
+   a later edit to either feature supersedes it. Gates after resolve: ruff
+   clean, pytest green, node 632/632.
+
 Dependency guard: before writing code the lane checks that
 `server/ew/signals.py` (plan 073), `server/ew/settings.py` (plan 030) and
 `server/ew/maint.py` (plan 059 / 064) exist. If any is missing, the lane

@@ -147,6 +147,56 @@
       title: bad.map(function (r) { return r.name + ': ' + (r.hint || r.detail); }).join('\n') };
   }
 
+  // Plan 079: override ledger. One /api/overrides item -> the card-header
+  // badge {cls, text, title}; null for junk. The title says what is in force,
+  // where it came from and when it lapses.
+  function fmtOverrideValue(v) {
+    if (v === null || v === undefined) return '-';
+    if (typeof v === 'boolean') return v ? 'on' : 'off';
+    if (typeof v === 'object') {
+      return Object.keys(v).filter(function (k) { return v[k] !== null && v[k] !== undefined; })
+        .map(function (k) { return k + ' ' + v[k]; }).join(', ') || '-';
+    }
+    return String(v);
+  }
+  function overrideBadge(entry) {
+    if (!entry || typeof entry !== 'object' || typeof entry.key !== 'string') return null;
+    const label = typeof entry.label === 'string' && entry.label ? entry.label : entry.key;
+    const src = entry.source === 'config' ? 'from config/local.json' : 'typed';
+    const set = typeof entry.set_at === 'string' && entry.set_at ? ', set ' + entry.set_at.slice(0, 10) : '';
+    const exp = isNum(entry.expires_in_s) ? 'expires in ' + fmtAge(entry.expires_in_s)
+      : (entry.reason ? entry.reason : 'no expiry');
+    return { cls: 'ew-ovr', text: 'override',
+      title: label + ' = ' + fmtOverrideValue(entry.value) + ' (' + src + set + '); ' + exp,
+      key: entry.key, clearable: entry.clearable !== false };
+  }
+  function overrideItems(doc) {
+    const items = doc && Array.isArray(doc.items) ? doc.items : [];
+    return items.filter(function (i) { return i && typeof i === 'object' && typeof i.key === 'string'; });
+  }
+  // Badges for one card id (policy `cards`); [] when nothing overrides it.
+  function overrideBadges(doc, card) {
+    return overrideItems(doc).filter(function (i) {
+      return Array.isArray(i.cards) && i.cards.indexOf(card) >= 0;
+    }).map(overrideBadge).filter(Boolean);
+  }
+  // Signal health card rows: one per active override.
+  function overrideRows(doc) {
+    return overrideItems(doc).map(function (i) {
+      const b = overrideBadge(i);
+      return { key: i.key, text: (i.label || i.key) + ': ' + fmtOverrideValue(i.value),
+        title: b.title, clearable: b.clearable };
+    });
+  }
+  // Home status line: `N overrides` while N > 0 (signals digest section); else null.
+  function overridePill(doc) {
+    const sec = doc && doc.overrides && typeof doc.overrides === 'object' ? doc.overrides : null;
+    const n = overrideItems(sec).length;
+    if (!n) return null;
+    return { cls: 'warn ew-ovr', tab: 'system', text: n === 1 ? '1 override' : n + ' overrides',
+      title: overrideItems(sec).map(function (i) { return overrideBadge(i).title; }).join('\n') };
+  }
+
   // Server card rows from /api/version + /api/health (either may be null).
   function serverRows(version, health, appCommit, nowMs) {
     const v = version && typeof version === 'object' ? version : {};
@@ -4971,8 +5021,12 @@
     }
   }
 
-  // Bridge check for POST /api/settings: {set: {key: value}} over the allowlist.
+  // Bridge check for POST /api/settings: {set: {key: value}} over the allowlist,
+  // or plan 079 {clear: key} (an allowlisted key; the server checks the ledger).
   function validSettingsBody(body) {
+    if (plainObject(body) && Object.keys(body).length === 1 && typeof body.clear === 'string') {
+      return Object.prototype.hasOwnProperty.call(SETTINGS_FIELDS, body.clear);
+    }
     if (!plainObject(body) || Object.keys(body).length !== 1 || !plainObject(body.set)) return false;
     const keys = Object.keys(body.set);
     return keys.length >= 1 && keys.length <= 64 && keys.every(function (k) {
@@ -6851,6 +6905,10 @@
     sourceFreshness: sourceFreshness,
     signalRows: signalRows,
     signalPill: signalPill,
+    overrideBadge: overrideBadge,
+    overrideBadges: overrideBadges,
+    overrideRows: overrideRows,
+    overridePill: overridePill,
     serverRows: serverRows,
     validAccelerator: validAccelerator,
     hotkeys: hotkeys,

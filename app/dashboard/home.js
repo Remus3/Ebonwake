@@ -5,8 +5,8 @@
    /api/onboarding - the "Get started" first-run card, plan 069
    /api/whatnow - the "What now" card on top, also replaced from each SSE
    `whatnow` event's full view, plan 073 /api/signals - one pill on top only
-   while a signal is bad, plan 074 /api/maint/digest - the "Before
-   maintenance" card from T-24 h) and
+   while a signal is bad; plan 079 `N overrides` from its overrides section,
+   plan 074 /api/maint/digest - the "Before maintenance" card from T-24 h) and
    lets C.composeNow order the cards; a 404 (old server) drops that payload's
    card, other errors keep the last data. Plan 076: What now spans the full
    width, each action one button row (text never clipped, `why` on a muted
@@ -170,7 +170,19 @@
     return JSON.stringify(out.cards.map(function (c) {
       return [c.id, c.title, c.meta, c.empty, c.rows.map(function (r) { return [r.label, r.note, r.cls, r.tick, r.ack]; })];
     })) + '|' + JSON.stringify(out.quiet) + '|' + JSON.stringify(S.err) + '|' + Object.keys(S.pending).join(',') +
-      '|' + S.msg + '|' + S.obMsg + '|' + S.mdMsg + '|' + JSON.stringify(C.signalPill(S.snap.signals));
+      '|' + S.msg + '|' + S.obMsg + '|' + S.mdMsg + '|' + JSON.stringify(C.signalPill(S.snap.signals)) +
+      '|' + JSON.stringify(C.overridePill(S.snap.signals));
+  }
+
+  // Plan 079: `N overrides` on the status line while any override is in force.
+  function overrideNode() {
+    const pill = C.overridePill(S.snap.signals);
+    if (!pill) return null;
+    const b = el('button', 'ew-pill ew-hsig ' + pill.cls, pill.text);
+    b.type = 'button';
+    b.title = pill.title;
+    b.addEventListener('click', function () { openTab(pill.tab); });
+    return b;
   }
 
   // Plan 073: one pill on top only while a signal is `bad`; it opens System.
@@ -308,6 +320,8 @@
     if (q) p.appendChild(q);
     const e = errNode();
     if (e && p.firstChild) p.firstChild.querySelector('.ew-cbody').appendChild(e);
+    const ovr = overrideNode();
+    if (ovr) p.insertBefore(ovr, p.firstChild);
     const sig = signalNode();
     if (sig) p.insertBefore(sig, p.firstChild);
   }
