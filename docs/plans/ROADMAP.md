@@ -86,6 +86,8 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 079 | Override ledger: source, set-at, expiry, superseded by live signals; override badges + digest list | [ ] open (priority) |
 | 080 | Settings purge: delete automation kill switches, manual overlay layout, per-rule notify toggles, tunables | [ ] open |
 | 081 | Derive typed planner inputs from live signals: silver, hours/day, inventory weight, CP, fame, loot counts, Hot Time ends | [ ] open |
+| 082 | Class portrait: FaceTexture archive, characterNo -> class binding from the session log, top-left class chip with empty state | [ ] open |
+| 083 | Deadeye portrait gallery: portrait history + class-attributed screenshots, optional pick as a plan 079 override (depends on 079, 082) | [ ] open |
 
 Deep dive 2026-10-06b (research 0008): two plans. 074 first (priority) -
 the official 2026-10-08 maintenance notice says unclaimed Tag Characters
@@ -107,6 +109,17 @@ started link dead-ends (smallest, highest correctness value). 078 (Settings dupl
 raw identifier labels, remaining UTC entry, palette button). 047 and 050
 are extended only for gaps found live. Not planned: shared snapshot store
 (0009 M9), overlay base rows by context (L3).
+
+Portrait research 2026-10-06 (research 0011, operator request session
+10): the game writes the character portrait to Documents\Black
+Desert\FaceTexture\<characterNo>.bmp (624 x 804); the session log names
+the characterNo on each character load; class is bound per characterNo
+(single-character rule today, OCR class read later). Adjudicator: FaceTexture
+reads allowed like ScreenShot (short handle, never written). 082 first -
+archive + binding + top-left class chip (empty frame when the class has no
+portrait, never another class). 083 after 079 and 082 - Deadeye gallery
+(history + attributed screenshots), optional pick as a 079 override
+retired by a newer portrait.
 
 Zero-touch audit 2026-10-06 (research 0010, operator order: self-adjusting
 EW, no toggles or typed data that get forgotten): 29 findings (4 H, 10 M,
