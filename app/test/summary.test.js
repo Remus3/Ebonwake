@@ -73,15 +73,18 @@ test('summaryRows: empty, missing or junk windows give no rows', () => {
 });
 
 test('Home: Last session card only when /api/summary has a session', () => {
-  const card = (snap) => C.composeNow(snap, T0).filter((c) => c.id === 'summary');
+  const card = (snap) => C.composeNow(snap, T0).cards.filter((c) => c.id === 'summary');
   assert.deepStrictEqual(card({ at: {} }), []);
   assert.deepStrictEqual(card({ at: {}, summary: { session: null } }), []);
   const c = card({ at: {}, summary: { session: win() } })[0];
   assert.strictEqual(c.title, 'Last session');
   assert.strictEqual(c.tab, 'grind');
   assert.strictEqual(c.rows[0].label, 'grind');
-  const e = card({ at: {}, summary: { session: win({ empty: true }) } })[0];
-  assert.strictEqual(e.empty, 'no game session recorded yet');
+  // Plan 076: an empty summary leaves the grid for the quiet line.
+  const empty = { at: {}, summary: { session: win({ empty: true }) } };
+  assert.deepStrictEqual(card(empty), []);
+  assert.deepStrictEqual(C.composeNow(empty, T0).quiet, [{ title: 'last session', tab: 'grind' }]);
+  assert.strictEqual(C.nowSummary({ session: win({ empty: true }) }).empty, 'no game session recorded yet');
 });
 
 test('gameExit fires from grind.pending_stop, keyed like the game transition', () => {

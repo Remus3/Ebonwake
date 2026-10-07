@@ -108,12 +108,30 @@ test('countText: hidden at zero total, n/total otherwise', () => {
 });
 
 test('composeNow: zero states hide counts and name the next action', () => {
-  const now = C.composeNow({ today: { items: [] }, grind: { buffs: [], spots: [] }, market: { items: [] } }, T0);
+  const snap = { today: { items: [] }, grind: { buffs: [], spots: [] }, market: { items: [] } };
+  // Plan 076: empty cards leave the grid for the quiet line; their texts stay pure.
+  assert.deepStrictEqual(C.composeNow(snap, T0).quiet.map((q) => q.title), ['dailies', 'buffs', 'grind', 'alerts']);
   const by = {};
-  now.forEach((c) => { by[c.id] = c; });
+  [C.nowDailies(snap.today, T0), C.nowSession(snap.grind, T0, T0), C.nowAlerts(snap.market)].forEach((c) => {
+    by[c.id] = c;
+  });
   assert.strictEqual(by.dailies.meta, '', 'no 0/0 done');
   assert.match(by.session.empty, /silver\/h/);
   assert.match(by.alerts.empty, /Market/);
+});
+
+test('plan 076: overlay Today line is quiet when daily and weekly totals are both 0', () => {
+  assert.strictEqual(C.ovQuiet('daily 0/0  weekly 0/0'), true);
+  assert.strictEqual(C.ovQuiet('daily 0/1  weekly 0/0'), false);
+  assert.strictEqual(C.ovQuiet('daily 0/0  weekly 1/2'), false);
+  assert.strictEqual(C.ovQuiet('daily 2/2  weekly 1/1'), false);
+});
+
+test('plan 076: self-test fails a clipped What now card', () => {
+  const st = read('selftest.js');
+  assert.match(st, /\[data-card=\\*"whatnow\\*"\]/);
+  assert.match(st, /textOverflow/);
+  assert.match(st, /wnClip/);
 });
 
 // ---- static guards ----

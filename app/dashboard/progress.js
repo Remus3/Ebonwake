@@ -799,6 +799,7 @@
 
   function lifeCard() {
     const c = el('section', 'ew-card ew-mcard ew-life');
+    c.dataset.collapse = 'life';  // plan 076: header toggle (dashboard.js)
     const h = el('h2', null, 'Life & CP');
     const sub = el('span', 'ew-muted', '');
     h.appendChild(sub);
@@ -882,6 +883,7 @@
   // Plan 044: Mounts card (materials + fern days, pity odds, mount list, add form).
   function mountsCard() {
     const c = el('section', 'ew-card ew-mcard ew-mounts');
+    c.dataset.collapse = 'mounts';  // plan 076: header toggle (dashboard.js)
     const h = el('h2', null, 'Mounts');
     const pill = el('span', 'ew-pill unknown', 'T10 ?');
     h.appendChild(pill);
@@ -890,7 +892,7 @@
     const ui = { pill: pill, mats: {}, matSig: null, dirty: false };
     ui.status = el('div', 'ew-err', '');
     body.appendChild(ui.status);
-    ui.fern = el('div', 'ew-num', '');
+    ui.fern = el('div', null, '');  // plan 076: prose, not a number cell
     body.appendChild(ui.fern);
     ui.odds = el('div', 'ew-muted', '');
     ui.odds.title = 'T10 breed: 3% base, +0.2% per failure (sourced; re-check in game)';

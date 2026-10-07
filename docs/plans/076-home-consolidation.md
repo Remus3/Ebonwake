@@ -66,3 +66,74 @@ Dependency guard: before writing code the lane checks that
 exist. If either is missing, the lane changes nothing, writes
 `"status": "blocked", "needs": ["025", "069"]` into its progress JSON
 (`ops/loop/control/progress/p076-build.json`) and exits 0.
+
+## As-built deviations
+
+Guard: `app/dashboard/home.js` and `server/ew/whatnow.py` both present.
+
+1. Empty store shows What now + Timers, not What now + Dailies.
+   - Decision: Timers always keeps the daily and weekly reset rows. On an
+     empty store, Home is therefore [What now, Timers] plus the Quiet line.
+     The plan's empty-store test was changed to match.
+   - Alternatives: (a) drop the reset rows while Today has no items; (b) treat
+     a Timers card that has only reset rows as quiet.
+   - Why: the reset clock is always news. It is also the only countdown Home
+     shows on a fresh store, and the acceptance fixture expects a Timers card.
+   - Reverses if: the operator wants Timers on the Quiet line when a store is
+     fresh.
+2. Every card except What now goes quiet when it has no rows.
+   - Decision: this includes Dailies left and Last session, not only the six
+     cards the plan lists. Quiet names are short and lowercase: `dailies`,
+     `timers`, `buffs`, `grind`, `level ETA`, `alerts`, `coupons`,
+     `last session`.
+   - Alternatives: keep an empty Dailies or Last session card that shows a
+     message.
+   - Why: the plan's own test says "no card has zero rows", and step 2 shows
+     the line as "Quiet: buffs, grind, alerts, coupons".
+   - Reverses if: the operator asks for an "all dailies done" card.
+3. Collapse storage holds the cards the operator expanded.
+   - Decision: localStorage key `ew.cards.open` lists expanded cards. Missing
+     or corrupt storage therefore means every card starts collapsed.
+     `parseCollapsed` and `isCollapsed` were added next to `collapsedKey` and
+     `toggleCollapsed`. The modules mark their cards with `data-collapse`, and
+     one generic `collapsibles()` in `dashboard.js` adds the header toggle
+     (`aria-expanded`).
+   - Collapsed view: the header plus the module's existing summary. That is
+     the header pill or subtitle: T10 n/m, n/max out, VP on/off, or the
+     character name.
+   - Alternatives: (a) store the collapsed set, so default collapsed has to be
+     special-cased; (b) write a toggle into each of the 4 modules.
+   - Why: the default holds with no special case, and the toggle code exists
+     in one place.
+   - Reverses if: a card needs a different default.
+4. `overlay.js` is unchanged.
+   - Decision: `C.ovQuiet` now also matches `daily 0/0  weekly 0/0`. The
+     existing `showRow` hides that row through it.
+   - Alternatives: a special case inside `drawToday`.
+   - Why: one rule, and it is already tested where the other quiet rows are.
+   - Reverses if: never (the behaviour is the same either way).
+5. The self-test fails on What now clipping for every store.
+   - Decision: `wnClip` is any element inside `[data-card="whatnow"]` that is
+     ellipsized and overflowing. It fails the self-test whether or not the
+     store is fresh. "No vertical scroll" is the existing `fits` check.
+   - Alternatives: fail only on a fresh store, like the card-scroll check.
+   - Why: What now text is never ellipsized by design, so any clip is a defect.
+   - Reverses if: a lived-in store is measured clipping legitimately.
+6. Kept as they were:
+   - Onboarding step rows keep their own `open` button. Only What now rows
+     became whole-row buttons.
+   - Boss rows in Timers carry the note `world boss`.
+   - Events ending that are not coupons get source `event`, which What now
+     never lists, so they are never deduped.
+   - Why: the plan scopes the row-button change to What now.
+   - Reverses if: the operator asks for the same row style on Get started.
+7. Gates were not run in this lane.
+   - Every shell command (`python`, `node`, `git`) needed interactive approval
+     in this headless lane. The tests were written first and the code was
+     reasoned against them, but `npm test --prefix app`, `python -m pytest -q`
+     and ruff were not run here.
+   - Decision: hand back unmerged; the loop's verifier runs the gates before
+     merge.
+   - Alternatives: wait for approval, which the operator standing orders
+     forbid.
+   - Reverses if: the verifier finds a red gate. Fix it in the next lane run.

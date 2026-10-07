@@ -35,6 +35,43 @@
     return c;
   }
 
+  // Plan 076: cards marked data-collapse get a header toggle; collapsed shows
+  // the header (title + the module's own summary pill) only. Default
+  // collapsed; the expanded keys persist in localStorage (corrupt = default).
+  const OPEN_KEY = 'ew.cards.open';
+
+  function readOpen() {
+    try { return C.parseCollapsed(localStorage.getItem(OPEN_KEY)); } catch (e) { return []; }
+  }
+
+  function collapsibles(panel, tab) {
+    panel.querySelectorAll('[data-collapse]').forEach(function (c) {
+      const h = c.querySelector('h2');
+      if (!h || h.querySelector('.ew-ctoggle')) return;
+      const key = C.collapsedKey(tab, c.dataset.collapse);
+      const name = h.firstChild && h.firstChild.nodeType === 3 ? h.firstChild.nodeValue : c.dataset.collapse;
+      const b = el('button', 'ew-tx ew-ctoggle');
+      b.type = 'button';
+      const apply = function () {
+        const shut = C.isCollapsed(readOpen(), key);
+        c.classList.toggle('ew-collapsed', shut);
+        b.textContent = shut ? '+' : '-';
+        b.setAttribute('aria-expanded', String(!shut));
+        b.setAttribute('aria-label', (shut ? 'expand ' : 'collapse ') + name);
+        b.title = b.getAttribute('aria-label');
+      };
+      b.addEventListener('click', function () {
+        try { localStorage.setItem(OPEN_KEY, C.serializeCollapsed(C.toggleCollapsed(readOpen(), key))); } catch (e) {
+          c.classList.toggle('ew-collapsed'); return; // storage optional: toggle this view only
+        }
+        apply();
+      });
+      c.classList.add('ew-collapsible');
+      h.insertBefore(b, h.firstChild);
+      apply();
+    });
+  }
+
   function tabIds() {
     return Array.prototype.map.call(document.querySelectorAll('.ew-tab'), function (b) { return b.dataset.tab; });
   }
@@ -109,6 +146,7 @@
         if (window.EWLeveling) window.EWLeveling.mount(p);
         if (window.EWPets) window.EWPets.mount(p); // plan 043
         if (window.EWInventory) window.EWInventory.mount(p); // plan 045
+        collapsibles(p, t.id); // plan 076
       } else if (t.id === 'grind' && window.EWGrind) {
         window.EWGrind.mount(p);
       } else if (t.id === 'events' && window.EWEvents) {

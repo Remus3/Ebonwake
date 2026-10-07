@@ -57,7 +57,7 @@ test('whatNowLine: one overlay line; all clear; - without data', () => {
 });
 
 test('composeNow: What now card leads Home, top row highlighted with an open link', () => {
-  const cards = C.composeNow({ at: {}, whatnow: view() }, T0);
+  const cards = C.composeNow({ at: {}, whatnow: view() }, T0).cards;
   assert.strictEqual(cards[0].id, 'whatnow');
   const c = cards[0];
   assert.strictEqual(c.title, 'What now');
@@ -72,16 +72,26 @@ test('composeNow: What now card leads Home, top row highlighted with an open lin
 
 test('composeNow: all clear keeps the card; a first-run card leads over it', () => {
   const clear = { top: null, next: [], empty: true, empty_text: 'All clear - play', errors: [] };
-  const cards = C.composeNow({ at: {}, whatnow: clear }, T0);
+  const out = C.composeNow({ at: {}, whatnow: clear }, T0);
+  const cards = out.cards;
   assert.strictEqual(cards[0].id, 'whatnow');
   assert.strictEqual(cards[0].empty, 'All clear - play');
+  assert.ok(out.quiet.every((q) => q.title !== 'What now'), 'What now never goes quiet');
   const ob = { show: true, done: 0, total: 1, steps: [{ id: 'bdo', title: 'Point EW at BDO', done: false,
     link: { tab: 'system' } }] };
-  const ids = C.composeNow({ at: {}, whatnow: clear, onboarding: ob }, T0).map((x) => x.id);
+  const ids = C.composeNow({ at: {}, whatnow: clear, onboarding: ob }, T0).cards.map((x) => x.id);
   assert.deepStrictEqual(ids.slice(0, 2), ['onboarding', 'whatnow']);
-  const busy = C.composeNow({ at: {}, whatnow: view(), onboarding: ob }, T0).map((x) => x.id);
+  const busy = C.composeNow({ at: {}, whatnow: view(), onboarding: ob }, T0).cards.map((x) => x.id);
   assert.deepStrictEqual(busy.slice(0, 2), ['whatnow', 'onboarding']);
-  assert.ok(C.composeNow({ at: {} }, T0).every((x) => x.id !== 'whatnow'), '404 drops the card');
+  assert.ok(C.composeNow({ at: {} }, T0).cards.every((x) => x.id !== 'whatnow'), '404 drops the card');
+});
+
+test('plan 076: What now rows carry the action source + due for the Timers dedupe', () => {
+  const c = C.composeNow({ at: {}, whatnow: view() }, T0).cards[0];
+  assert.strictEqual(c.wide, true);
+  assert.strictEqual(c.rows[0].source, 'boss');
+  assert.strictEqual(c.rows[0].due, T0 + 8 * M);
+  assert.strictEqual(c.rows[2].due, null);
 });
 
 test('overlay: whatNow widget default on, opt-out via config', () => {
