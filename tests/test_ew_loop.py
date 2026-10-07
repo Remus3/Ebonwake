@@ -1097,6 +1097,13 @@ def test_plan_and_handoff_prompts_keep_lanes_off_roadmap_and_name_ruff():
         assert "python -m ruff check server tools tests" in prompt
 
 
+def test_lane_prompts_give_scratch_scripts_a_task_unique_name():
+    # session 9: two agents' generic prog.py clobbered each other's progress file
+    item = {"id": "012", "title": "t", "text": "x"}
+    assert "(p012-build_*.py)" in ew_loop.plan_prompt(item)
+    assert "(012_*.py)" in ew_loop.handoff_prompt(item)
+
+
 def test_merge_rerun_of_an_already_merged_commit_is_a_no_op(tmp_path):
     root, wt = git_world(tmp_path)
     sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: PASS"}])
