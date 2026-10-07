@@ -311,12 +311,13 @@ test('Home is the first tab on the server and loaded by the dashboard', () => {
   assert.match(read('dashboard/dashboard.js'), /EWHome/);
 });
 
-test('home.js is read-only apart from daily ticks + the plan 051 dismiss through the bridge', () => {
+test('home.js is read-only apart from daily ticks, the plan 051 dismiss and the plan 074 ack', () => {
   const src = read('dashboard/home.js');
   assert.doesNotMatch(src, /innerHTML|insertAdjacentHTML|eval\(/);
   const posts = src.match(/\.post\(\s*'[^']+'/g) || [];
   assert.deepStrictEqual(posts.map((p) => p.replace(/\s+/g, '')),
-    [".post('/api/today'", ".post('/api/onboarding'"]);
+    [".post('/api/today'", ".post('/api/maint/digest'", ".post('/api/onboarding'"]);
+  assert.match(src, /\{ ack: key \}/);
   assert.match(src, /\{ tick: /);
   assert.doesNotMatch(src, /untick|remove:|add:/);
   ['/api/today', '/api/grind', '/api/leveling', '/api/events', '/api/market/watch'].forEach((p) => {

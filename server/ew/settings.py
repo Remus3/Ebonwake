@@ -27,10 +27,11 @@ WIDGETS = {"grindSession": True, "grindBuff": True, "eventsSoon": True,
            "leveling": False, "season": False, "marketTicker": False,
            "worldBoss": False, "dice": False, "whatNow": True}  # plan 069: whatNow
 # Plan 026 rule names (+ plan 032 bossSoon, plan 070 resetSoon, plan 075
-# loginRisk); default off except marketAlert and buffEnding.
+# loginRisk, plan 074 maintLoss); default off except marketAlert and buffEnding.
 NOTIFY = {"marketAlert": True, "buffEnding": True, "hotTime": False,
           "resetPassed": False, "newCoupon": False, "gameExit": False,
-          "bossSoon": False, "resetSoon": False, "loginRisk": False}
+          "bossSoon": False, "resetSoon": False, "loginRisk": False,
+          "maintLoss": False}
 THEMES = ("system", "dark", "light")
 OVERLAY_MODES = ("auto", "pin", "block")  # plan 067: per-widget pin / block
 MODS = ("Control", "Ctrl", "Alt", "Shift", "CommandOrControl", "Super")

@@ -109,13 +109,14 @@ def gate(hits, game_state, cfg, enabled=True):
     rules fire; a held ladder hit is stale (its mark passed while the game was
     closed) and goes to `drop`, which the caller marks seen so it never fires
     late; any other held hit is left out of both and re-evaluated next round,
-    so it fires at the next logged_in if its rule still produces it."""
+    so it fires at the next logged_in if its rule still produces it. Plan 074:
+    a hit marked `closed` (the maintLoss T-24 h / T-1 h toasts) fires anyway."""
     if not is_quiet(game_state, cfg, enabled):
         return list(hits), []
     allow = set(cfg["quiet"]["allow"])
     fire, drop = [], []
     for h in hits:
-        if h.get("rule") in allow:
+        if h.get("rule") in allow or h.get("closed") is True:
             fire.append(h)
         elif h.get("ladder"):
             drop.append(h)
@@ -270,9 +271,10 @@ class PromptRegistry:
         ladder = parse_ladder(s.get("notify.ladder_min")) or tuple(self.cfg["ladder_min"])
         return quiet, list(ladder)
 
-    def view(self, game_state=None, timers=None):
+    def view(self, game_state=None, timers=None, maint_loss=None):
         """GET /api/prompts: the quiet gate + ladder the notify engine applies,
-        the live prompts, and `timers` (reset / maintenance) for the ladder."""
+        the live prompts, `timers` (reset / maintenance) for the ladder and
+        plan 074 `maint_loss` [{key, at, title, text}] (unacked loss warnings)."""
         now = float(self.clock())
         quiet_on, ladder = self.notify_prefs()
         with self._lock:
@@ -287,4 +289,5 @@ class PromptRegistry:
                 "allow_closed": list(self.cfg["quiet"]["allow"]), "ladder_min": ladder,
                 "ttl_s": dict(self.cfg["ttl_s"]), "session": d["session"],
                 "prompts": live, "timers": [dict(t, at=_iso(t["at"])) for t in (timers or [])],
+                "maint_loss": [dict(t, at=_iso(t["at"])) for t in (maint_loss or [])],
                 "updated": _iso(now)}

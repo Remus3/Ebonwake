@@ -4337,7 +4337,7 @@
   // count `due` down. Junk actions are dropped.
   const WHATNOW_TABS = { boss: 'today', reset: 'today', buff: 'grind', hot: 'progress',
     maint: 'events', coupon: 'events', dice: 'today', market: 'market', deadline: 'events',
-    ocr: 'system' };
+    ocr: 'system', maint_loss: 'events', event: 'events' };
   const WHATNOW_EMPTY = 'All clear - play';
 
   function whatNowAction(a) {
@@ -4389,14 +4389,56 @@
     return c;
   }
 
+  // ---- Before-maintenance digest (plan 074) ----
+  // GET /api/maint/digest {maint: {start_utc, end_utc, source}, show, warnings
+  // [{key, text, notice_no, url, due_utc}], ending [{kind, title, ends}], acked}.
+  // The server decides `show` (T-24 h); the card counts down locally.
+  const MAINT_KEY_RE = /^[0-9]{1,9}:[0-9a-f]{12}$/;
+  const MAINT_TEXT_MAX = 200;
+
+  // "in 18 h" (whole hours from 1 h), "in 40 m" below an hour, 'now' once due.
+  function maintInText(ms) {
+    if (!isNum(ms)) return '';
+    if (ms <= 0) return 'now';
+    if (ms >= 3600000) return 'in ' + Math.floor(ms / 3600000) + ' h';
+    return 'in ' + Math.max(1, Math.floor(ms / 60000)) + ' m';
+  }
+
+  function nowMaintDigest(view, now) {
+    if (!plainObject(view) || view.show !== true || !plainObject(view.maint)) return null;
+    const start = typeof view.maint.start_utc === 'string' ? Date.parse(view.maint.start_utc) : NaN;
+    if (isNaN(start)) return null;
+    const rows = [];
+    (Array.isArray(view.warnings) ? view.warnings : []).forEach(function (w) {
+      if (!plainObject(w) || typeof w.text !== 'string' || !w.text || w.text.length > MAINT_TEXT_MAX ||
+          typeof w.key !== 'string' || !MAINT_KEY_RE.test(w.key)) return;
+      const r = nowRow(w.text, '', 'official notice ' + w.notice_no, 'warn');
+      r.ack = w.key;
+      rows.push(r);
+    });
+    (Array.isArray(view.ending) ? view.ending : []).forEach(function (e) {
+      if (!plainObject(e) || !validTitle(e.title) || typeof e.ends !== 'string') return;
+      const ends = Date.parse(e.ends);
+      if (isNaN(ends)) return;
+      rows.push(nowRow(e.title, fmtDuration(ends - now), typeof e.kind === 'string' ? e.kind + ' ends' : 'ends'));
+    });
+    return nowCard('maintdigest', 'Before maintenance (' + maintInText(start - now) + ')', 'events', rows,
+      'nothing ends at this maintenance');
+  }
+
+  function validMaintDigestBody(b) {
+    return plainObject(b) && Object.keys(b).length === 1 && typeof b.ack === 'string' && MAINT_KEY_RE.test(b.ack);
+  }
+
   // Plan 076: the quiet-line name of a card with nothing to show.
   const QUIET_NAMES = { dailies: 'dailies', timers: 'timers', buffs: 'buffs', session: 'grind',
     leveling: 'level ETA', alerts: 'alerts', coupons: 'coupons', summary: 'last session' };
 
   // {cards, quiet}: cards in Home order - What now, Get started (while
-  // shown), Dailies left, Timers, the content cards, Last session last. A card
-  // with no rows leaves the grid for `quiet` [{title, tab}] (one muted line);
-  // What now stays even when all clear.
+  // shown), Before maintenance (plan 074, from T-24 h), Dailies left, Timers,
+  // the content cards, Last session last. A card with no rows leaves the grid
+  // for `quiet` [{title, tab}] (one muted line); What now and Before
+  // maintenance stay even when empty.
   function composeNow(snapshots, nowMs) {
     const s = plainObject(snapshots) ? snapshots : {};
     const at = function (k) { return plainObject(s.at) && isNum(s.at[k]) ? s.at[k] : nowMs; };
@@ -4422,6 +4464,10 @@
       quiet.push({ title: QUIET_NAMES[c.id] || c.title, tab: c.tab });
       return false;
     });
+    // Plan 074: from T-24 h, right under What now / first run; never quiet
+    // (its empty text says nothing ends at this maintenance).
+    const md = has('maint') ? nowMaintDigest(s.maint, nowMs) : null;
+    if (md) cards.unshift(md);
     const ob = has('onboarding', 'steps') ? nowOnboarding(s.onboarding) : null;
     if (ob) cards.unshift(ob);  // plan 051: first-run card leads until done or dismissed
     // Plan 069: What now on top; an all-clear card yields to a first-run card.
@@ -4819,7 +4865,7 @@
   const THEMES = ['system', 'dark', 'light'];
   const UI_SCALE = [0.9, 1.3];
   const NOTIFY_RULES_PREFS = ['marketAlert', 'buffEnding', 'hotTime', 'resetPassed', 'newCoupon', 'gameExit', 'bossSoon',
-    'resetSoon', 'loginRisk'];
+    'resetSoon', 'loginRisk', 'maintLoss'];
   const SETTINGS_GROUPS = [
     { id: 'overlay', title: 'Overlay', fields: WIDGETS.map(function (w) {
       return { key: 'overlay.widgets.' + w, label: 'Widget: ' + w, type: 'bool' };
@@ -5635,7 +5681,8 @@
     '/api/ocr': validOcrBody, '/api/leveling': validLevelingBody, '/api/settings': validSettingsBody,
     '/api/bosses': validBossesBody, '/api/pets': validPetsBody, '/api/inventory': validInventoryBody,
     '/api/mounts': validMountsBody, '/api/onboarding': validOnboardingBody,
-    '/api/crafting': validCraftingBody, '/api/imperial': validImperialBody
+    '/api/crafting': validCraftingBody, '/api/imperial': validImperialBody,
+    '/api/maint/digest': validMaintDigestBody
   };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
@@ -6006,7 +6053,7 @@
     const drop = [];
     list.forEach(function (h) {
       if (!plainObject(h)) return;
-      if (allow.indexOf(h.rule) >= 0) fire.push(h);
+      if (allow.indexOf(h.rule) >= 0 || h.closed === true) fire.push(h); // plan 074 T-24 h / T-1 h
       else if (h.ladder === true) drop.push(h);
     });
     return { fire: fire, drop: drop };
@@ -6053,7 +6100,7 @@
     '/api/leveling': 'Leveling', '/api/settings': 'Settings', '/api/bosses': 'World bosses',
     '/api/pets': 'Pets', '/api/inventory': 'Inventory', '/api/mounts': 'Mounts',
     '/api/onboarding': 'Get started', '/api/crafting': 'Crafting',
-    '/api/imperial': 'Imperial delivery'
+    '/api/imperial': 'Imperial delivery', '/api/maint/digest': 'Maintenance warning'
   };
 
   // One POST result (the ew:post bridge reply) -> one toast.
@@ -6151,6 +6198,33 @@
     }).filter(Boolean);
   }
 
+  // Plan 074 maintLoss: unacked loss warnings of the before-maintenance digest
+  // (GET /api/prompts maint_loss [{key, at, title, text}]) on the alert ladder,
+  // plus one T-24 h and one T-1 h toast that pass the game-closed quiet.
+  const MAINT_LOSS_TOASTS = [[24, 23], [1, 0]]; // [hours mark, window floor in hours]
+
+  function maintLossHits(prev, next, now) {
+    const p = plainObject(next.prompts) ? next.prompts : null;
+    const steps = promptLadder(p);
+    const out = [];
+    (p && Array.isArray(p.maint_loss) ? p.maint_loss : []).forEach(function (t) {
+      if (!plainObject(t) || typeof t.key !== 'string' || typeof t.at !== 'string') return;
+      const left = Date.parse(t.at) - now;
+      if (isNaN(left) || left <= 0) return;
+      const text = typeof t.text === 'string' && t.text ? t.text : 'Unclaimed loss at maintenance';
+      MAINT_LOSS_TOASTS.forEach(function (w) {
+        if (left <= w[0] * 3600000 && left > w[1] * 3600000) {
+          const h = Object.assign(hit(t.key + ':' + w[0] + 'h', 'Before maintenance (in ' + fmtDuration(left) + ')', text),
+            { closed: true });
+          out.push(h);
+        }
+      });
+      const m = ladderStep(left, steps);
+      if (m !== null) out.push(ladderHit(t.key + ':' + m, 'Before maintenance in ' + m + 'm', text));
+    });
+    return out;
+  }
+
   function resetHits(prev, next, now) {
     if (!prev || !isNum(prev.at) || prev.at >= now) return [];
     const out = [];
@@ -6225,7 +6299,8 @@
     { name: 'gameExit', defaultOn: false, fire: gameHits },
     { name: 'bossSoon', defaultOn: false, fire: bossHits },
     { name: 'resetSoon', defaultOn: false, fire: resetSoonHits },
-    { name: 'loginRisk', defaultOn: false, fire: loginRiskHits }
+    { name: 'loginRisk', defaultOn: false, fire: loginRiskHits },
+    { name: 'maintLoss', defaultOn: false, fire: maintLossHits }
   ];
 
   // config/local.json `notify` block -> {rule: bool}; non-booleans keep the default.
@@ -6270,6 +6345,7 @@
         const o = { key: h.key, rule: r.name, title: notifyText(h.title, NOTIFY_TITLE_MAX) || r.name,
           body: notifyText(h.body, NOTIFY_BODY_MAX) };
         if (h.ladder === true) o.ladder = true; // plan 070: promptGate drops a stale one
+        if (h.closed === true) o.closed = true; // plan 074: fires while the game is closed
         out.push(o);
       });
     });
@@ -6617,6 +6693,9 @@
     whatNowLeft: whatNowLeft,
     whatNowLine: whatNowLine,
     nowWhatNow: nowWhatNow,
+    nowMaintDigest: nowMaintDigest,
+    maintInText: maintInText,
+    maintLossHits: maintLossHits,
     pendingStop: pendingStop,
     pendingStopText: pendingStopText,
     sessionPill: sessionPill,
