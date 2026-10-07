@@ -78,6 +78,18 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 071 | Self-curating market watch: seeded from shopping list / loot / recipes, thresholds from price bands | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 072 | World boss schedule drift check against a public NA table (robots-gated, banner only) | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 073 | Signal health digest: per-signal liveness with one-line fix hints | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
+| 076 | Home consolidation: full-width What now, one Timers card, quiet line for empty cards, no repeated facts | [ ] open |
+| 077 | One status truth: onboarding, profile card and stale styling derived from the signal digest | [ ] open |
+| 078 | Settings and formatting consistency: one control per overlay widget, human labels, local-time entry, palette button | [ ] open |
+
+UI/UX audit 2026-10-06 (research 0009): 21 findings, three consolidation
+plans, no new features, no dependency between them (any lane order). 076:
+Home shows What now truncated, the same boss / reset fact in 3-4 cards and
+6 empty cards. 077: three surfaces disagree about one signal and a Get
+started link dead-ends (smallest, highest correctness value). 078 (Settings duplicate overlay controls with a manual-mode default bug,
+raw identifier labels, remaining UTC entry, palette button). 047 and 050
+are extended only for gaps found live. Not planned: shared snapshot store
+(0009 M9), overlay base rows by context (L3).
 
 Autonomy deep dive 2026-10-06 (research 0007, operator order: self-aware,
 low-input EW): 13 plans 061-073 ranked by operator inputs removed per play
