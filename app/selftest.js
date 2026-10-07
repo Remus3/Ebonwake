@@ -5,7 +5,8 @@
    registration, and (plan 022) that the overlay sits inside its display's work
    area and off the minimap, and (plan 026) fires one synthetic toast + OS
    notification, and (plan 047) counts scrolling cards per tab - a failure
-   only when o.freshStore (EW_SELFTEST_FRESH=1). Never touches any other
+   only when o.freshStore (EW_SELFTEST_FRESH=1) - and (plan 076) fails on any
+   ellipsis-clipped element inside the What now card. Never touches any other
    window or the game. */
 'use strict';
 
@@ -30,6 +31,9 @@ const MEASURE = '(function(){var d=document.documentElement,b=document.body;' +
   // Plan 047: cards (or their list bodies) that scroll on this tab.
   'cardsScroll:a?Array.prototype.filter.call(a.querySelectorAll(".ew-card,.ew-card .ew-cbody"),' +
   'function(c){return c.scrollHeight>c.clientHeight+1;}).length:0,' +
+  // Plan 076: elements clipped with an ellipsis inside the What now card.
+  'wnClip:Array.prototype.filter.call(document.querySelectorAll("[data-card=\\"whatnow\\"] *"),' +
+  'function(n){return getComputedStyle(n).textOverflow==="ellipsis"&&n.scrollWidth>n.clientWidth;}).length,' +
   'tabs:Array.prototype.map.call(document.querySelectorAll(".ew-tab"),function(t){return t.dataset.tab;}),' +
   'pill:(document.getElementById("server-pill")||{}).textContent};})()';
 
@@ -88,6 +92,8 @@ async function run(o) {
       m.switched = m.active === id && m.activeH > 0;
       // Plan 047: on a fresh store no card scrolls; a lived-in store may.
       m.cardsFit = !(m.cardsScroll > 0);
+      // Plan 076: the What now text is never clipped (any store).
+      m.wnFit = !(m.wnClip > 0);
       res.tabs.push(m);
       let img = await o.dashboard.webContents.capturePage();
       for (let i = 0; i < 5 && img.isEmpty(); i++) {
@@ -136,7 +142,7 @@ async function run(o) {
       ? !core.rectsIntersect(res.overlay.bounds, core.minimapZone(place.workArea)) : null;
     res.freshStore = !!o.freshStore;
     res.ok = res.tabs.every(function (t) {
-      return t.fits && t.switched && t.painted && t.captured && (t.cardsFit || !res.freshStore);
+      return t.fits && t.switched && t.painted && t.captured && t.wnFit && (t.cardsFit || !res.freshStore);
     }) &&
       Object.keys(res.hotkeys).every(function (k) { return res.hotkeys[k].registered; }) &&
       res.overlay.toggled && res.overlay.cornerAlpha === 0 && !res.overlay.focusable &&

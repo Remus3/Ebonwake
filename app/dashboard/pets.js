@@ -224,6 +224,7 @@
 
   function card() {
     const c = el('section', 'ew-card ew-mcard');
+    c.dataset.collapse = 'pets';  // plan 076: header toggle (dashboard.js)
     const h = el('h2', null, 'Pets');
     const meta = el('span', 'ew-tmeta');
     const pill = el('span', 'ew-pill unknown', '-');

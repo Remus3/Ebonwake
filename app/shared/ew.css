@@ -417,6 +417,29 @@ html.ew-overlay, html.ew-overlay body { background: transparent; height: auto; o
 .ew-htick { padding: 0 6px; font-size: 12px; }
 .ew-herr { margin-top: 6px; font-size: 12px; }
 .ew-hcard h2 .ew-tx:hover { color: var(--fk-text); }
+/* Plan 076: What now spans the grid; each action is one button row whose
+   text wraps (never clipped), `why` on a muted second line. One muted
+   Quiet line names the empty cards. Collapsed cards show the header only. */
+.ew-wide { grid-column: 1 / -1; }
+.ew-card.ew-wide { grid-row: auto; }
+.ew-wnrow {
+  display: flex; flex-direction: column; align-items: stretch; gap: 1px; width: 100%; text-align: left;
+  padding: 3px 4px; border: 0; border-radius: var(--ew-radius); background: none; color: inherit; font: inherit;
+  cursor: pointer;
+}
+.ew-wnrow:hover { background: var(--fk-surface); }
+.ew-wnline { display: flex; align-items: baseline; gap: 8px; }
+.ew-wntext { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.ew-wnwhy { font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
+.ew-wnrow.warn .ew-wntext { font-weight: 600; }
+.ew-wnrow.warn .ew-hval { color: var(--fk-status-warn); }
+.ew-hquiet { font-size: 12px; padding: 0 4px; }
+.ew-ctoggle { margin-right: 4px; }
+.ew-collapsible > h2 { justify-content: flex-start; }
+.ew-collapsible > h2 > :last-child { margin-left: auto; }
+.ew-card.ew-collapsed { max-height: none; }
+.ew-collapsed > .ew-cbody { display: none; }
+.ew-collapsed > h2 { margin-bottom: 0; }
 /* Plan 026: toast region (dashboard only), bottom-right, max 4. */
 .ew-toasts {
   position: fixed; right: 12px; bottom: 12px; z-index: 50; display: flex; flex-direction: column;

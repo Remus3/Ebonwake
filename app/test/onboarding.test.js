@@ -69,7 +69,7 @@ test('nowOnboarding: shown only while the server says show', () => {
 });
 
 test('composeNow: the first-run card leads Home, absent when hidden or 404', () => {
-  const ids = (snap) => C.composeNow(snap, T0).map((c) => c.id);
+  const ids = (snap) => C.composeNow(snap, T0).cards.map((c) => c.id);
   assert.strictEqual(ids({ at: {}, onboarding: ob() })[0], 'onboarding');
   assert.ok(ids({ at: {}, onboarding: ob({ show: false }) }).indexOf('onboarding') < 0);
   assert.ok(ids({ at: {}, onboarding: null }).indexOf('onboarding') < 0);

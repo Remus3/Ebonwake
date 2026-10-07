@@ -7,7 +7,10 @@
    `whatnow` event's full view, plan 073 /api/signals - one pill on top only
    while a signal is bad) and
    lets C.composeNow order the cards; a 404 (old server) drops that payload's
-   card, other errors keep the last data. Read-only except the one-click tick
+   card, other errors keep the last data. Plan 076: What now spans the full
+   width, each action one button row (text never clipped, `why` on a muted
+   second line); cards with nothing to show collapse into one muted "Quiet:"
+   line at the bottom, each name a link to its tab. Read-only except the one-click tick
    of a daily, which reuses the Today tick route through the dashboard preload,
    and the first-run card's dismiss (POST /api/onboarding, same bridge).
    Countdowns update in place every second; a structural change redraws. Every
@@ -136,11 +139,11 @@
 
   // Card ids, labels and tick ids: a change means a full redraw; otherwise
   // only the countdown values are refreshed in place.
-  function shapeOf(cards) {
-    return JSON.stringify(cards.map(function (c) {
+  function shapeOf(out) {
+    return JSON.stringify(out.cards.map(function (c) {
       return [c.id, c.meta, c.empty, c.rows.map(function (r) { return [r.label, r.note, r.cls, r.tick]; })];
-    })) + '|' + JSON.stringify(S.err) + '|' + Object.keys(S.pending).join(',') + '|' + S.msg + '|' + S.obMsg +
-      '|' + JSON.stringify(C.signalPill(S.snap.signals));
+    })) + '|' + JSON.stringify(out.quiet) + '|' + JSON.stringify(S.err) + '|' + Object.keys(S.pending).join(',') +
+      '|' + S.msg + '|' + S.obMsg + '|' + JSON.stringify(C.signalPill(S.snap.signals));
   }
 
   // Plan 073: one pill on top only while a signal is `bad`; it opens System.
@@ -154,12 +157,30 @@
     return b;
   }
 
+  // Plan 076: one What now action = one button opening its tab; the text
+  // wraps (never ellipsized) and `why` sits on a muted second line.
+  function wnRowNode(r) {
+    const n = el('button', 'ew-wnrow' + (r.cls ? ' ' + r.cls : ''));
+    n.type = 'button';
+    n.title = 'open ' + r.go.tab;
+    n.addEventListener('click', function () { openTab(r.go.tab); });
+    const top = el('span', 'ew-wnline');
+    top.appendChild(el('span', 'ew-wntext', r.label));
+    const v = el('span', 'ew-hval', r.value);
+    top.appendChild(v);
+    S.vals.push(v);
+    n.appendChild(top);
+    if (r.note) n.appendChild(el('span', 'ew-muted ew-wnwhy', r.note));
+    return n;
+  }
+
   function rowNode(r) {
     const n = el('div', 'ew-hrow' + (r.cls ? ' ' + r.cls : ''));
     if (r.tick) {
-      const b = el('button', 'ew-btn ew-htick', 'done');
+      const b = el('button', 'ew-btn ew-htick', 'tick');
       b.type = 'button';
       b.title = 'tick on Today';
+      b.setAttribute('aria-label', 'tick ' + r.label);
       b.disabled = r.tick in S.pending;
       b.addEventListener('click', function () { tickDaily(r.tick); });
       n.appendChild(b);
@@ -182,7 +203,7 @@
   }
 
   function cardNode(c) {
-    const sec = el('section', 'ew-card ew-mcard ew-hcard');
+    const sec = el('section', 'ew-card ew-mcard ew-hcard' + (c.wide ? ' ew-wide' : ''));
     sec.dataset.card = c.id;
     const h = el('h2', null, c.title);
     const meta = el('span', 'ew-tmeta');
@@ -190,6 +211,7 @@
     const go = el('button', 'ew-tx', 'open');
     go.type = 'button';
     go.title = 'open the ' + c.tab + ' tab';
+    go.setAttribute('aria-label', 'open ' + c.tab);
     go.addEventListener('click', function () { openTab(c.tab); });
     meta.appendChild(go);
     if (c.dismiss) {
@@ -207,10 +229,26 @@
     if (c.id === 'onboarding' && S.obMsg) body.appendChild(el('div', 'ew-err', S.obMsg));
     if (c.empty) body.appendChild(el('div', 'ew-muted', c.empty));
     const list = el('div', 'ew-list');
-    c.rows.forEach(function (r) { list.appendChild(rowNode(r)); });
+    c.rows.forEach(function (r) { list.appendChild(c.id === 'whatnow' ? wnRowNode(r) : rowNode(r)); });
     body.appendChild(list);
     sec.appendChild(body);
     return sec;
+  }
+
+  // Plan 076: "Quiet: buffs, grind, alerts" - each name opens its tab.
+  function quietNode(quiet) {
+    if (!quiet.length) return null;
+    const n = el('div', 'ew-muted ew-hquiet ew-wide', 'Quiet: ');
+    quiet.forEach(function (q, i) {
+      if (i) n.appendChild(document.createTextNode(', '));
+      const b = el('button', 'ew-tx', q.title);
+      b.type = 'button';
+      b.title = 'nothing to show - open the ' + q.tab + ' tab';
+      b.setAttribute('aria-label', 'open ' + q.tab);
+      b.addEventListener('click', function () { openTab(q.tab); });
+      n.appendChild(b);
+    });
+    return n;
   }
 
   function errNode() {
@@ -222,13 +260,16 @@
   function draw() {
     const p = S.panel;
     if (!p || !p.isConnected) return;
-    const cards = C.composeNow(S.snap, Date.now());
-    const shape = shapeOf(cards);
+    const out = C.composeNow(S.snap, Date.now());
+    const cards = out.cards;
+    const shape = shapeOf(out);
     if (shape === S.shape) { values(cards); return; }
     S.shape = shape;
     S.vals = [];
     p.textContent = '';
     cards.forEach(function (c) { p.appendChild(cardNode(c)); });
+    const q = quietNode(out.quiet);
+    if (q) p.appendChild(q);
     const e = errNode();
     if (e && p.firstChild) p.firstChild.querySelector('.ew-cbody').appendChild(e);
     const sig = signalNode();

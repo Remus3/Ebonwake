@@ -3996,10 +3996,30 @@
     return { label: label, value: value || '', note: note || '', cls: cls || '', tick: null };
   }
 
+  // ---- Timers (plan 076) ----
+  // One card for every countdown Home shows: daily / weekly / custom resets,
+  // the next 3 world bosses and events ending within 48 h, soonest first (a
+  // due tie keeps resets, bosses, events order), at most TIMERS_MAX rows. A row
+  // What now already lists (same source, same due minute) is dropped, so one
+  // fact appears once. Rows carry {source, due} (ms) for that match.
+  const TIMERS_MAX = 6;
+  const TIMERS_DEDUPE = ['reset', 'boss', 'coupon', 'maint'];
+
+  function timerRow(label, value, note, cls, source, due) {
+    const r = nowRow(label, value, note, cls);
+    r.source = source;
+    r.due = due;
+    return r;
+  }
+
+  function dueKey(source, due) { return source + '@' + Math.floor(due / 60000); }
+
   // Daily + weekly resets, then each distinct custom item rule, soonest first.
-  function nowResets(today, now) {
-    const rows = [nowRow('Daily reset', fmtDuration(nextDailyReset(now) - now)),
-      nowRow('Weekly reset', fmtDuration(nextWeeklyReset(now) - now))];
+  function timerResets(today, now) {
+    const daily = nextDailyReset(now);
+    const weekly = nextWeeklyReset(now);
+    const rows = [timerRow('Daily reset', fmtDuration(daily - now), '', '', 'reset', daily),
+      timerRow('Weekly reset', fmtDuration(weekly - now), '', '', 'reset', weekly)];
     const rules = {};
     (today ? today.items : []).forEach(function (it) {
       const rule = plainObject(it) && validTitle(it.title) ? itemRule(it.kind, it.reset) : null;
@@ -4010,8 +4030,44 @@
     });
     Object.keys(rules).map(function (k) { return [k, rules[k]]; })
       .sort(function (a, b) { return a[1].next - b[1].next || (a[0] < b[0] ? -1 : 1); })
-      .forEach(function (p) { rows.push(nowRow(p[1].titles.join(', '), fmtDuration(p[1].next - now), p[0])); });
-    return nowCard('resets', 'Next resets', 'today', rows, '');
+      .forEach(function (p) {
+        rows.push(timerRow(p[1].titles.join(', '), fmtDuration(p[1].next - now), p[0], '', 'reset', p[1].next));
+      });
+    return rows;
+  }
+
+  // Plan 032: next 3 world bosses, read-only here (ticks live on Today). The
+  // Garmoth n/3 count is the card meta only, so the row carries plain names.
+  function timerBosses(view, now) {
+    return bossRows(view, now, 3).map(function (r) {
+      return timerRow(r.names.map(function (n) { return n.name; }).join(' + '), r.left, 'world boss',
+        r.done ? 'ew-stale' : '', 'boss', r.at_ms);
+    });
+  }
+
+  function timerEnding(events, at, now) {
+    return eventRows(events.items, at, now).filter(function (r) { return r.soon; }).map(function (r) {
+      const end = eventDateMs(r.ends, true);
+      return timerRow(r.title, fmtLeft(r.left_s), typeof r.code === 'string' ? r.code : '', 'warn',
+        r.kind === 'coupon' ? 'coupon' : 'event', end !== null ? end : now + r.left_s * 1000);
+    });
+  }
+
+  // bosses / events: the GET payloads or null (absent, 404); at: the events
+  // fetch time; whatnow: the GET /api/whatnow view or null.
+  function nowTimers(today, bosses, events, at, now, whatnow) {
+    let rows = timerResets(today, now);
+    if (bosses) rows = rows.concat(timerBosses(bosses, now));
+    if (events) rows = rows.concat(timerEnding(events, at, now));
+    const shown = {};
+    whatNowActions(whatnow).forEach(function (a) {
+      if (a.due !== null && TIMERS_DEDUPE.indexOf(a.source) >= 0) shown[dueKey(a.source, a.due)] = true;
+    });
+    rows = rows.filter(function (r) { return !shown[dueKey(r.source, r.due)]; })
+      .sort(function (a, b) { return a.due - b.due; }).slice(0, TIMERS_MAX);
+    const c = nowCard('timers', 'Timers', 'today', rows, 'no timers due');
+    c.meta = bosses ? bossGarmothText(bosses) : '';
+    return c;
   }
 
   function nowDailies(today, now) {
@@ -4201,28 +4257,11 @@
       market.items.length ? 'no alert hits' : 'watch an item on Market to get alerts');
   }
 
-  function nowEnding(events, at, now) {
-    const rows = eventRows(events.items, at, now).filter(function (r) { return r.soon; }).map(function (r) {
-      return nowRow(r.title, fmtLeft(r.left_s), typeof r.code === 'string' ? r.code : '', 'warn');
-    });
-    return nowCard('ending', 'Ending within 48 h', 'events', rows, 'nothing ends within 48 h');
-  }
-
   function nowCoupons(events) {
     const rows = suggestedRows(events.suggested, events.items).map(function (c) {
       return nowRow(c.code, c.date || '', c.title);
     });
     return nowCard('coupons', 'New coupons', 'events', rows, 'no new coupons');
-  }
-
-  // Plan 032: next 3 world bosses, read-only here (ticks live on Today).
-  function nowBosses(view, now) {
-    const rows = bossRows(view, now, 3).map(function (r) {
-      return nowRow(r.text, r.left, '', r.done ? 'ew-stale' : '');
-    });
-    const c = nowCard('bosses', 'World bosses', 'today', rows, 'no spawns listed');
-    c.meta = bossGarmothText(view);
-    return c;
   }
 
   // ---- What now (plan 069) ----
@@ -4267,44 +4306,95 @@
   }
 
   // Home: the What now card (top action highlighted), null without a payload.
+  // Plan 076: full width (`wide`); rows keep {source, due} for the Timers dedupe.
   function nowWhatNow(view, now) {
     if (!plainObject(view)) return null;
     const acts = whatNowActions(view);
     const rows = acts.map(function (a, i) {
       const r = nowRow(a.text, whatNowLeft(a, now), a.why, i === 0 ? 'warn' : '');
       r.go = { tab: a.tab };
+      r.source = a.source;
+      r.due = a.due;
       return r;
     });
-    return nowCard('whatnow', 'What now', acts.length ? acts[0].tab : 'today', rows, WHATNOW_EMPTY);
+    const c = nowCard('whatnow', 'What now', acts.length ? acts[0].tab : 'today', rows, WHATNOW_EMPTY);
+    c.wide = true;
+    return c;
   }
 
+  // Plan 076: the quiet-line name of a card with nothing to show.
+  const QUIET_NAMES = { dailies: 'dailies', timers: 'timers', buffs: 'buffs', session: 'grind',
+    leveling: 'level ETA', alerts: 'alerts', coupons: 'coupons', summary: 'last session' };
+
+  // {cards, quiet}: cards in Home order - What now, Get started (while
+  // shown), Dailies left, Timers, the content cards, Last session last. A card
+  // with no rows leaves the grid for `quiet` [{title, tab}] (one muted line);
+  // What now stays even when all clear.
   function composeNow(snapshots, nowMs) {
     const s = plainObject(snapshots) ? snapshots : {};
     const at = function (k) { return plainObject(s.at) && isNum(s.at[k]) ? s.at[k] : nowMs; };
     const has = function (k, list) { return plainObject(s[k]) && (!list || Array.isArray(s[k][list])); };
     const today = has('today', 'items') ? s.today : null;
-    const cards = [nowResets(today, nowMs)];
-    if (today) cards.push(nowDailies(today, nowMs));
+    const events = has('events', 'items') ? s.events : null;
+    const wnView = has('whatnow') ? s.whatnow : null;
+    const all = [];
+    if (today) all.push(nowDailies(today, nowMs));
+    all.push(nowTimers(today, has('bosses', 'next') ? s.bosses : null, events, at('events'), nowMs, wnView));
     if (has('grind')) {
-      cards.push(nowBuffs(s.grind, at('grind'), nowMs));
-      cards.push(nowSession(s.grind, at('grind'), nowMs));
+      all.push(nowBuffs(s.grind, at('grind'), nowMs));
+      all.push(nowSession(s.grind, at('grind'), nowMs));
     }
     const lv = has('leveling') ? normalizeLeveling(s.leveling) : null;
-    if (lv) cards.push(nowLeveling(lv, at('leveling'), nowMs));
-    if (has('market', 'items')) cards.push(nowAlerts(s.market));
-    if (has('events', 'items')) {
-      cards.push(nowEnding(s.events, at('events'), nowMs));
-      if (plainObject(s.events.suggested)) cards.push(nowCoupons(s.events));
-    }
-    if (has('bosses', 'next')) cards.push(nowBosses(s.bosses, nowMs));
-    if (has('summary') && plainObject(s.summary.session)) cards.push(nowSummary(s.summary));
+    if (lv) all.push(nowLeveling(lv, at('leveling'), nowMs));
+    if (has('market', 'items')) all.push(nowAlerts(s.market));
+    if (events && plainObject(events.suggested)) all.push(nowCoupons(events));
+    if (has('summary') && plainObject(s.summary.session)) all.push(nowSummary(s.summary));
+    const quiet = [];
+    const cards = all.filter(function (c) {
+      if (c.rows.length) return true;
+      quiet.push({ title: QUIET_NAMES[c.id] || c.title, tab: c.tab });
+      return false;
+    });
     const ob = has('onboarding', 'steps') ? nowOnboarding(s.onboarding) : null;
     if (ob) cards.unshift(ob);  // plan 051: first-run card leads until done or dismissed
     // Plan 069: What now on top; an all-clear card yields to a first-run card.
-    const wn = has('whatnow') ? nowWhatNow(s.whatnow, nowMs) : null;
+    const wn = wnView ? nowWhatNow(wnView, nowMs) : null;
     if (wn && wn.rows.length) cards.unshift(wn);
     else if (wn) cards.splice(ob ? 1 : 0, 0, wn);
-    return cards;
+    return { cards: cards, quiet: quiet };
+  }
+
+  // ---- Collapsible cards (plan 076) ----
+  // Key "tab/card". Storage (localStorage, read by the shell) keeps the keys
+  // the operator EXPANDED, so a fresh or corrupt value means every
+  // collapsible card starts collapsed. Pure; inputs are never mutated.
+  const COLLAPSE_KEY = /^[a-z]{1,20}\/[a-z]{1,20}$/;
+
+  function collapsedKey(tab, card) { return tab + '/' + card; }
+
+  // Stored JSON -> list of valid keys; anything else -> [] (the default).
+  function parseCollapsed(raw) {
+    let v;
+    try { v = JSON.parse(raw); } catch (e) { return []; }
+    if (!Array.isArray(v)) return [];
+    return v.filter(function (k, i) {
+      return typeof k === 'string' && COLLAPSE_KEY.test(k) && v.indexOf(k) === i;
+    });
+  }
+
+  // List -> stored JSON; the inverse of parseCollapsed (invalid keys dropped).
+  function serializeCollapsed(list) {
+    return JSON.stringify(parseCollapsed(JSON.stringify(Array.isArray(list) ? list : [])));
+  }
+
+  // Flip one card: a new list with `key` added (expanded) or removed (collapsed).
+  function toggleCollapsed(list, key) {
+    const cur = Array.isArray(list) ? list : [];
+    return cur.indexOf(key) >= 0 ? cur.filter(function (k) { return k !== key; }) : cur.concat([key]);
+  }
+
+  function isCollapsed(list, key) {
+    return !Array.isArray(list) || list.indexOf(key) < 0;
   }
 
   // ---- Density + accessibility (plan 047) ----
@@ -4574,10 +4664,13 @@
   }
 
   // Quiet rows (plan 022): a row whose value says nothing is hidden; offline
-  // still shows (it is news).
+  // still shows (it is news). Plan 076: a Today line with no daily and no
+  // weekly items ("daily 0/0  weekly 0/0") says nothing either.
   const OV_QUIET = ['', '-', '?', 'none', 'idle'];
+  const OV_TODAY_EMPTY = /^daily 0\/0\s+weekly 0\/0$/;
   function ovQuiet(text) {
-    return text === null || text === undefined || OV_QUIET.indexOf(String(text)) >= 0;
+    return text === null || text === undefined || OV_QUIET.indexOf(String(text)) >= 0 ||
+      OV_TODAY_EMPTY.test(String(text));
   }
 
   function ovServerRowHidden(text) {
@@ -6423,6 +6516,15 @@
     deadlineLine: deadlineLine,
     deadlineAlert: deadlineAlert,
     composeNow: composeNow,
+    nowTimers: nowTimers,
+    nowDailies: nowDailies,
+    nowSession: nowSession,
+    nowAlerts: nowAlerts,
+    collapsedKey: collapsedKey,
+    parseCollapsed: parseCollapsed,
+    toggleCollapsed: toggleCollapsed,
+    serializeCollapsed: serializeCollapsed,
+    isCollapsed: isCollapsed,
     whatNowActions: whatNowActions,
     whatNowLeft: whatNowLeft,
     whatNowLine: whatNowLine,

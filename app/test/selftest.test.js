@@ -42,7 +42,8 @@ function fakes(log, opts) {
         const m = /data-tab="([a-z]+)"/.exec(src);
         if (m && src.indexOf('.click()') >= 0) { active = m[1]; log.push('click:' + active); return null; }
         return { scrollH: 700, clientH: 761, scrollW: 1200, clientW: 1264, active: active,
-          activeH: 500, cardsScroll: opts.cardsScroll || 0, tabs: TABS, pill: 'server ok' };
+          activeH: 500, cardsScroll: opts.cardsScroll || 0, wnClip: active === 'home' ? opts.wnClip || 0 : 0,
+          tabs: TABS, pill: 'server ok' };
       },
       capturePage: async () => { log.push('capture:' + active); return fakeImage(false); }
     }
@@ -155,4 +156,13 @@ test('plan 047: a scrolling card fails a fresh-store self-test, is reported othe
   assert.strictEqual(lived.res.freshStore, false);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'),
     /freshStore: process\.env\.EW_SELFTEST_FRESH === '1'/);
+});
+
+// Plan 076: the What now card never clips its text (any store).
+test('plan 076: an ellipsized element inside the What now card fails the self-test', async () => {
+  const ok = await runFake({ freshStore: true });
+  assert.strictEqual(ok.res.tabs[0].wnFit, true);
+  const clipped = await runFake({ wnClip: 1 });
+  assert.strictEqual(clipped.res.tabs[0].wnFit, false);
+  assert.strictEqual(clipped.res.ok, false);
 });

@@ -171,18 +171,20 @@ test('Today card: bosses.js mounted by today.js, ticks via the bridge, safe DOM'
   assert.match(read('preload.js'), /\/api\/bosses/);
 });
 
-test('composeNow: bosses card (next 3, Garmoth meta), absent without the payload', () => {
-  const cards = C.composeNow({ bosses: view() }, NOW);
-  const b = cards.filter((c) => c.id === 'bosses')[0];
-  assert.ok(b);
+// Plan 076: the bosses fold into the Home Timers card (Garmoth n/3 as its meta).
+test('composeNow: next 3 bosses in Timers (Garmoth meta), absent without the payload', () => {
+  const timers = (v) => C.composeNow(v, NOW).cards.filter((c) => c.id === 'timers')[0];
+  const b = timers({ bosses: view() });
   assert.strictEqual(b.tab, 'today');
   assert.strictEqual(b.meta, 'Garmoth 1/3 this week');
-  assert.deepStrictEqual(b.rows.map((r) => [r.label, r.value]), [
-    ['Sangoon + Karanda', '4h 50m'], ['Golden Pig King + Kutum', '8h 05m'], ['Garmoth 1/3', '9h 05m']]);
+  const rows = b.rows.filter((r) => r.source === 'boss');
+  assert.deepStrictEqual(rows.map((r) => [r.label, r.value]), [
+    ['Sangoon + Karanda', '4h 50m'], ['Golden Pig King + Kutum', '8h 05m'], ['Garmoth', '9h 05m']]);
   assert.ok(b.rows.every((r) => r.tick === null), 'Home stays read-only for bosses');
-  const looted = C.composeNow({ bosses: view({ garmoth: { looted: 3, cap: 3 } }) }, NOW);
-  assert.strictEqual(looted.filter((c) => c.id === 'bosses')[0].rows[2].cls, 'ew-stale');
-  assert.ok(!C.composeNow({}, NOW).some((c) => c.id === 'bosses'));
+  const looted = timers({ bosses: view({ garmoth: { looted: 3, cap: 3 } }) });
+  assert.strictEqual(looted.rows.filter((r) => r.source === 'boss')[2].cls, 'ew-stale');
+  assert.ok(!timers({}).rows.some((r) => r.source === 'boss'));
+  assert.strictEqual(timers({}).meta, '');
   assert.ok(read('dashboard/home.js').indexOf("'/api/bosses'") >= 0);
 });
 
