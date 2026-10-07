@@ -29,8 +29,9 @@ from pathlib import Path
 
 POLICY_FILE = Path(__file__).resolve().parent / "data" / "override_policy.json"
 RULE_RE = re.compile(r"^(days:[1-9][0-9]{0,3}|until:maint_end|until:path_missing|none)$")
+# Plan 083: `portrait.*` (a gallery pick) is cosmetic - it changes no number.
 NONE_OK = ("market.fame_pct", "profile.family", "bdo.install_dir", "bdo.documents_dir",
-           "ui.scale")
+           "ui.scale", "portrait.*")
 INCIDENT_REASON = "incident switch in config/local.json; the fixed value returns when it expires"
 SOURCES = ("typed", "config")
 MAX_RETIRED = 50

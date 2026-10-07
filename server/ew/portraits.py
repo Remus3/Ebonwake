@@ -15,6 +15,13 @@ seen AND the Progress class set -> bind (`single`). A2: an OCR class read at or
 over the plan 063 gate (`bind_ocr`) replaces a `single` binding. A second
 characterNo never inherits a binding; an unbound portrait is indexed but never
 returned for a class (the chip shows an empty slot instead).
+
+Gallery (plan 083): every ScreenShot file the plan 008 watcher lists is indexed
+once `{id, file, at, char_no|null}`; char_no = the newest character load at or
+before the shot inside the same plan 062 logged-in window, else null. Files are
+referenced in place, never copied. A gallery pick is a plan 079 override (key
+`portrait.<cls>`, rule `none`): a portrait newer than the pick retires it
+(`portrait`), a pinned id that left the index retires it (`missing`).
 """
 
 import datetime as _dt
@@ -27,6 +34,8 @@ import threading
 import time
 import zlib
 from pathlib import Path
+
+from . import overrides
 
 DATA = Path(__file__).resolve().parent / "data" / "classes.json"
 FACE_DIR = "FaceTexture"
@@ -41,10 +50,62 @@ MAX_PIXELS = 4096 * 4096
 OCR_GATE = 0.9  # plan 063 AUTO_COMMIT_MIN
 CLS_RANK = {None: 0, "single": 1, "ocr": 2, "typed": 3}
 _PNG_SIG = b"\x89PNG\r\n\x1a\n"
+# Plan 083: screenshot index (ScreenShot files referenced in place, never copied).
+SHOT_DIR = "ScreenShot"
+SHOT_ID_RE = re.compile(r"^s[0-9a-f]{16}\Z")
+SHOT_NAME_RE = re.compile(r"^[A-Za-z0-9 _.()\-]{1,200}\Z")
+SHOT_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".bmp": "image/bmp"}
+SHOT_CAP = 200  # indexed screenshots; the oldest is dropped
+SHOTS_PER_CLASS = 24
+PICK_PREFIX = "portrait."
 
 
 def _iso(ts):
     return _dt.datetime.fromtimestamp(int(ts), _dt.timezone.utc).isoformat()
+
+
+def _epoch(s):
+    """ISO time -> epoch. A naive time (the client log `Date`) is local wall time."""
+    if not isinstance(s, str):
+        return None
+    try:
+        return _dt.datetime.fromisoformat(s.strip()).timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _shot_ok(name):
+    return (isinstance(name, str) and SHOT_NAME_RE.match(name) is not None and ".." not in name
+            and os.path.splitext(name)[1].lower() in SHOT_MIME)
+
+
+def shot_id(name, at):
+    return "s" + hashlib.sha256(f"{name}|{at}".encode("utf-8")).hexdigest()[:16]
+
+
+def attribute(at, loads, windows):
+    """Plan 083: the char_no a screenshot taken at `at` belongs to - the newest
+    load at or before it inside the same logged-in window - else None.
+    `loads`: [{char_no, at}]; `windows`: [{start, end|null}] (null = still open)."""
+    t = _epoch(at)
+    if t is None:
+        return None
+    win = None
+    for w in windows or []:
+        s = _epoch(w.get("start")) if isinstance(w, dict) else None
+        e = _epoch(w.get("end")) if isinstance(w, dict) and w.get("end") is not None else None
+        if s is not None and s <= t and (e is None or t <= e):
+            win = s
+    if win is None:
+        return None
+    best = None
+    for row in loads or []:
+        c = row.get("char_no") if isinstance(row, dict) else None
+        lt = _epoch(row.get("at")) if isinstance(row, dict) else None
+        if isinstance(c, str) and CHAR_RE.match(c) and lt is not None and win <= lt <= t:
+            if best is None or lt >= best[0]:
+                best = (lt, c)
+    return best[1] if best else None
 
 
 def load_classes(path=DATA):
@@ -173,13 +234,28 @@ def _clean_entry(e):
             "sha": e["sha"]}
 
 
+def _clean_shot(e):
+    if not isinstance(e, dict) or not isinstance(e.get("id"), str) or not SHOT_ID_RE.match(e["id"]):
+        return None
+    at = e.get("at")
+    if not _shot_ok(e.get("file")) or _epoch(at) is None:
+        return None
+    c = e.get("char_no")
+    cls = e.get("cls") if isinstance(e.get("cls"), str) and e["cls"] else None
+    return {"id": e["id"], "file": e["file"], "at": at,
+            "char_no": c if isinstance(c, str) and CHAR_RE.match(c) else None, "cls": cls}
+
+
 class PortraitService:
     """Store domain `portraits`: {"characters": {char_no: {cls, cls_src,
     first_seen, last_seen}}, "seen": {file name: [mtime, size]}, "index":
-    [{id, char_no, mtime, at, sha}]}. Archive files live in `archive_dir`."""
+    [{id, char_no, mtime, at, sha}], "shots": [{id, file, at, char_no, cls}]
+    (plan 083; `cls` = a typed class for an unattributed shot)}. Archive files
+    live in `archive_dir`. `ledger` is the plan 079 OverrideLedger (or None)."""
 
     def __init__(self, store, archive_dir, documents=lambda: None, loads=lambda: [],
-                 progress_cls=lambda: None, clock=time.time, on_change=None):
+                 progress_cls=lambda: None, clock=time.time, on_change=None,
+                 shots=lambda: [], windows=lambda: [], ledger=None):
         self.store = store
         self.archive_dir = Path(archive_dir)
         self.documents = documents
@@ -187,6 +263,9 @@ class PortraitService:
         self.progress_cls = progress_cls
         self.clock = clock
         self.on_change = on_change
+        self.shots = shots
+        self.windows = windows
+        self.ledger = ledger
         self.classes = load_classes()
         self._lock = threading.RLock()
 
@@ -198,10 +277,12 @@ class PortraitService:
         seen = doc.get("seen") if isinstance(doc.get("seen"), dict) else {}
         index = [e for e in map(_clean_entry, doc.get("index") or []) if e is not None] \
             if isinstance(doc.get("index"), list) else []
+        shots = [e for e in map(_clean_shot, doc.get("shots") or []) if e is not None] \
+            if isinstance(doc.get("shots"), list) else []
         return {"characters": {k: _clean_char(v) for k, v in chars.items()
                                if isinstance(k, str) and CHAR_RE.match(k)},
                 "seen": {k: v for k, v in seen.items() if isinstance(k, str) and isinstance(v, list)},
-                "index": index}
+                "index": index, "shots": shots}
 
     def _save(self, d):
         self.store.put("portraits", d)
@@ -311,15 +392,42 @@ class PortraitService:
                 ch["cls"], ch["cls_src"], changed = pcls, "single", True
         return changed
 
+    def _record_shots(self, d):
+        """Plan 083: index each listed screenshot once, attributed at record time."""
+        rows = []
+        for s in self.shots() or []:
+            if isinstance(s, dict) and _shot_ok(s.get("name")) and _epoch(s.get("mtime")) is not None:
+                rows.append((s["name"], s["mtime"]))
+        if not rows:
+            return False
+        have = {e["id"] for e in d["shots"]}
+        floor = min((_epoch(e["at"]) for e in d["shots"]), default=None) \
+            if len(d["shots"]) >= SHOT_CAP else None
+        loads, windows = self.loads() or [], self.windows() or []
+        added = False
+        for name, at in rows:
+            sid = shot_id(name, at)
+            if sid in have or (floor is not None and _epoch(at) <= floor):
+                continue  # recorded once; a shot older than a full index stays out
+            d["shots"].append({"id": sid, "file": name, "at": at,
+                               "char_no": attribute(at, loads, windows), "cls": None})
+            have.add(sid)
+            added = True
+        if added:
+            d["shots"].sort(key=lambda e: (_epoch(e["at"]), e["id"]))
+            del d["shots"][:-SHOT_CAP]
+        return added
+
     def poll(self, state=None, at=None):
-        """GameWatch poller (fn(state, at)): register loads, bind, scan."""
+        """GameWatch poller (fn(state, at)): register loads, bind, scan, index shots."""
         with self._lock:
             d = self._load()
             bound = self._register(d)
             new, dirty = self._scan(d)
-            if bound or dirty:
+            shot = self._record_shots(d)
+            if bound or dirty or shot:
                 self._save(d)
-        if bound or new:
+        if bound or new or shot:
             self._notify()
 
     def _canon(self, cls):
@@ -360,26 +468,158 @@ class PortraitService:
         with self._lock:
             return self._current(self._load(), cls)
 
-    def view(self, char_no=None):
-        """GET /api/portraits body."""
+    # -- gallery (plan 083) ------------------------------------------------------
+
+    @staticmethod
+    def _shot_cls(d, s):
+        if s["cls"]:
+            return s["cls"]
+        ch = d["characters"].get(s["char_no"]) if s["char_no"] else None
+        return ch["cls"] if ch else None
+
+    @staticmethod
+    def _portrait_item(e):
+        return {"id": e["id"], "kind": "portrait", "at": e["at"], "char_no": e["char_no"]}
+
+    @staticmethod
+    def _shot_item(s):
+        return {"id": s["id"], "kind": "shot", "at": s["at"], "char_no": s["char_no"]}
+
+    def _history(self, d, cls):
+        bound = {c for c, ch in d["characters"].items() if ch["cls"] == cls}
+        rows = sorted((e for e in d["index"] if e["char_no"] in bound),
+                      key=lambda e: e["mtime"], reverse=True)
+        return [self._portrait_item(e) for e in rows]
+
+    def _class_shots(self, d, cls):
+        rows = [s for s in d["shots"] if self._shot_cls(d, s) == cls]
+        rows.sort(key=lambda s: (_epoch(s["at"]), s["id"]), reverse=True)
+        return [self._shot_item(s) for s in rows]
+
+    def _unknown(self, d):
+        bound = {c for c, ch in d["characters"].items() if ch["cls"]}
+        out = [self._portrait_item(e) for e in d["index"] if e["char_no"] not in bound]
+        out += [self._shot_item(s) for s in d["shots"] if self._shot_cls(d, s) is None]
+        out.sort(key=lambda i: (_epoch(i["at"]) or 0, i["id"]), reverse=True)
+        return out
+
+    def _resolve(self, d, cls):
+        """Current image of `cls`: the plan 079 pick while it is live, else the
+        newest portrait. A newer portrait retires the pick (`portrait`); a
+        pinned id no longer in this class's gallery retires it (`missing`)."""
+        newest = self._current(d, cls)
+        auto = None if newest is None else dict(self._portrait_item(newest), **{"from": "auto"})
+        if self.ledger is None:
+            return auto
+        key = PICK_PREFIX + cls
+        items = {i["id"]: i for i in self._history(d, cls) + self._class_shots(d, cls)}
+        e = self.ledger.doc()["live"].get(key)
+        if e is not None and e["value"] not in items:
+            self.ledger.clear(key, by="missing")
+            e = None
+        live = None
+        if newest is not None and (e is None or newest["mtime"] > (_epoch(e["set_at"]) or 0)):
+            live = {"value": newest["id"], "signal": "portrait"}
+        r = self.ledger.effective(key, live, None)
+        if r["from"] != "override" or r["value"] not in items:
+            return auto
+        now = self.clock()
+        ent = self._ledger_item(r["entry"], now)
+        return dict(items[r["value"]], **{"from": "override", "set_at": r["entry"]["set_at"],
+                                          "entry": ent})
+
+    def _ledger_item(self, entry, now):
+        return overrides.item(entry, self.ledger.policy, now)
+
+    def view(self, char_no=None, cls=None):
+        """GET /api/portraits body; `cls` adds that class's gallery (plan 083)."""
         with self._lock:
             d = self._load()
         pcls = self.progress_cls()
         names = {ch["cls"] for ch in d["characters"].values() if ch["cls"]}
+        names |= {s["cls"] for s in d["shots"] if s["cls"]}
         if isinstance(pcls, str) and pcls:
             names.add(pcls)
-        classes = {}
-        for cls in sorted(names):
-            cur = self._current(d, cls)
-            classes[cls] = {"current": None if cur is None else {
-                "id": cur["id"], "at": cur["at"], "char_no": cur["char_no"], "from": "auto"}}
+        want = self._canon(cls)
+        if want:
+            names.add(want)
+        classes = {c: {"current": self._resolve(d, c)} for c in sorted(names)}
         bound = {c for c, ch in d["characters"].items() if ch["cls"]}
         loaded = d["characters"].get(char_no) if isinstance(char_no, str) else None
-        return {"classes": classes,
-                "unknown": sum(1 for e in d["index"] if e["char_no"] not in bound),
-                "char_no": char_no if isinstance(char_no, str) else None,
-                "loaded_cls": loaded["cls"] if loaded else None,
-                "progress_cls": pcls if isinstance(pcls, str) and pcls else None}
+        out = {"classes": classes,
+               "unknown": sum(1 for e in d["index"] if e["char_no"] not in bound),
+               "char_no": char_no if isinstance(char_no, str) else None,
+               "loaded_cls": loaded["cls"] if loaded else None,
+               "progress_cls": pcls if isinstance(pcls, str) and pcls else None}
+        if want:
+            out.update(cls=want, history=self._history(d, want),
+                       shots=self._class_shots(d, want)[:SHOTS_PER_CLASS],
+                       unknown_items=self._unknown(d))
+        return out
+
+    def pick(self, cls, pid):
+        """Pin one gallery item as the class image (plan 079 typed override)."""
+        want = self._canon(cls)
+        if want is None or self.ledger is None:
+            raise ValueError("pick: unknown class")
+        with self._lock:
+            d = self._load()
+            ids = {i["id"] for i in self._history(d, want) + self._class_shots(d, want)}
+        if not isinstance(pid, str) or pid not in ids:
+            raise ValueError("pick: not an image of this class")
+        self.ledger.set(PICK_PREFIX + want, pid, source="typed", reason="picked in the gallery")
+        self._notify()
+        return self.view(cls=want)
+
+    def use_newest(self, key):
+        """{"clear": "portrait.<cls>"}: retire the pick (back to the newest)."""
+        want = self._canon(key[len(PICK_PREFIX):]) if isinstance(key, str) \
+            and key.startswith(PICK_PREFIX) else None
+        if want is None or self.ledger is None:
+            raise ValueError("clear: not a portrait key")
+        self.ledger.clear(PICK_PREFIX + want, by="operator")
+        self._notify()
+        return self.view(cls=want)
+
+    def bind(self, pid, cls):
+        """Optional typed class for an unknown-character item (research 0011 A4):
+        a portrait or attributed shot binds its characterNo (`typed`); a shot
+        with no characterNo carries the class itself. Never required."""
+        want = self._canon(cls)
+        if want is None or not isinstance(pid, str):
+            raise ValueError("bind: unknown class or id")
+        with self._lock:
+            d = self._load()
+            row = next((e for e in d["index"] if e["id"] == pid), None) \
+                or next((s for s in d["shots"] if s["id"] == pid), None)
+            if row is None:
+                raise ValueError("bind: not an indexed image")
+            if row.get("char_no"):
+                ch = d["characters"].setdefault(row["char_no"], {
+                    "cls": None, "cls_src": None, "first_seen": row["at"], "last_seen": row["at"]})
+                ch["cls"], ch["cls_src"] = want, "typed"
+            else:
+                row["cls"] = want
+            self._save(d)
+        self._notify()
+        return self.view(cls=want)
+
+    def blob(self, pid, size="full"):
+        """(bytes, mime) of an INDEXED id (never a path input), or None. A
+        screenshot is served as its original file (no stdlib JPEG thumbnail)."""
+        if isinstance(pid, str) and SHOT_ID_RE.match(pid) and size in SIZES:
+            with self._lock:
+                row = next((s for s in self._load()["shots"] if s["id"] == pid), None)
+            docs = self.documents()
+            if row is None or not docs:
+                return None
+            try:
+                data = _read_once(Path(docs) / SHOT_DIR / row["file"])
+            except OSError:
+                return None
+            return data, SHOT_MIME[os.path.splitext(row["file"])[1].lower()]
+        png = self.image(pid, size)
+        return None if png is None else (png, "image/png")
 
     def image(self, pid, size="full"):
         """PNG bytes of an INDEXED id (never a path input), or None."""

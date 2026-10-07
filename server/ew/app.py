@@ -16,7 +16,8 @@ block), /api/settings (plan 030), /api/pets
 /api/whatnow (plan 069; SSE `whatnow` carries the full view on change),
 /api/signals (plan 073, GET only; plan 079 adds its `overrides` section),
 /api/overrides (plan 079, GET only; POST /api/settings {"clear": key} retires one),
-/api/portraits + /api/portraits/img/<id> (plan 082, GET only; SSE `portraits`), /api/prompts (plan 070: quiet gate, alert ladder,
+/api/portraits + /api/portraits/img/<id> (plan 082; SSE `portraits`; plan 083 adds
+?cls= gallery, screenshot ids and POST pick / clear / bind), /api/prompts (plan 070: quiet gate, alert ladder,
 live prompts; stale suggestions / review rows / pending stops are left out of their own
 payloads), /api/maint/digest (plan 074: before-maintenance digest), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
@@ -385,7 +386,11 @@ class EWServer(ThreadingHTTPServer):
             documents=lambda: getattr(self.game, "documents_dir", None),
             loads=lambda: self.game.view().get("char_loads") or [],
             progress_cls=lambda: self.progress._load()[0]["cls"],  # store read only, per poll
-            clock=grind_clock or time.time, on_change=lambda: self.bus.bump("portraits"))
+            clock=grind_clock or time.time, on_change=lambda: self.bus.bump("portraits"),
+            # Plan 083: screenshots attributed by load + logged-in window; a
+            # gallery pick is a plan 079 override.
+            shots=lambda: self.game.view().get("screenshots") or [],
+            windows=self.play.windows, ledger=self.overrides)
         if isinstance(pollers, list):
             pollers.append(self.portraits.poll)
         # Plan 070: prompt registry (expiry, dedupe) + game-closed quiet + ladder.
@@ -906,15 +911,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.signals.view())
         if path == "/api/overrides":
             return self._send(200, self.server.overrides_view())
-        if path == "/api/portraits":
+        if path == "/api/portraits":  # plan 083: ?cls=<cls> adds that class's gallery
             return self._send(200, self.server.portraits.view(
-                char_no=self.server.game.view().get("char_no")))
+                char_no=self.server.game.view().get("char_no"),
+                cls=parse_qs(query).get("cls", [None])[0]))
         if path.startswith("/api/portraits/img/"):  # plan 082: an indexed id, never a path
             size = parse_qs(query).get("size", ["full"])[0]
-            png = self.server.portraits.image(path[len("/api/portraits/img/"):], size)
-            if png is None:
+            got = self.server.portraits.blob(path[len("/api/portraits/img/"):], size)
+            if got is None:
                 return self._send(404, {"error": "not found"})
-            return self._send(200, png, "image/png")
+            return self._send(200, got[0], got[1])
         if path == "/events":
             return self._sse()
         if path == "/":  # plan 020: redirect so relative asset paths resolve
@@ -1015,6 +1021,9 @@ class Handler(BaseHTTPRequestHandler):
             # Plan 079: {"clear": key} retires the override and puts the key back
             # to its default (so config/local.json never re-imports it).
             clear = body["clear"]
+            if isinstance(clear, str) and clear.startswith(portraits.PICK_PREFIX):
+                self.server.portraits.use_newest(clear)  # plan 083: "Use newest"
+                return {"cleared": clear, "overrides": self.server.overrides_view()}
             if not (isinstance(clear, str) and clear in (settings.SPEC.keys() | settings.FIXED.keys())
                     and led.covers(clear)):
                 raise ValueError("clear: not a clearable override key")
@@ -1130,6 +1139,19 @@ class Handler(BaseHTTPRequestHandler):
         self.server.notices.view(refresh=False)  # plan 064: import cached maintenance reads
         return self.server.maintdigest.ack(body["ack"])
 
+    def _post_portraits(self, body):
+        # Plan 083: {"pick": {cls, id}} pins a gallery image (plan 079 override),
+        # {"clear": "portrait.<cls>"} = Use newest, {"bind": {id, cls}} types the
+        # class of an unknown-character image (optional).
+        svc = self.server.portraits
+        if set(body) == {"pick"} and isinstance(body["pick"], dict):
+            return svc.pick(body["pick"].get("cls"), body["pick"].get("id"))
+        if set(body) == {"clear"}:
+            return svc.use_newest(body["clear"])
+        if set(body) == {"bind"} and isinstance(body["bind"], dict):
+            return svc.bind(body["bind"].get("id"), body["bind"].get("cls"))
+        raise ValueError("expected {pick: {cls, id}} | {clear: key} | {bind: {id, cls}}")
+
     POST_ROUTES = {"/api/market/watch": _post_market_watch, "/api/today": _post_today,
                    "/api/progress": _post_progress, "/api/grind": _post_grind,
                    "/api/events": _post_events, "/api/deadeye": _post_deadeye,
@@ -1138,7 +1160,7 @@ class Handler(BaseHTTPRequestHandler):
                    "/api/pets": _post_pets, "/api/inventory": _post_inventory,
                    "/api/mounts": _post_mounts, "/api/onboarding": _post_onboarding,
                    "/api/crafting": _post_crafting, "/api/imperial": _post_imperial,
-                   "/api/maint/digest": _post_maint_digest}
+                   "/api/maint/digest": _post_maint_digest, "/api/portraits": _post_portraits}
 
     def do_POST(self):  # noqa: N802
         """Shared guard for every POST route: loopback Host + application/json +

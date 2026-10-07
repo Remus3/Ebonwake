@@ -43,6 +43,7 @@
   "notify.ladder_min": {"label": "Alert ladder (config)", "expiry": "days:1",
                         "first_sight": true, "cards": ["shell"]},
   "notify.quiet_closed": {"label": "Game-closed quiet (config)", "expiry": "days:1",
-                          "first_sight": true, "cards": ["shell"]}
+                          "first_sight": true, "cards": ["shell"]},
+  "portrait.*": {"label": "Portrait pick", "expiry": "none", "cards": ["portraits"]}
  }
 }
