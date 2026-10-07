@@ -44,7 +44,7 @@ STRUCT_ALLOW_PATHS = re.compile(
 EMAIL_ALLOW = re.compile(r"@(example\.(com|org|net)|users\.noreply\.github\.com)$", re.I)
 
 STRUCTURAL = [
-    ("drive-path", re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]{1,2}[^\s\"'`<>|*?]+")),
+    ("drive-path", re.compile(r"(?<![A-Za-z0-9\\])[A-Za-z]:[\\/]{1,2}[^\s\"'`<>|*?]+")),
     ("user-profile", re.compile(r"(?i)[\\/]Users[\\/](?!Example|<|%|\{)[A-Za-z0-9._-]+")),
     ("email", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")),
     ("anthropic-key", re.compile(r"sk-ant-[A-Za-z0-9_-]{10,}")),

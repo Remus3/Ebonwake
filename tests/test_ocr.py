@@ -905,3 +905,241 @@ def test_plain_digit_words_on_one_baseline_stay_probe_able():
     # "100 200": no comma on either side, same bottom - a real space candidate.
     doc, bounds = ocr._parse_tsv(_rec((0, 0, 54, 30, "100"), (67, 0, 54, 30, "200")))
     assert len(bounds) == 1
+
+
+# -- plan 040: loot-window import ------------------------------------------------
+
+LOOT_CASES = ROOT / "tests" / "fixtures" / "ocr_loot" / "cases.json"
+BS_W, BS_A, DUST = "Black Stone (Weapon)", "Black Stone (Armor)", "Ancient Spirit Dust"
+NAMES = [BS_W, BS_A, DUST, "Forest Fury"]
+
+
+def _rows(rows):
+    return [(r["name"], r["count"]) for r in rows]
+
+
+def test_loot_exact_names_and_counts():
+    rows = ocr.parse_loot(["Loot", f"{BS_W} x12", f"{BS_A} x7", f"{DUST} 3"], NAMES)
+    assert _rows(rows) == [(BS_W, 12), (BS_A, 7), (DUST, 3)]
+    assert all(r["confidence"] == 1.0 for r in rows)
+
+
+@pytest.mark.parametrize("text,count", [
+    ("Forest Fury x1,234", 1234), ("Forest Fury x 12,045", 12045), ("Forest Fury x1 234", 1234),
+    ("Forest Fury x2.500", 2500), ("Forest Fury X9", 9), ("Forest Fury " + chr(0xD7) + "14", 14),
+    ("1,520 Forest Fury", 1520), ("2x Forest Fury", 2), ("Forest Fury x1O5", 105),
+    ("Forest Fury xl2", 12), ("Forest Fury x123,456 acquired", 123456)])
+def test_loot_count_forms(text, count):
+    assert _rows(ocr.parse_loot([text], NAMES)) == [("Forest Fury", count)]
+
+
+def test_loot_fuzzy_name_within_cutoff_has_lower_confidence():
+    rows = ocr.parse_loot(["B1ack St0ne (Weap0n) x9"], NAMES)
+    assert _rows(rows) == [(BS_W, 9)]
+    assert 0.75 <= rows[0]["confidence"] < 1.0
+
+
+def test_loot_closest_name_wins_between_similar_names():
+    names = ["Sharp Black Crystal Shard", "Hard Black Crystal Shard"]
+    rows = ocr.parse_loot(["Shamp Black Crystal Shard x3", "Hard Biack Crystal Shard x8"], names)
+    assert _rows(rows) == [("Sharp Black Crystal Shard", 3), ("Hard Black Crystal Shard", 8)]
+
+
+def test_loot_unknown_and_far_names_dropped():
+    rows = ocr.parse_loot(["Pirate Gold Coin x3", "Forest Feather x5", "Silver 12,345,678"], NAMES)
+    assert rows == []
+
+
+def test_loot_edit_distance_cutoff():
+    assert ocr.name_distance("forest fury", "forest fury") == 0
+    assert ocr.name_distance("abcd", "abcf") == 0.25
+    # exactly at the cutoff still matches, just past it does not
+    assert _rows(ocr.parse_loot(["Abcf x2"], ["Abcd"])) == [("Abcd", 2)]
+    assert ocr.parse_loot(["Abff x2"], ["Abcd"]) == []
+
+
+def test_loot_repeated_lines_sum_and_keep_lowest_confidence():
+    rows = ocr.parse_loot([f"You obtained {BS_W} x2", "You obtained B1ack Stone (Weapon) x3"],
+                          NAMES)
+    assert _rows(rows) == [(BS_W, 5)]
+    assert rows[0]["confidence"] < 1.0
+
+
+def test_loot_no_count_is_none_and_a_counted_repeat_wins():
+    assert _rows(ocr.parse_loot([DUST], NAMES)) == [(DUST, None)]
+    assert _rows(ocr.parse_loot([DUST, f"{DUST} x4"], NAMES)) == [(DUST, 4)]
+
+
+def test_loot_count_over_cap_is_not_a_count():
+    assert _rows(ocr.parse_loot([f"{DUST} x99999999"], NAMES)) == [(DUST, None)]
+    big = ocr.parse_loot([f"{DUST} x9999999", f"{DUST} x9999999"], NAMES)
+    assert _rows(big) == [(DUST, grind.MAX_LOOT_COUNT)]
+
+
+def test_loot_count_from_geometry_neighbour():
+    lines = [L("Forest Fury", x=100, y=200, w=120, h=18), L("3,210", x=260, y=201, w=50, h=17),
+             L(DUST, x=100, y=240, w=160, h=18), L("x25", x=110, y=262, w=30, h=16)]
+    assert _rows(ocr.parse_loot(lines, NAMES)) == [("Forest Fury", 3210), (DUST, 25)]
+
+
+def test_loot_same_row_count_beats_the_row_above():
+    # refute r1: "Ore" (no count) must not take the 7 printed beside "Tooth"
+    lines = [L("Forest Fury", x=0, y=0, w=100, h=10), L(DUST, x=0, y=12, w=150, h=10),
+             L("7", x=200, y=12, w=10, h=10)]
+    assert _rows(ocr.parse_loot(lines, NAMES)) == [("Forest Fury", None), (DUST, 7)]
+
+
+def test_loot_count_under_a_name_goes_to_that_name_not_the_one_above():
+    # refute r2: stacked rows, the 7 is printed under Dust, not under Fury
+    lines = [L("Forest Fury", x=0, y=0, w=100, h=10), L(DUST, x=0, y=12, w=150, h=10),
+             L("7", x=0, y=24, w=10, h=10)]
+    assert _rows(ocr.parse_loot(lines, NAMES)) == [("Forest Fury", None), (DUST, 7)]
+
+
+def test_loot_identical_count_boxes_each_used_once():
+    # refute r1 minor: two equal boxes are two lines, not one found twice
+    lines = [L("Forest Fury", x=0, y=0, w=100, h=10), L("5", x=200, y=0, w=10, h=10),
+             L("5", x=200, y=0, w=10, h=10), L(DUST, x=300, y=0, w=150, h=10)]
+    assert _rows(ocr.parse_loot(lines, NAMES)) == [("Forest Fury", 5), (DUST, 5)]
+
+
+def test_loot_strings_never_use_neighbours():
+    # plain strings carry no geometry: "7" is not glued to the name above it
+    assert _rows(ocr.parse_loot([DUST, "7"], NAMES)) == [(DUST, None)]
+
+
+@pytest.mark.parametrize("names", [[], ["", "  "], [3, None]])
+def test_loot_without_usable_names_is_empty(names):
+    assert ocr.parse_loot([f"{DUST} x2"], names) == []
+
+
+def test_loot_bad_shapes_tolerated():
+    assert ocr.parse_loot(None, NAMES) == []
+    assert ocr.parse_loot([None, 3, {"x": 1}, {"text": 5}], NAMES) == []
+
+
+def test_loot_unmatched_lists_counted_lines_without_a_name():
+    out = ocr.extract_loot(["Pirate Gold Coin x3", "Loot", f"{DUST} x2", "1,234"], NAMES)
+    assert _rows(out["rows"]) == [(DUST, 2)]
+    assert out["unmatched"] == ["Pirate Gold Coin x3"]
+
+
+def _score(cases):
+    hits = total = 0
+    for c in cases:
+        got = {(r["name"], r["count"]) for r in ocr.parse_loot(c["lines"], c["names"])}
+        want = {(r["name"], r["count"]) for r in c["expect"]}
+        hits += len(got & want)
+        total += max(len(got), len(want))
+    return hits, total
+
+
+def test_loot_bench_at_least_90_percent_exact_rows():
+    cases = json.loads(LOOT_CASES.read_text(encoding="ascii"))["cases"]
+    assert len(cases) >= 20
+    hits, total = _score(cases)
+    assert total and hits / total >= 0.9, (hits, total)
+
+
+def test_loot_bench_fixture_ascii():
+    assert all(b < 128 for b in LOOT_CASES.read_bytes())
+
+
+# -- plan 040: service + route ---------------------------------------------------
+
+LOOT_DOC = {"text": "Loot\nForest Fury x1,200\nPirate Gold Coin x2",
+            "lines": [L("Loot", y=0), L("Forest Fury x1,200", y=40), L("Pirate Gold Coin x2", y=80)]}
+
+
+def _names_for(spot):
+    if spot != "gyfin":
+        raise ValueError(f"unknown spot: {spot}")
+    return ["Forest Fury", BS_W]
+
+
+def test_service_loot_reads_listed_shot(watch, tmp_path):
+    name = _shot(watch)
+    svc = ocr.OcrService(watch, tmp_path / "ocr", runner=lambda p: LOOT_DOC,
+                         loot_names=_names_for)
+    out = svc.read({"loot": {"shot": name, "spot": "gyfin"}})
+    assert out == {"shot": name, "spot": "gyfin", "text": LOOT_DOC["text"],
+                   "rows": [{"name": "Forest Fury", "count": 1200, "confidence": 1.0}],
+                   "unmatched": ["Pirate Gold Coin x2"]}
+
+
+@pytest.mark.parametrize("body", [
+    {"loot": "x"}, {"loot": {"shot": "a.jpg"}}, {"loot": {"shot": "a.jpg", "spot": "gyfin", "x": 1}},
+    {"loot": {"shot": "nope.jpg", "spot": "gyfin"}}, {"loot": {"shot": "a.jpg", "spot": "elsewhere"}},
+    {"loot": {"shot": "a.jpg", "spot": 3}}, {"loot": {"shot": "a.jpg", "spot": "gyfin"}, "file": "a.jpg"}])
+def test_service_loot_rejects(watch, tmp_path, body):
+    _shot(watch, "a.jpg")
+
+    def runner(path):
+        raise AssertionError("runner must not run")
+
+    svc = ocr.OcrService(watch, tmp_path / "ocr", runner=runner, loot_names=_names_for)
+    with pytest.raises(ValueError):
+        svc.read(body)
+
+
+def test_service_loot_needs_names(watch, tmp_path):
+    name = _shot(watch)
+    bare = ocr.OcrService(watch, tmp_path / "ocr", runner=lambda p: LOOT_DOC)
+    with pytest.raises(ValueError):
+        bare.read({"loot": {"shot": name, "spot": "gyfin"}})
+    empty = ocr.OcrService(watch, tmp_path / "ocr", runner=lambda p: LOOT_DOC,
+                           loot_names=lambda spot: [])
+    with pytest.raises(ValueError, match="no loot items"):
+        empty.read({"loot": {"shot": name, "spot": "gyfin"}})
+
+
+def test_service_loot_shares_the_ocr_cache(watch, tmp_path):
+    name = _shot(watch)
+    calls = []
+
+    def runner(path):
+        calls.append(path)
+        return LOOT_DOC
+
+    svc = ocr.OcrService(watch, tmp_path / "ocr", runner=runner, loot_names=_names_for)
+    svc.read({"file": name})
+    svc.read({"loot": {"shot": name, "spot": "gyfin"}})
+    assert len(calls) == 1
+
+
+def test_route_loot_import_never_writes_grind(tmp_path, watch):
+    s = ewapp.make_server(port=0, store_root=tmp_path / "store", market_seed=[],
+                          market_client=market.ArshaClient(fetch=_no_network,
+                                                           cache_dir=tmp_path / "cache"),
+                          profile_cfg={}, game_watch=watch, ocr_runner=lambda p: LOOT_DOC,
+                          ocr_cache_dir=tmp_path / "ocr")
+    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t.start()
+    try:
+        s.grind.add_spot("Gyfin")
+        s.grind.loot_item({"spot": "gyfin", "name": "Forest Fury", "marketable": False,
+                           "vendor_price": 100})
+        before = s.grind.view()
+        name = _shot(watch)
+        st, doc = _post(s, {"loot": {"shot": name, "spot": "gyfin"}})
+        assert st == 200
+        assert doc["rows"] == [{"name": "Forest Fury", "count": 1200, "confidence": 1.0}]
+        after = s.grind.view()
+        assert after["sessions"] == before["sessions"] == [] and after["active"] is None
+        st, doc = _post(s, {"loot": {"shot": name, "spot": "nowhere"}})
+        assert st == 400 and "error" in doc
+    finally:
+        s.shutdown()
+        s.server_close()
+
+
+def test_grind_loot_names_merge_table_and_operator_items(tmp_path):
+    from server.ew.store import Store
+    tables = {"gyfin": {"items": [{"name": BS_W, "marketable": True, "id": 16001}],
+                        "source": "x", "verified": False}}
+    g = grind.GrindService(Store(tmp_path / "s"), clock=lambda: T0, loot_tables=tables)
+    g.add_spot("Gyfin")
+    g.loot_item({"spot": "gyfin", "name": "Forest Fury", "marketable": False, "vendor_price": 5})
+    assert g.loot_names("gyfin") == [BS_W, "Forest Fury"]
+    with pytest.raises(ValueError):
+        g.loot_names("nowhere")

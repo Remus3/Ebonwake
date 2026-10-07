@@ -64,3 +64,15 @@ def test_tracked_tree_is_clean_structurally():
     findings, n = ls.scan_tree(ls.compile_needles([]))
     assert n > 0
     assert findings == []
+
+
+def test_regex_escape_time_pattern_is_not_a_drive_path():
+    # fix-loop-stall: `\d\d:\d\d` (a HH:MM regex) read as drive `d:` + `\d\d`
+    # refused plan 031's lane commit at the pre-commit hook
+    bs = "\\"
+    line = 'assert re.match(r"^' + bs + "d" + bs + "d:" + bs + "d" + bs + 'd$", s)'
+    assert _kinds(line, needles=[]) == []
+    assert _kinds("rows = [r" + '"' + bs + "| " + bs + "d" + bs + "d:" + bs + "d" + bs
+                  + "d " + bs + '|"]', needles=[]) == []
+    # a real drive path after a separator is still flagged
+    assert "drive-path" in _kinds('p = "' + "C" + ":" + bs + 'x' + bs + 'y"', needles=[])

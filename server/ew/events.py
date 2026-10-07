@@ -11,6 +11,7 @@ import re
 import threading
 import time
 
+from . import logindays
 from .today import _iso, _parse_iso
 
 KINDS = ("coupon", "event", "drop")
@@ -18,7 +19,9 @@ MAX_TITLE = 80
 MAX_REWARDS = 200
 MAX_URL = 300
 MAX_ITEMS = 300
+MAX_CLAIM_TEXT = 200  # = claimwindows.MAX_TEXT
 SOON_S = 172800  # 48 h
+DEADLINE_SOON_S = 14 * 86400  # plan 024: level-gated deadlines show 14 days out
 WINDOW = _dt.timedelta(days=730)  # starts/ends within 2 years of now, either side
 ID_RE = re.compile(r"^e[0-9]{1,9}$")
 CODE_RE = re.compile(r"^[A-Za-z0-9-]{4,40}$")
@@ -26,7 +29,7 @@ URL_RE = re.compile(r"^https://[^\s/?#]+[^\s]*$")
 DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 STAMP_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?"
                       r"(Z|[+-][0-9]{2}:[0-9]{2})$")
-OPTIONAL = ("code", "rewards", "starts", "ends", "url")
+OPTIONAL = ("code", "rewards", "starts", "ends", "url", "login_rule")  # plan 075: login_rule
 EDITABLE = ("title",) + OPTIONAL
 
 SOURCES = [
@@ -135,10 +138,27 @@ def _clean_item(it):
         and CODE_RE.match(code) else None
     url = it.get("url")
     url = url if isinstance(url, str) and len(url) <= MAX_URL and URL_RE.match(url) else None
-    return {"id": it["id"], "kind": it["kind"], "title": it["title"], "code": code,
-            "rewards": _str_or_none(it.get("rewards"), MAX_REWARDS),
-            "starts": _iso_or_none(it.get("starts")), "ends": _iso_or_none(it.get("ends")),
-            "url": url, "done": it.get("done") is True}
+    out = {"id": it["id"], "kind": it["kind"], "title": it["title"], "code": code,
+           "rewards": _str_or_none(it.get("rewards"), MAX_REWARDS),
+           "starts": _iso_or_none(it.get("starts")), "ends": _iso_or_none(it.get("ends")),
+           "url": url, "done": it.get("done") is True}
+    # Plan 046: when a done item was claimed (session summary); absent before 046.
+    done_at = _iso_or_none(it.get("done_at")) if out["done"] else None
+    if done_at is not None:
+        out["done_at"] = done_at
+    if it.get("auto") is True:  # plan 064: added from an official notice
+        out["auto"] = True
+    rule = logindays.clean_rule(it.get("login_rule"))
+    if rule is not None:  # plan 075: qualifying login days are tracked
+        out["login_rule"] = rule
+    claim = _iso_or_none(it.get("claim_until"))
+    text = it.get("claim_text")
+    if claim is not None and isinstance(text, str) and 0 < len(text) <= MAX_CLAIM_TEXT \
+            and text.isascii() and text.isprintable():  # plan 086: claim window of its notice
+        out["claim_until"], out["claim_text"] = claim, text
+        if it.get("claimed") is True:
+            out["claimed"] = True
+    return out
 
 
 def _num(iid):
@@ -148,11 +168,14 @@ def _num(iid):
 class EventsService:
     """Store domain `events`: {"items": [{id, kind, title, code, rewards, starts,
     ends, url, done}], "next_id": int, "updated": "<iso>"}. Ids are e<N> from a
-    never-reused counter."""
+    never-reused counter. `deadlines` (plan 024) returns the leveling view's
+    decorated deadline rows; those within DEADLINE_SOON_S of enrolment closing
+    (level not yet reached) are listed read-only, never stored here."""
 
-    def __init__(self, store, clock=time.time):
+    def __init__(self, store, clock=time.time, deadlines=None):
         self.store = store
         self.clock = clock
+        self.deadlines = deadlines
         self._lock = threading.Lock()  # read-modify-write; Store guards each file op
         with self._lock:
             if "items" not in self.store.get("events"):
@@ -212,7 +235,12 @@ class EventsService:
         else:
             status = "active"
         soon = status in ("active", "upcoming") and left is not None and left <= SOON_S
-        return dict(it, left_s=left, status=status, soon=soon)
+        out = dict(it, left_s=left, status=status, soon=soon)
+        claim = _parse_iso(it.get("claim_until"))
+        if claim is not None:  # plan 086: open until the deadline unless acked
+            out["claim_left_s"] = max(0, int((claim - now).total_seconds()))
+            out["claim_open"] = it.get("claimed") is not True and claim > now
+        return out
 
     def _items(self, doc, now):
         rows = [self._decorate(i, now) for i in doc["items"]]
@@ -237,7 +265,25 @@ class EventsService:
             if r["status"] in ("active", "upcoming"):
                 counts[r["kind"]] += 1
         return {"now": _iso(now), "sources": [dict(s) for s in SOURCES], "counts": counts,
-                "items": items}
+                "items": items, "deadlines": self._deadlines_soon(now)}
+
+    def _deadlines_soon(self, now):
+        """Read-only "Ending soon" rows: {id, label, needs_level, enrol_by_utc,
+        state, reach_utc, verified, left_s} closing within DEADLINE_SOON_S, not done."""
+        if self.deadlines is None:
+            return []
+        out = []
+        for d in self.deadlines():
+            ends = _parse_iso(d.get("enrol_by_utc"))
+            if ends is None or d.get("state") == "done":
+                continue
+            left = int((ends - now).total_seconds())
+            if 0 < left <= DEADLINE_SOON_S:
+                out.append({"id": d["id"], "label": d["label"], "needs_level": d["needs_level"],
+                            "enrol_by_utc": d["enrol_by_utc"], "state": d["state"],
+                            "reach_utc": d["reach_utc"], "verified": d.get("verified") is True,
+                            "left_s": left})
+        return out
 
     def source(self):
         """`/api/state` sources.events: {updated, status: "ok", open, soonest}."""
@@ -249,8 +295,9 @@ class EventsService:
 
     # -- writes (each returns the GET body) -----------------------------------
 
-    def add(self, arg):
-        """`{kind, title, code?, rewards?, starts?, ends?, url?}`; body adds `item`."""
+    def add(self, arg, auto=False):
+        """`{kind, title, code?, rewards?, starts?, ends?, url?, login_rule?}`; body adds `item`.
+        `auto` (plan 064, server side only) marks a notice import."""
         arg = _keys(arg, "add", ("kind", "title"), ("kind", "title") + OPTIONAL)
         kind = arg["kind"]
         if kind not in KINDS:
@@ -264,6 +311,7 @@ class EventsService:
             code = None
         rewards = _rewards(arg.get("rewards"))
         url = _url(arg.get("url"))
+        rule = logindays.validate_rule(arg.get("login_rule"))
         with self._lock:
             now = self._now()
             starts = _when(arg.get("starts"), "starts", now, False)
@@ -278,9 +326,10 @@ class EventsService:
                 self._check_code_free(doc, code)
             iid = f"e{doc['next_id']}"
             doc["next_id"] += 1
-            doc["items"].append({"id": iid, "kind": kind, "title": title, "code": code,
-                                 "rewards": rewards, "starts": starts, "ends": ends,
-                                 "url": url, "done": False})
+            doc["items"].append(dict({"id": iid, "kind": kind, "title": title, "code": code,
+                                      "rewards": rewards, "starts": starts, "ends": ends,
+                                      "url": url, "done": False}, **({"auto": True} if auto else {}),
+                                     **({"login_rule": rule} if rule is not None else {})))
             self._save(doc)
             out = self.view()
         out["item"] = next(i for i in out["items"] if i["id"] == iid)
@@ -306,6 +355,11 @@ class EventsService:
                 it["rewards"] = _rewards(arg["rewards"])
             if "url" in arg:
                 it["url"] = _url(arg["url"])
+            if "login_rule" in arg:  # plan 075: null stops tracking
+                rule = logindays.validate_rule(arg["login_rule"])
+                it.pop("login_rule", None)
+                if rule is not None:
+                    it["login_rule"] = rule
             for key, eod in (("starts", False), ("ends", True)):
                 if key in arg:
                     when = _when(arg[key], key, now, eod)
@@ -323,7 +377,12 @@ class EventsService:
         _item_id(arg["id"])
         with self._lock:
             doc = self._load()
-            self._find(doc, arg["id"])["done"] = arg["done"]
+            it = self._find(doc, arg["id"])
+            if arg["done"] and not it["done"]:
+                it["done_at"] = _iso(self._now())
+            elif not arg["done"]:
+                it.pop("done_at", None)
+            it["done"] = arg["done"]
             self._save(doc)
             return self.view()
 
@@ -336,15 +395,65 @@ class EventsService:
             self._save(doc)
             return self.view()
 
+    # -- plan 086: claim windows (server side only; synced from notice reads) --
+
+    def sync_claims(self, by_url):
+        """{notice url: (claim_until ISO UTC, text) | None} -> set on every item
+        with that url when the claim outlives the item's end (or it has none),
+        else (or None: the notice holds no claim any more) clear it; items of
+        other urls keep theirs. Writes only on a change. An ack survives a
+        re-resolved time on the same UTC date (an imported maintenance notice
+        moving 07:00 to 08:30); a deadline on another date asks again."""
+        if not by_url:
+            return False
+        with self._lock:
+            doc = self._load()
+            changed = False
+            for it in doc["items"]:
+                if it["url"] not in by_url:
+                    continue
+                until, text = by_url[it["url"]] or (None, None)
+                claim, ends = _parse_iso(until), _parse_iso(it["ends"])
+                keep = claim is not None and (ends is None or claim > ends)
+                if keep and (it.get("claim_until"), it.get("claim_text")) != (_iso(claim), text):
+                    old = it.get("claim_until")
+                    if old is None or old[:10] != _iso(claim)[:10]:
+                        it.pop("claimed", None)  # a new deadline asks again
+                    it["claim_until"], it["claim_text"] = _iso(claim), text[:MAX_CLAIM_TEXT]
+                    changed = True
+                elif not keep and "claim_until" in it:
+                    for k in ("claim_until", "claim_text", "claimed"):
+                        it.pop(k, None)
+                    changed = True
+            if changed:
+                self._save(doc)
+            return changed
+
+    def claim_ack(self, url):
+        """Hide the open claim window of every item with `url`; returns the view."""
+        with self._lock:
+            now = self._now()
+            doc = self._load()
+            hits = [i for i in doc["items"] if i["url"] == url and i.get("claim_until")
+                    and i.get("claimed") is not True and _parse_iso(i["claim_until"]) > now]
+            if not hits:
+                raise ValueError("no open claim window for that notice")
+            for it in hits:
+                it["claimed"] = True
+            self._save(doc)
+            return self.view()
+
     def purge_expired(self, arg):
-        """`true`: remove every item whose ends <= now, done or not; body adds `purged`."""
+        """`true`: remove every item whose ends <= now, done or not; body adds `purged`.
+        Plan 086: an item whose claim window is still open stays."""
         if arg is not True:
             raise ValueError("purge_expired must be true")
         with self._lock:
             now = self._now()
             doc = self._load()
             keep = [i for i in doc["items"]
-                    if i["ends"] is None or _parse_iso(i["ends"]) > now]
+                    if i["ends"] is None or _parse_iso(i["ends"]) > now
+                    or self._decorate(i, now).get("claim_open") is True]
             n = len(doc["items"]) - len(keep)
             doc["items"] = keep
             self._save(doc)

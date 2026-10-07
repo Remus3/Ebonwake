@@ -181,7 +181,7 @@ test('overlayWidgets: eventsSoon default on, only a literal false turns it off',
   const q = C.widgetsQuery({ grindSession: true, grindBuff: true, eventsSoon: false });
   assert.strictEqual(C.widgetsFromQuery('?' + new URLSearchParams(q).toString()).eventsSoon, false);
   const ex = JSON.parse(fs.readFileSync(path.join(APP, '..', 'config', 'local.example.json'), 'utf8'));
-  assert.strictEqual(ex.overlay.widgets.eventsSoon, true);
+  assert.ok(!('widgets' in ex.overlay), 'plan 080: no manual overlay layout in the example');
 });
 
 test('events.js: safe DOM, POST via the bridge only, uses the shared helpers', () => {
@@ -198,6 +198,132 @@ test('events.js: safe DOM, POST via the bridge only, uses the shared helpers', (
   assert.doesNotMatch(src, /window\.open|location\.href\s*=|\.href\s*=/, 'no navigation inside the dashboard');
   assert.doesNotMatch(src, /createElement\('a'\)/, 'sources are plain text, not links');
   assert.match(src, /window\.EWEvents\s*=/);
+});
+
+test('suggestedRows: valid candidates only, known codes and duplicates dropped, upper-cased', () => {
+  const sug = { status: 'ok', candidates: [
+    { code: 'AUTUMN-2026-GIFT', title: 'Autumn coupon', url: 'https://www.naeu.playblackdesert.com/en-US/News/Detail?groupContentNo=1', date: '2026-10-03' },
+    { code: 'oldcode-1234', title: 'Old', url: 'https://www.naeu.playblackdesert.com/x', date: null },
+    { code: 'HAWKEYE7TREAT', title: 'Deadeye', url: 'https://www.naeu.playblackdesert.com/y', date: 'junk' },
+    { code: 'AUTUMN-2026-GIFT', title: 'dup', url: 'https://www.naeu.playblackdesert.com/z', date: null },
+    { code: 'bad code', title: 'x', url: 'https://a.b/c' }, { code: 'GOOD1234', title: '', url: 'https://a.b/c' },
+    { code: 'GOOD1234', title: 'x', url: 'javascript:alert(1)' }, null, 'x', 5
+  ] };
+  const items = [item({ id: 'e1', kind: 'coupon', code: 'OLDCODE-1234' }), null];
+  const rows = C.suggestedRows(sug, items);
+  assert.deepStrictEqual(rows.map((r) => r.code), ['AUTUMN-2026-GIFT', 'HAWKEYE7TREAT']);
+  assert.strictEqual(rows[0].date, '2026-10-03');
+  assert.strictEqual(rows[1].date, null, 'junk date dropped');
+  assert.deepStrictEqual(C.suggestedRows(null, null), []);
+  assert.deepStrictEqual(C.suggestedRows({ candidates: 'x' }, []), []);
+});
+
+test('suggestAddBody: one click = a plain coupon add the bridge accepts', () => {
+  const c = { code: 'hawkeye7treat', title: 'Deadeye coupons', url: 'https://www.naeu.playblackdesert.com/en-US/News/Detail?groupContentNo=2', date: '2026-10-01' };
+  const b = C.suggestAddBody(c);
+  assert.deepStrictEqual(b, { add: { kind: 'coupon', title: 'Deadeye coupons', code: 'HAWKEYE7TREAT', url: c.url } });
+  assert.strictEqual(C.validEventsBody(b), true);
+  assert.strictEqual(C.validPost('/api/events', b), true);
+  assert.deepStrictEqual(C.suggestAddBody({ code: 'ABCD1', title: 't', url: 'http://x' }), { add: { kind: 'coupon', title: 't', code: 'ABCD1' } });
+  for (const bad of [null, {}, { code: 'AB', title: 't' }, { code: 'ABCD1', title: '' }]) {
+    assert.strictEqual(C.suggestAddBody(bad), null, JSON.stringify(bad));
+  }
+});
+
+test('suggestStatus: coupon check line for the Sources card, robots reason when off', () => {
+  assert.deepStrictEqual(C.suggestStatus({ status: 'off', robots: 'disallow' }), { status: 'off', text: 'coupon check: off - robots.txt disallow' });
+  assert.match(C.suggestStatus({ status: 'off', robots: 'unreachable' }).text, /unreachable/);
+  assert.strictEqual(C.suggestStatus({ status: 'stale' }).status, 'stale');
+  assert.strictEqual(C.suggestStatus({ status: 'ok' }).status, 'ok');
+  assert.strictEqual(C.suggestStatus({ status: 'weird' }).status, 'none');
+  assert.strictEqual(C.suggestStatus(null).status, 'none');
+});
+
+test('events.js: Suggested card uses the helpers and never auto-adds', () => {
+  const src = read('dashboard/events.js');
+  for (const f of ['suggestedRows', 'suggestAddBody', 'suggestStatus']) assert.match(src, new RegExp('C\\.' + f + '\\('), f);
+  assert.match(src, /Suggested coupons/);
+  const i = src.indexOf('C.suggestAddBody(');
+  assert.ok(src.lastIndexOf("addEventListener('click'", i) > src.lastIndexOf('function drawSuggested', i), 'add only inside a click handler');
+});
+
+// ---- plan 059: event-notice suggestions ----
+
+const NURL = 'https://www.naeu.playblackdesert.com/en-US/News/Detail?groupContentNo=10656&countryType=en-US';
+function notice(o) {
+  return Object.assign({ title: "[Donghwa's Gift] One Day Only, Time-Limited Coupon", url: NURL,
+    group_no: 10656, starts: '2026-10-01T10:00:00+00:00', ends: '2026-10-15T07:00:00+00:00',
+    ends_text: 'Oct 15, 2026 (Thu) before maintenance', kind: 'event', maint_relative: true,
+    ends_edge: 'before' }, o);
+}
+
+test('noticeRows: valid candidates only; same url or title + ends already stored is skipped', () => {
+  const sug = { status: 'ok', candidates: [
+    notice(), notice({ group_no: 10656, title: 'dup number' }),
+    notice({ group_no: 10545, title: 'Heidel Ball', url: NURL.replace('10656', '10545'),
+      starts: '2026-09-04T00:00:00+00:00', ends: '2026-10-21T23:59:00+00:00', maint_relative: false, ends_edge: null }),
+    notice({ group_no: 1, url: 'javascript:alert(1)' }), notice({ group_no: 2, title: '' }),
+    notice({ group_no: 3, ends: 'soon' }), notice({ group_no: 4, starts: '2026-10-20T00:00:00Z' }),
+    notice({ group_no: 0 }), notice({ group_no: '7' }), notice({ group_no: 8, ends_edge: 'sideways' }),
+    null, 'x', 5
+  ] };
+  const rows = C.noticeRows(sug, []);
+  assert.deepStrictEqual(rows.map((r) => r.group_no), [10656, 10545, 8]);
+  assert.strictEqual(rows[2].ends_edge, null, 'unknown edge dropped');
+  const byUrl = C.noticeRows(sug, [item({ url: NURL })]);
+  assert.deepStrictEqual(byUrl.map((r) => r.group_no), [10545], 'both NURL rows skipped');
+  const byEnds = C.noticeRows(sug, [item({ title: 'Heidel Ball', ends: '2026-10-21T23:59:00Z' })]);
+  assert.ok(!byEnds.some((r) => r.group_no === 10545), 'same title + ends (any offset form)');
+  assert.deepStrictEqual(C.noticeRows(null, null), []);
+  assert.deepStrictEqual(C.noticeRows({ candidates: 'x' }, []), []);
+});
+
+test('noticeAddBody: a plain event add with the source link the bridge accepts', () => {
+  const b = C.noticeAddBody(notice());
+  assert.deepStrictEqual(b, { add: { kind: 'event', title: notice().title,
+    starts: '2026-10-01T10:00:00+00:00', ends: '2026-10-15T07:00:00+00:00', url: NURL } });
+  assert.strictEqual(C.validPost('/api/events', b), true);
+  for (const bad of [null, {}, notice({ title: '' }), notice({ ends: 'x' }),
+    notice({ starts: '2026-10-20T00:00:00Z' })]) {
+    assert.strictEqual(C.noticeAddBody(bad), null, JSON.stringify(bad));
+  }
+});
+
+test('noticeDismissBody + bridge guard: dismiss by notice number only', () => {
+  assert.deepStrictEqual(C.noticeDismissBody(notice()), { dismiss_notice: 10656 });
+  assert.strictEqual(C.validPost('/api/events', { dismiss_notice: 10656 }), true);
+  for (const bad of [0, -1, 1.5, '10656', null, true, 1e9]) {
+    assert.strictEqual(C.validEventsBody({ dismiss_notice: bad }), false, String(bad));
+  }
+  assert.strictEqual(C.noticeDismissBody({ group_no: 'x' }), null);
+});
+
+test('noticeEndText: maintenance-relative ends say so and ask to verify', () => {
+  assert.strictEqual(C.noticeEndText(notice(), { zone: 'utc' }), '2026-10-15 before maint. (~07:00 local, verify)');
+  assert.strictEqual(C.noticeEndText(notice(), { zone: 'pt' }), '2026-10-15 before maint. (~00:00 local, verify)');
+  assert.strictEqual(C.noticeEndText(notice({ maint_relative: false, ends_edge: null,
+    ends: '2026-10-21T23:59:00+00:00' }), { zone: 'utc' }), '2026-10-21 23:59');
+  assert.strictEqual(C.noticeEndText(null), '');
+  assert.strictEqual(C.noticeEndText(notice({ ends: 'x' })), '');
+});
+
+test('noticeStatus: event check line, robots reason when off', () => {
+  assert.deepStrictEqual(C.noticeStatus({ status: 'off', robots: 'disallow' }), { status: 'off', text: 'event check: off - robots.txt disallow' });
+  assert.strictEqual(C.noticeStatus({ status: 'ok' }).text, 'event check: checked');
+  assert.strictEqual(C.noticeStatus({ status: 'weird' }).status, 'none');
+  assert.strictEqual(C.noticeStatus(null).status, 'none');
+});
+
+test('events.js: Suggested events card uses the helpers; add / dismiss only on click', () => {
+  const src = read('dashboard/events.js');
+  for (const f of ['noticeRows', 'noticeAddBody', 'noticeDismissBody', 'noticeEndText', 'noticeStatus']) {
+    assert.match(src, new RegExp('C\\.' + f + '\\('), f);
+  }
+  assert.match(src, /Suggested events/);
+  for (const f of ['C.noticeAddBody(', 'C.noticeDismissBody(']) {
+    const i = src.indexOf(f);
+    assert.ok(src.lastIndexOf("addEventListener('click'", i) > src.lastIndexOf('function drawNotices', i), f + ' inside a click handler');
+  }
 });
 
 test('dashboard loads and mounts events.js; CSP unchanged', () => {

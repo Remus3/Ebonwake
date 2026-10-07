@@ -227,3 +227,64 @@ test('dashboard loads and mounts deadeye.js; CSP unchanged', () => {
   assert.match(css, /\.ew-deadeye/);
   assert.match(css, /\.ew-md/);
 });
+
+// ---- Plan 057: draft autosave ----
+
+test('draft helpers: key, encode/decode round trip, rejects junk', () => {
+  assert.strictEqual(C.DEADEYE_DRAFT_MS, 2000);
+  assert.strictEqual(C.draftKey('rotation'), 'ew.deadeye.draft.rotation');
+  assert.strictEqual(C.draftKey(''), null);
+  assert.strictEqual(C.draftKey('a b'), null);
+  assert.strictEqual(C.draftKey(null), null);
+  const raw = C.draftEncode('hello\nworld', '2026-10-06T01:02:03.000Z');
+  assert.deepStrictEqual(JSON.parse(raw), { v: 1, text: 'hello\nworld', at: '2026-10-06T01:02:03.000Z' });
+  assert.deepStrictEqual(C.draftDecode(raw), { text: 'hello\nworld', at: '2026-10-06T01:02:03.000Z' });
+  for (const junk of [null, undefined, '', '{', '[]', '"x"', '{"v":1,"text":3,"at":"x"}',
+    '{"v":2,"text":"a","at":"2026-10-06T01:02:03.000Z"}', '{"v":1,"text":"a"}',
+    JSON.stringify({ v: 1, text: 'x'.repeat(C.NOTE_MAX + 1), at: '2026-10-06T01:02:03.000Z' })]) {
+    assert.strictEqual(C.draftDecode(junk), null, String(junk));
+  }
+});
+
+test('draftPending: a stored draft is offered only when it differs from the saved text', () => {
+  const d = { text: 'new text', at: '2026-10-06T01:02:03.000Z' };
+  assert.strictEqual(C.draftPending(d, 'old text'), true);
+  assert.strictEqual(C.draftPending(d, 'new text'), false);
+  assert.strictEqual(C.draftPending({ text: 'a\r\nb', at: d.at }, 'a\nb'), false, 'CRLF equal to LF');
+  assert.strictEqual(C.draftPending(null, 'x'), false);
+  assert.strictEqual(C.draftPending(d, undefined), true);
+  assert.strictEqual(C.draftPending({ text: '', at: d.at }, undefined), false);
+});
+
+test('draftsToRestore: per section, only differing stored drafts, never over a live edit', () => {
+  const at = '2026-10-06T01:02:03.000Z';
+  const secs = [{ id: 'addons', text: 'A' }, { id: 'rotation', text: 'R' }, { id: 'misc', text: 'M' }];
+  const store = {
+    'ew.deadeye.draft.addons': C.draftEncode('A2', at),
+    'ew.deadeye.draft.rotation': C.draftEncode('R', at),
+    'ew.deadeye.draft.misc': 'garbage'
+  };
+  const get = (k) => (Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null);
+  assert.deepStrictEqual(C.draftsToRestore(secs, get, {}), { addons: { text: 'A2', at: at } });
+  assert.deepStrictEqual(C.draftsToRestore(secs, get, { addons: 'typing' }), {}, 'live draft wins');
+  assert.deepStrictEqual(C.draftsToRestore(secs, function () { throw new Error('denied'); }, {}), {});
+  assert.deepStrictEqual(C.draftsToRestore(null, get, {}), {});
+});
+
+test('deadeye.js: debounced localStorage autosave, restore bar, Ctrl+S, unload guard', () => {
+  const src = read('dashboard/deadeye.js');
+  assert.match(src, /C\.DEADEYE_DRAFT_MS/);
+  assert.match(src, /localStorage\.setItem\(/);
+  assert.match(src, /localStorage\.removeItem\(/);
+  assert.match(src, /C\.draftsToRestore\(/);
+  assert.match(src, /C\.draftEncode\(/);
+  // localStorage access is wrapped: a denied store never breaks the tab.
+  const calls = src.split(/localStorage\.\w+\(/).length - 1;
+  const tries = (src.match(/try \{[^}]*localStorage\.\w+\(/g) || []).length;
+  assert.ok(calls >= 2);
+  assert.strictEqual(tries, calls, 'every localStorage call sits in a try');
+  assert.match(src, /ev\.ctrlKey && \(ev\.key === 's' \|\| ev\.key === 'S'\)/);
+  assert.match(src, /addEventListener\('beforeunload'/);
+  assert.match(src, /'Restore'/);
+  assert.match(src, /'Discard'/);
+});

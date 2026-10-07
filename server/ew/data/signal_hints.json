@@ -1,0 +1,43 @@
+{
+  "_comment": "Plan 073: signal health digest. thresholds in seconds; hints are one line each, keyed <signal>.<reason>. Rows in state ok carry no hint. Plan 077: hints name Settings labels, never config keys or plan numbers.",
+  "thresholds": {
+    "session_log": {"warn_s": 300, "bad_s": 600, "stall_s": 60},
+    "ocr": {"queue_warn": 5},
+    "notices": {"stale_s": 172800, "bad_s": 172800},
+    "market": {"stale_s": 21600},
+    "profile": {}
+  },
+  "hints": {
+    "session_log.unconfigured": "game install folder not set or not found - see Settings > Game folders",
+    "session_log.log_dir_missing": "no game Log folder yet - launch the game once; EW reads the folder it creates",
+    "session_log.watcher_stalled": "game watcher stopped polling - restart the server (tray > Restart server)",
+    "session_log.quiet": "no session log line for a while - normal on a loading screen; else check Settings > Game folders",
+    "session_log.silent": "logged in but the session log is silent - check Settings > Game folders, then restart the server",
+    "session_log.game_closed": "game closed - a quiet log is expected",
+    "screenshots.unconfigured": "Documents folder not set or not found - see Settings > Game folders",
+    "screenshots.folder_missing": "no ScreenShot folder yet - take one screenshot in game; EW reads the folder it creates",
+    "screenshots.game_closed": "game closed - no screenshots expected",
+    "ocr.disabled": "auto-OCR paused by a config file switch - resumes within 24 h; clear it from the top-bar badge",
+    "ocr.error": "OCR failed on the last shot - check the Windows OCR language pack (System > OCR)",
+    "ocr.backlog": "screenshots waiting for OCR - they drain one at a time; restart the server if stuck",
+    "ocr.game_closed": "game closed - no screenshots to read",
+    "notices.disabled": "notice check paused by a config file switch - back on at the first server restart after 24 h",
+    "notices.robots_disallow": "official site disallows our reader in robots.txt - notices paused (expected)",
+    "notices.robots_unreachable": "official robots.txt unreachable - retried later; check your connection",
+    "notices.failing": "official notice fetch failing - retried with backoff; check your connection",
+    "notices.stale": "no good notice fetch in 2 days - open Events to retry",
+    "market.empty": "market watch is empty - add items on the Market tab",
+    "market.blocked": "arsha.io endpoints blocked (Imperva) - stale prices shown, retried with backoff",
+    "market.stale": "no fresh market price in 6 h - open Market to refresh",
+    "profile.no_family": "no family name set - Settings > Profile > Family name",
+    "profile.no_base": "profile off: public API disallows robots - Settings > Profile > Self-hosted profile API base",
+    "profile.robots": "profile host disallows robots - profile paused (expected)",
+    "profile.stale": "profile cache is stale - refresh retries in the background",
+    "profile.error": "profile fetch failing - check the family name and base URL in Settings > Profile",
+    "boss_drift.not_built": "no drift check yet - runs after the next schedule fetch",
+    "boss_drift.drift": "boss table differs from the public schedule - review Events > World bosses",
+    "boss_drift.error": "boss schedule drift check failed - retried later",
+    "data.contradicted": "patch notes disagree with a tracked value - kept with a check badge until a data fix",
+    "data.error": "a patch-notes hint in the tracked data is broken - checks paused until a data fix"
+  }
+}

@@ -1,0 +1,35 @@
+{
+ "source": "https://www.blackdesertfoundry.com/global-lab-updates-2nd-october-2026/",
+ "read": "2026-10-06",
+ "note": "Combat Secret Books: live 2026-10-15 global, credited from the 2026-10-08 maintenance; Lv 60+, family-bound (research 0006 section 1). Values at Lv 66 only; verify in game.",
+ "sizes": [
+  {"id": "small", "name": "Small", "pct_at": {"66": 0.2}, "min_level": 60,
+   "source": "https://www.blackdesertfoundry.com/global-lab-updates-2nd-october-2026/", "verified": false},
+  {"id": "medium", "name": "Medium", "pct_at": {"66": 1.0}, "min_level": 60,
+   "source": "https://www.blackdesertfoundry.com/global-lab-updates-2nd-october-2026/", "verified": false},
+  {"id": "large", "name": "Large", "pct_at": {"66": 7.5}, "min_level": 60,
+   "source": "https://www.blackdesertfoundry.com/global-lab-updates-2nd-october-2026/", "verified": false},
+  {"id": "xl", "name": "Extra Large", "pct_at": {"66": 15.0}, "min_level": 60,
+   "source": "https://www.blackdesertfoundry.com/global-lab-updates-2nd-october-2026/", "verified": false}
+ ],
+ "sources": [
+  {"activity": "black-shrine", "name": "Black Shrine", "weekly_row": "black-shrine",
+   "win": {"size": "small", "n": 1}, "loss": null},
+  {"activity": "guild-boss", "name": "Guild Boss", "weekly_row": null,
+   "win": {"size": "medium", "n": 1}, "loss": null},
+  {"activity": "altar-of-blood", "name": "Altar of Blood", "weekly_row": null,
+   "win": {"size": "medium", "n": 1}, "loss": null},
+  {"activity": "node-war", "name": "Node War", "weekly_row": null,
+   "win": {"size": "medium", "n": 2}, "loss": {"size": "small", "n": 2}},
+  {"activity": "conquest-war", "name": "Conquest War", "weekly_row": null,
+   "win": {"size": "large", "n": 1}, "loss": {"size": "medium", "n": 2}},
+  {"activity": "war-of-roses", "name": "War of the Roses", "weekly_row": null,
+   "win": {"size": "xl", "n": 1}, "loss": {"size": "medium", "n": 4}},
+  {"activity": "red-battlefield", "name": "Red Battlefield", "weekly_row": null,
+   "win": {"size": "small", "n": 1}, "loss": null},
+  {"activity": "guild-league", "name": "Guild League", "weekly_row": null,
+   "win": {"size": "small", "n": 1}, "loss": null},
+  {"activity": "solare", "name": "Solare ranked", "weekly_row": null,
+   "win": {"size": "small", "n": 1}, "loss": null}
+ ]
+}

@@ -9,7 +9,7 @@ const os = require('os');
 const path = require('path');
 const selftest = require('../selftest');
 
-const TABS = ['today', 'market', 'progress', 'grind', 'events', 'deadeye', 'system'];
+const TABS = ['home', 'today', 'market', 'progress', 'grind', 'events', 'deadeye', 'system'];
 
 function fakeImage(empty) {
   return {
@@ -22,7 +22,7 @@ function fakes(log, opts) {
   let active = TABS[0];
   let visible = false;
   const dash = {
-    getContentSize: () => [1280, 800],
+    getContentSize: () => [1264, 761], // plan 025: the operator's dashboard size
     isVisible: () => visible,
     showInactive: () => { visible = true; log.push('showInactive'); },
     webContents: {
@@ -35,18 +35,31 @@ function fakes(log, opts) {
           log.push('painted');
           return true;
         }
+        if (src.indexOf('EWToast.selfTest()') >= 0) {
+          log.push('notify-selftest');
+          return { hits: 1, toasts: 1, notify: { ok: true } };
+        }
+        if (src.indexOf('pillRight') >= 0) {
+          log.push('topbar');
+          return opts.topBar || { pillLeft: 600, pillRight: 700, pillW: 100, viewW: 738, barScroll: false };
+        }
         const m = /data-tab="([a-z]+)"/.exec(src);
         if (m && src.indexOf('.click()') >= 0) { active = m[1]; log.push('click:' + active); return null; }
-        return { scrollH: 700, clientH: 800, scrollW: 1200, clientW: 1280, active: active,
-          activeH: 500, tabs: TABS, pill: 'server ok' };
+        return { scrollH: 700, clientH: 761, scrollW: 1200, clientW: 1264, active: active,
+          activeH: 500, cardsScroll: opts.cardsScroll || 0, wnClip: active === 'home' ? opts.wnClip || 0 : 0,
+          tabs: TABS, pill: 'server ok' };
       },
-      capturePage: async () => { log.push('capture:' + active); return fakeImage(false); }
-    }
+      capturePage: async () => { log.push('capture:' + active); return fakeImage(false); },
+      getZoomFactor: () => 1,
+      setZoomFactor: (z) => log.push('zoom:' + z)
+    },
+    setContentSize: (w, h) => log.push('size:' + w + 'x' + h)
   };
   let ovVisible = false;
   const ov = {
     isVisible: () => ovVisible, isFocusable: () => false, isAlwaysOnTop: () => true,
-    getNativeWindowHandle: () => Buffer.alloc(8), getBounds: () => ({}),
+    getNativeWindowHandle: () => Buffer.alloc(8),
+    getBounds: () => opts.bounds || { x: 16, y: 410, width: 340, height: 220 },
     webContents: { isLoading: () => false, capturePage: async () => fakeImage(false) }
   };
   return { dash, ov, toggle: () => { ovVisible = !ovVisible; } };
@@ -60,8 +73,11 @@ async function runFake(opts) {
   process.env.EW_SELFTEST_STAY = '1';
   await selftest.run({
     app: { quit() {} }, dashboard: f.dash, overlay: f.ov, keys: { a: 'F9' },
-    globalShortcut: { isRegistered: () => true }, toggleOverlay: f.toggle, out: out,
-    wait: () => Promise.resolve(), paintTimeoutMs: 20
+    globalShortcut: { isRegistered: () => true }, toggleOverlay: f.toggle, out: out, freshStore: (opts || {}).freshStore,
+    notifyShown: (() => { let n = 0; return () => n++; })(),
+    wait: () => Promise.resolve(), paintTimeoutMs: 20,
+    overlayPlace: Object.assign({ workArea: { x: 0, y: 0, width: 1920, height: 1040 }, defaultAnchor: true },
+      (opts || {}).place)
   });
   delete process.env.EW_SELFTEST_STAY;
   return { log, res: JSON.parse(fs.readFileSync(out, 'utf8')) };
@@ -70,7 +86,10 @@ async function runFake(opts) {
 test('every tab capture follows showInactive and a paint after its click', async () => {
   const { log, res } = await runFake();
   assert.ok(res.ok, JSON.stringify(res));
-  assert.strictEqual(res.tabs.length, 7);
+  assert.strictEqual(res.tabs.length, 8);
+  assert.strictEqual(res.tabs[0].id, 'home', 'Home paints first');
+  assert.deepStrictEqual(res.dashboardSize, [1264, 761]);
+  assert.ok(res.tabs.every((t) => t.fits), 'every tab fits 1264x761');
   assert.ok(log.indexOf('showInactive') >= 0);
   assert.ok(log.indexOf('throttle:false') >= 0);
   for (const id of TABS) {
@@ -85,9 +104,33 @@ test('every tab capture follows showInactive and a paint after its click', async
 
 test('a paint that never comes is reported, not hung on', async () => {
   const { res } = await runFake({ noPaint: true });
-  assert.strictEqual(res.tabs.length, 7);
+  assert.strictEqual(res.tabs.length, 8);
   assert.ok(res.tabs.every((t) => t.painted === false));
   assert.strictEqual(res.ok, false);
+});
+
+// Plan 022 item 6: overlay inside its display's work area and, on the default
+// anchor, clear of the top-right 360x300 minimap zone.
+test('overlay placement: inside the work area and off the minimap', async () => {
+  const { res } = await runFake();
+  assert.strictEqual(res.overlay.insideWorkArea, true);
+  assert.strictEqual(res.overlay.clearOfMinimap, true);
+  assert.ok(res.ok, JSON.stringify(res));
+});
+
+test('overlay on the minimap with the default anchor fails the self-test', async () => {
+  const { res } = await runFake({ bounds: { x: 1564, y: 16, width: 340, height: 220 } });
+  assert.strictEqual(res.overlay.clearOfMinimap, false);
+  assert.strictEqual(res.ok, false);
+});
+
+test('a chosen top-right anchor skips the minimap check but not the work-area check', async () => {
+  const tr = await runFake({ bounds: { x: 1564, y: 16, width: 340, height: 220 }, place: { defaultAnchor: false } });
+  assert.strictEqual(tr.res.overlay.clearOfMinimap, null);
+  assert.ok(tr.res.ok, JSON.stringify(tr.res));
+  const off = await runFake({ bounds: { x: 1800, y: 16, width: 340, height: 220 }, place: { defaultAnchor: false } });
+  assert.strictEqual(off.res.overlay.insideWorkArea, false);
+  assert.strictEqual(off.res.ok, false);
 });
 
 test('selftest switches keep Chromium from treating an occluded window as hidden', () => {
@@ -96,4 +139,56 @@ test('selftest switches keep Chromium from treating an occluded window as hidden
   assert.ok(sw.some((s) => s[0] === 'disable-features' && /CalculateNativeWinOcclusion/.test(s[1])));
   const m = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   assert.match(m, /selftest\.switches\(\)/);
+});
+
+test('plan 026: the self-test fires one synthetic alert -> toast + OS notification (reported)', async () => {
+  const { log, res } = await runFake();
+  assert.ok(log.indexOf('notify-selftest') > log.lastIndexOf('capture:system'), 'after the tab captures');
+  assert.deepStrictEqual(res.notify, { hits: 1, toasts: 1, bridge: { ok: true }, osShown: 1, ok: true });
+  assert.ok(res.ok, 'report-only: never fails the run');
+});
+
+// Plan 047 item 5: on a fresh store no card scrolls at 1264x761; a lived-in
+// store only reports the count.
+test('plan 047: a scrolling card fails a fresh-store self-test, is reported otherwise', async () => {
+  const fresh = await runFake({ freshStore: true });
+  assert.ok(fresh.res.ok, JSON.stringify(fresh.res));
+  assert.strictEqual(fresh.res.freshStore, true);
+  assert.ok(fresh.res.tabs.every((t) => t.cardsFit && t.cardsScroll === 0));
+  const bad = await runFake({ freshStore: true, cardsScroll: 2 });
+  assert.strictEqual(bad.res.ok, false);
+  assert.ok(bad.res.tabs.every((t) => t.cardsFit === false));
+  const lived = await runFake({ cardsScroll: 2 });
+  assert.strictEqual(lived.res.ok, true);
+  assert.strictEqual(lived.res.freshStore, false);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'),
+    /freshStore: process\.env\.EW_SELFTEST_FRESH === '1'/);
+});
+
+// Plan 078: at the 960 px minimum window and ui.scale 1.3 the server pill is
+// fully visible; size and zoom are restored after the check.
+test('plan 078: top bar fits 960 px at scale 1.3, then size and zoom are restored', async () => {
+  const { log, res } = await runFake();
+  assert.deepStrictEqual(res.topBar, { pillLeft: 600, pillRight: 700, pillW: 100, viewW: 738, barScroll: false,
+    width: 960, zoom: 1.3, fits: true });
+  const t = log.indexOf('topbar');
+  assert.ok(log.indexOf('size:960x761') < t && log.indexOf('zoom:1.3') < t && t > 0);
+  assert.ok(log.indexOf('size:1264x761') > t && log.indexOf('zoom:1') > t, 'restored');
+  assert.ok(res.ok, JSON.stringify(res));
+  for (const bad of [{ pillLeft: 700, pillRight: 800, pillW: 100, viewW: 738, barScroll: false },
+    { pillLeft: 600, pillRight: 700, pillW: 0, viewW: 738, barScroll: false },
+    { pillLeft: 600, pillRight: 700, pillW: 100, viewW: 738, barScroll: true }]) {
+    const r = await runFake({ topBar: bad });
+    assert.strictEqual(r.res.topBar.fits, false, JSON.stringify(bad));
+    assert.strictEqual(r.res.ok, false);
+  }
+});
+
+// Plan 076: the What now card never clips its text (any store).
+test('plan 076: an ellipsized element inside the What now card fails the self-test', async () => {
+  const ok = await runFake({ freshStore: true });
+  assert.strictEqual(ok.res.tabs[0].wnFit, true);
+  const clipped = await runFake({ wnClip: 1 });
+  assert.strictEqual(clipped.res.tabs[0].wnFit, false);
+  assert.strictEqual(clipped.res.ok, false);
 });

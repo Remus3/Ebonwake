@@ -1,0 +1,19 @@
+[
+ {
+  "familyName": "Testfam",
+  "profileTarget": "OPAQUE",
+  "region": "NA",
+  "guild": {"name": "Guildy"},
+  "privacy": 0,
+  "contributionPoints": 312,
+  "energy": 401,
+  "combatFame": 1820,
+  "lifeFame": 2210,
+  "mastery": "Professional 3",
+  "characters": [
+   {"name": "Shooty", "class": "Deadeye", "main": true, "level": 62, "gs": 640,
+    "specLevels": {"gathering": "Artisan 2", "fishing": "Skilled 9", "trading": "Beginner 1"}},
+   {"name": "Alt", "class": "Warrior", "main": false}
+  ]
+ }
+]

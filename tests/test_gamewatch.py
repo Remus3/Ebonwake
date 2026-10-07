@@ -4,6 +4,7 @@ Every fixture is a synthetic UTF-16LE file written into tmp_path. No test reads
 a real game log, a real config or runs the real tasklist.
 """
 
+import datetime
 import http.client
 import json
 import os
@@ -15,6 +16,7 @@ import pytest
 
 from server.ew import app as ewapp
 from server.ew import gamewatch, market
+from server.ew.store import Store
 
 T0 = 1_800_000_000.0  # injected clock base (epoch seconds)
 
@@ -591,7 +593,8 @@ def test_view_shape_and_no_paths(dirs):
     _write(inst / "Log" / LOGNAME, _line("Login ok"), mtime=clk.t)
     w.poll()
     v = w.view()
-    assert set(v) == {"state", "since", "log_file", "last_event", "screenshots", "configured"}
+    assert set(v) == {"state", "since", "log_file", "last_event", "screenshots", "configured",
+                      "char_loads", "char_no"}  # plan 082: the character-load side-channel
     text = json.dumps(v)
     assert str(inst) not in text and "\\\\" not in text
     src = w.source()
@@ -751,3 +754,198 @@ def test_bare_make_server_never_reads_real_config(tmp_path, monkeypatch):
     ("ExitGame", "running"), ("CatalogInfo", None), ("Catalog_Index", None)])
 def test_camel_and_snake_tokens(text, state):
     assert gamewatch.classify(text) == state
+
+
+# --- plan 056: dice from logged-in minutes -------------------------------------------
+
+def _utc(y, mo, d, h=0, mi=0, s=0):
+    return datetime.datetime(y, mo, d, h, mi, s, tzinfo=datetime.timezone.utc).timestamp()
+
+
+FIVE = {"every": "day", "at": "05:00"}
+D0 = _utc(2026, 10, 6, 10)  # 10:00 UTC, after the 05:00 dice reset
+
+
+def _dice(tmp_path, t=D0):
+    clk = Clock(t)
+    return gamewatch.DiceClock(Store(tmp_path / "store"), FIVE, [0, 30, 60], clock=clk), clk
+
+
+def test_dice_none_before_login(tmp_path):
+    d, _ = _dice(tmp_path)
+    s = d.status()
+    assert s["earned"] == 0 and s["max"] == 3 and s["next_at_min"] == 0
+    assert s["eta_utc"] is None and s["logged_in"] is False and s["played_min"] == 0
+    assert s["next_reset"] == "2026-10-07T05:00:00+00:00" and s["verified"] is False
+
+
+def test_dice_login_grants_one_then_eta(tmp_path):
+    d, clk = _dice(tmp_path)
+    d.on_game("running", "logged_in", D0)
+    clk.t = D0 + 18 * 60
+    s = d.status()
+    assert s["earned"] == 1 and s["next_at_min"] == 30 and s["played_min"] == 18
+    assert s["eta_utc"] == "2026-10-06T10:30:00+00:00" and s["logged_in"] is True
+    clk.t = D0 + 30 * 60
+    assert d.status()["earned"] == 2
+    clk.t = D0 + 61 * 60
+    s = d.status()
+    assert s["earned"] == 3 and s["next_at_min"] is None and s["eta_utc"] is None
+
+
+def test_dice_accumulates_across_disconnects(tmp_path):
+    d, clk = _dice(tmp_path)
+    d.on_game("running", "logged_in", D0)
+    d.on_game("logged_in", "disconnected", D0 + 20 * 60)
+    clk.t = D0 + 3600  # an hour offline adds nothing
+    s = d.status()
+    assert s["played_min"] == 20 and s["earned"] == 1 and s["eta_utc"] is None
+    assert s["next_at_min"] == 30
+    d.on_game("disconnected", "logged_in", D0 + 3600)
+    clk.t = D0 + 3600 + 10 * 60
+    s = d.status()
+    assert s["played_min"] == 30 and s["earned"] == 2
+    assert s["eta_utc"] == "2026-10-06T11:40:00+00:00"
+
+
+def test_dice_reset_at_rule_time(tmp_path):
+    d, clk = _dice(tmp_path, _utc(2026, 10, 6, 4, 0))
+    d.on_game("running", "logged_in", _utc(2026, 10, 6, 4, 0))
+    clk.t = _utc(2026, 10, 6, 4, 59, 59)
+    assert d.status()["earned"] == 2  # 59 min before the reset
+    clk.t = _utc(2026, 10, 6, 5, 10)  # session spans 05:00: only 10 min count
+    s = d.status()
+    assert s["played_min"] == 10 and s["earned"] == 1 and s["next_at_min"] == 30
+    d.on_game("logged_in", "not_running", _utc(2026, 10, 6, 5, 10))
+    clk.t = _utc(2026, 10, 7, 6)  # next day, never logged in: nothing earned
+    s = d.status()
+    assert s["earned"] == 0 and s["played_min"] == 0 and s["next_at_min"] == 0
+
+
+def test_dice_ew_restart_resumes_open_session(tmp_path):
+    d, clk = _dice(tmp_path)
+    d.on_game("running", "logged_in", D0)
+    clk.t = D0 + 5 * 60
+    d.status()  # refreshes `seen`
+    d2, _ = _dice(tmp_path, D0 + 40 * 60)  # new EW process, same store
+    d2.on_game(None, "logged_in", D0 + 40 * 60)  # first poll: still in game
+    s = d2.status()
+    assert s["played_min"] == 40 and s["earned"] == 2 and s["logged_in"] is True
+
+
+def test_dice_ew_restart_closes_orphan_at_seen(tmp_path):
+    d, clk = _dice(tmp_path)
+    d.on_game("running", "logged_in", D0)
+    clk.t = D0 + 25 * 60
+    d.status()  # seen = +25 min
+    d2, _ = _dice(tmp_path, D0 + 3 * 3600)  # EW back hours later, game closed
+    d2.on_game(None, "not_running", D0 + 3 * 3600)
+    s = d2.status()
+    assert s["played_min"] == 25 and s["earned"] == 1 and s["logged_in"] is False
+
+
+def test_dice_seen_throttled(tmp_path):
+    d, clk = _dice(tmp_path)
+    d.on_game("running", "logged_in", D0)
+    clk.t = D0 + 30
+    d.status()
+    assert d.store.get("dice")["seen"] == "2026-10-06T10:00:00+00:00"
+    clk.t = D0 + 61
+    d.status()
+    assert d.store.get("dice")["seen"] == "2026-10-06T10:01:01+00:00"
+
+
+def test_dice_corrupt_store_degrades(tmp_path):
+    d, _ = _dice(tmp_path)
+    d.store.put("dice", {"reset": 5, "acc_s": "x", "login_at": "nope", "seen": [],
+                         "active": "yes"})
+    s = d.status()
+    assert s["earned"] == 0 and s["played_min"] == 0 and s["logged_in"] is False
+
+
+def test_dice_never_auto_ticks_today(tmp_path):
+    # Pinned clock: a wall clock within ~62 min after the 05:00 UTC reset split
+    # the session across the reset and earned only 1 die (flaky).
+    noon = datetime.datetime(2026, 10, 7, 12, tzinfo=datetime.timezone.utc).timestamp()
+    s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
+                          market_seed=[], profile_cfg={}, today_clock=lambda: noon)
+    try:
+        assert s.dice.on_game in s.game.listeners
+        assert s.dice.grants == [0, 30, 60] and s.dice.rule == FIVE
+        s.dice.on_game("running", "logged_in", noon - 3700)
+        v = s.today_view()
+        assert v["dice"]["earned"] == 3 and v["dice"]["max"] == 3
+        dice = [i for i in v["items"] if i["id"] == "black-spirits-adventure-dice"]
+        assert dice and dice[0]["done"] is False  # a suggestion only, never a tick
+    finally:
+        s.server_close()
+
+
+# -- plan 082: character-load side-channel -------------------------------------
+
+CHAR_A = "12345678901234567"
+CHAR_B = "76543210987654321"
+
+
+def _load_line(char_no, date="2026-10-06 20:00:00", sep="/"):
+    path = sep.join(["<documents>", "black desert", "UserCache", "999", "500", char_no,
+                     "gameVariable.xml"])
+    return _line(f"GameVariableManager load({path})", date=date)
+
+
+def test_char_load_regex_parses_string_only():
+    log = ("GameVariableManager x(<documents>/black desert/UserCache/42/500/12345678901234567/"
+           "gameVariable.xml)")
+    assert gamewatch.char_load(log) == "12345678901234567"
+    assert gamewatch.char_load(log.replace("/", "\\")) == "12345678901234567"
+    for bad in ["", "UserCache/42/500/123/gameVariable.xml", "Login success", None,
+                "UserCache/42/500/12345678901234567/other.xml"]:
+        assert gamewatch.char_load(bad) is None
+
+
+def test_char_load_line_sets_char_no_and_is_not_a_state(dirs):
+    inst, _ = dirs
+    clk = Clock()
+    w = _watch(dirs, clk, listed=True)
+    p = inst / "Log" / LOGNAME
+    _write(p, _line("Login success") + _load_line(CHAR_A), mtime=clk.t)
+    w.poll()
+    v = w.view()
+    assert v["state"] == "logged_in" and v["last_event"]["log"] == "Login success"
+    assert v["char_no"] == CHAR_A
+    assert v["char_loads"] == [{"char_no": CHAR_A, "at": "2026-10-06 20:00:00"}]
+    _append(p, _load_line(CHAR_B, date="2026-10-06 20:05:00", sep="\\"), mtime=clk.t)
+    w.poll()
+    v = w.view()
+    assert v["char_no"] == CHAR_B
+    assert [c["char_no"] for c in v["char_loads"]] == [CHAR_A, CHAR_B]
+
+
+def test_char_no_none_when_not_running_or_new_log(dirs):
+    inst, _ = dirs
+    clk = Clock()
+    tl = Tasklist(True)
+    w = gamewatch.GameWatch(install_dir=str(inst), documents_dir=None, clock=clk, tasklist=tl)
+    p = inst / "Log" / LOGNAME
+    _write(p, _line("Login success") + _load_line(CHAR_A), mtime=clk.t)
+    w.poll()
+    assert w.view()["char_no"] == CHAR_A
+    tl.listed = False
+    w.poll()
+    v = w.view()
+    assert v["char_no"] is None and len(v["char_loads"]) == 1  # history kept
+    tl.listed = True
+    _write(inst / "Log" / "Client_2026-10-06_120000.json", _line("Login success"), mtime=clk.t)
+    w.poll()
+    assert w.view()["char_no"] is None  # a new session has loaded no character yet
+
+
+def test_char_loads_capped(dirs):
+    inst, _ = dirs
+    w = _watch(dirs, listed=True)
+    p = inst / "Log" / LOGNAME
+    _write(p, "".join(_load_line(str(10_000_000 + i)) for i in range(25)))
+    w.poll()
+    v = w.view()
+    assert len(v["char_loads"]) == gamewatch.MAX_CHAR_LOADS == 20
+    assert v["char_loads"][-1]["char_no"] == str(10_000_024) == v["char_no"]

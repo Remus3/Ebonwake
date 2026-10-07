@@ -12,6 +12,7 @@ m under 120 m, h beyond.
 """
 
 import json
+import shutil
 import statistics
 import subprocess
 import sys
@@ -66,6 +67,12 @@ def estimate(kind, default=DEFAULT_S, log=LOG):
     return statistics.median(rows) if rows else float(default)
 
 
+def resolve_cmd(cmd):
+    """Resolve argv[0] on PATH (PATHEXT on Windows: npm -> npm.cmd)."""
+    exe = shutil.which(cmd[0]) if cmd else None
+    return [exe, *cmd[1:]] if exe else list(cmd)
+
+
 def main(argv=None):
     a = list(sys.argv[1:] if argv is None else argv)
     if len(a) >= 3 and a[0] == "record":
@@ -79,7 +86,7 @@ def main(argv=None):
     if len(a) >= 4 and a[0] == "run" and a[2] == "--":
         print(f"{a[1]} ETA {fmt(estimate(a[1]))}", file=sys.stderr)
         t0 = time.time()
-        rc = subprocess.run(a[3:]).returncode
+        rc = subprocess.run(resolve_cmd(a[3:])).returncode
         record(a[1], time.time() - t0, ok=(rc == 0))
         return rc
     print(__doc__, file=sys.stderr)

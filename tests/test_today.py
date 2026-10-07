@@ -127,7 +127,9 @@ def test_view_shape(tmp_path):
     assert v["now"] == "2026-10-04T12:00:05+00:00"
     assert v["daily_reset"] == "2026-10-05T00:00:00+00:00"
     assert v["weekly_reset"] == "2026-10-08T00:00:00+00:00"
-    assert set(v["items"][0]) == {"id", "title", "kind", "until", "done", "ticked_at"}
+    # plan 068: rows without an auto rule keep the plan 003 shape
+    row = next(i for i in v["items"] if i["id"] == "barter-run")
+    assert set(row) == {"id", "title", "kind", "until", "done", "ticked_at"}
 
 
 def test_tick_untick(tmp_path):

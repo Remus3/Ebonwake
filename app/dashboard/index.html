@@ -2,7 +2,8 @@
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src http://127.0.0.1:8940; style-src 'self'; script-src 'self'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src http://127.0.0.1:8940; img-src 'self' http://127.0.0.1:8940; style-src 'self'; script-src 'self'">
 <title>Ebonwake</title>
 <link rel="stylesheet" href="../../ops/fleet_kit/tokens.css">
 <link rel="stylesheet" href="../shared/ew.css">
@@ -10,21 +11,39 @@
 <body>
 <div class="ew-shell">
   <header class="ew-top">
-    <span class="ew-brand">EBONWAKE</span>
+    <button class="ew-chip" id="class-chip" type="button"><span class="ew-chip-img ew-chip-empty" role="img" aria-label="Character: no portrait yet"></span><span class="ew-chip-name">EBONWAKE</span></button>
     <nav class="ew-tabs" id="tabs" role="tablist"></nav>
+    <button class="ew-btn ew-palbtn" id="palette-open" type="button" aria-label="Command palette">Ctrl+K</button>
     <span class="ew-pill unknown" id="server-pill">server ?</span>
+    <button class="ew-btn" id="server-restart" type="button" hidden>Restart server</button>
   </header>
-  <main id="panels" class="ew-main"></main>
+  <div class="ew-main">
+    <aside class="ew-rail" aria-label="Character">
+      <button class="ew-card-btn" id="char-card" type="button" aria-label="Character card"><span class="ew-card-frame"><span class="ew-card-pic ew-card-empty" role="img" aria-label="Character: no portrait yet"></span></span><span class="ew-card-lines"></span></button>
+    </aside>
+    <main id="panels" class="ew-panels"></main>
+  </div>
 </div>
+<div class="ew-toasts" id="toasts" role="status" aria-live="polite"></div>
 <script src="../shared/ewcore.js"></script>
+<script src="toast.js"></script>
+<script src="overrides.js"></script>
+<script src="home.js"></script>
 <script src="market.js"></script>
+<script src="crafting.js"></script>
+<script src="bosses.js"></script>
+<script src="imperial.js"></script>
 <script src="today.js"></script>
 <script src="progress.js"></script>
 <script src="leveling.js"></script>
+<script src="pets.js"></script>
+<script src="inventory.js"></script>
 <script src="grind.js"></script>
 <script src="events.js"></script>
 <script src="deadeye.js"></script>
 <script src="game.js"></script>
+<script src="settings.js"></script>
+<script src="palette.js"></script>
 <script src="dashboard.js"></script>
 </body>
 </html>

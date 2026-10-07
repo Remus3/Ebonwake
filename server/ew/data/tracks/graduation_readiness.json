@@ -1,0 +1,32 @@
+{
+  "id": "graduation_readiness",
+  "title": "Graduation readiness",
+  "kind": "quest",
+  "note": "Check before graduating the season character. Research 0003 sections 1.1 / 1.2.",
+  "source": "https://www.blackdesertfoundry.com/season-graduation-and-early-graduation/",
+  "verified": "2026-07-30",
+  "steps": [
+    {"id": "reach-60", "title": "Reach Lv 60 (last season pass levelling objective)", "min_level": 60,
+     "note": "24 levelling objectives, Lv 5 -> 60",
+     "source": "https://www.blackdesertfoundry.com/season-pass-guide/", "verified": "2026-07-30"},
+    {"id": "succession-ascension", "title": "Deadeye Succession or Ascension questline done", "min_level": 56,
+     "note": "Deadeye has no Awakening; which one counts for the pass objective is unverified",
+     "source": "https://www.naeu.playblackdesert.com/en-us/Wiki?wikiNo=436", "verified": false},
+    {"id": "pass-claimed", "title": "Season pass finished and every reward claimed",
+     "note": "Claiming is done in game",
+     "source": "https://www.blackdesertfoundry.com/season-graduation-and-early-graduation/",
+     "verified": "2026-07-30"},
+    {"id": "tuvala-all-pen", "title": "Every Tuvala slot at PEN (V)",
+     "note": "Weapon, sub, awakening and armor",
+     "source": "https://www.blackdesertfoundry.com/season-graduation-and-early-graduation/",
+     "verified": "2026-07-30"},
+    {"id": "fragments-spent", "title": "Spare Time-filled Fragments spent",
+     "note": "Spend them before graduating",
+     "source": "https://www.blackdesertfoundry.com/season-graduation-and-early-graduation/",
+     "verified": "2026-07-30"},
+    {"id": "auto-graduation", "title": "Noted: auto-graduation after 180 days inactive",
+     "note": "Rewards include a Boss Gear Exchange Coupon, 100 Cron Stones, Advice of Valks (+60)",
+     "source": "https://www.blackdesertfoundry.com/season-graduation-and-early-graduation/",
+     "verified": "2026-07-30"}
+  ]
+}

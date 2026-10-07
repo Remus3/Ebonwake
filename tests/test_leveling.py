@@ -13,7 +13,8 @@ import time
 import pytest
 
 from server.ew import app as ewapp
-from server.ew import grind, leveling
+from server.ew import events as ewevents
+from server.ew import grind, leveling, levels
 from server.ew.store import Store
 
 UTC = dt.timezone.utc
@@ -191,7 +192,7 @@ def test_xp_stack_sums_active_hot_and_xp_buffs():
 
 def test_seed_milestones_and_empty(svc):
     doc = svc.view()
-    assert doc["milestones"] == [50, 56, 57, 58, 60, 61] and doc["milestones_seed"] is True
+    assert doc["milestones"] == [56, 60, 61, 70, 75] and doc["milestones_seed"] is True
     assert doc["hot_windows"] == [] and doc["samples"] == []
     assert doc["level"] is None and doc["pct"] is None and doc["rate_pct_h"] is None
     assert doc["eta_next_s"] is None and doc["hot"] == {"active": [], "next": None}
@@ -246,7 +247,7 @@ def test_sample_delete(svc, clock):
 
 
 @pytest.mark.parametrize("arg", [
-    {"level": 0, "pct": 1}, {"level": 71, "pct": 1}, {"level": 52, "pct": -0.001},
+    {"level": 0, "pct": 1}, {"level": 76, "pct": 1}, {"level": 52, "pct": -0.001},
     {"level": 52, "pct": 100.001}, {"level": 52, "pct": 1.2345}, {"level": 52.0, "pct": 1},
     {"level": True, "pct": 1}, {"level": 52, "pct": True}, {"level": 52, "pct": "1"},
     {"level": 52}, {"level": 52, "pct": 1, "x": 1}, [52, 1], None,
@@ -259,7 +260,7 @@ def test_sample_bad(svc, arg):
 
 def test_sample_limits_inclusive(svc):
     assert svc.sample({"level": 1, "pct": 0})["pct"] == 0
-    assert svc.sample({"level": 70, "pct": 100})["level"] == 70
+    assert svc.sample({"level": 75, "pct": 100})["level"] == 75
     assert svc.sample({"level": 70, "pct": 37.512})["pct"] == 37.512
 
 
@@ -267,8 +268,10 @@ def test_hot_add_view_and_delete(svc, clock):
     doc = svc.hot_add({"days": [0, 2], "start": "11:00", "end": "13:00", "label": "Hot Time",
                        "pct": 50})
     w = doc["hot_windows"][0]
+    # plan 081: no maintenance source -> it ends after the 8-day fallback
     assert w == {"id": "h1", "days": [0, 2], "start": "11:00", "end": "13:00",
-                 "label": "Hot Time", "pct": 50}
+                 "label": "Hot Time", "pct": 50, "until": "2026-10-13T12:00:00+00:00",
+                 "ended": False}
     assert doc["hot"]["active"][0]["ends_in_s"] == 3600 and doc["xp_stack_pct"] == 50
     doc = svc.hot_add({"days": [6, 5], "start": "22:00", "end": "02:00", "label": "Late",
                        "pct": 100})
@@ -280,6 +283,71 @@ def test_hot_add_view_and_delete(svc, clock):
     # ids are never reused
     doc = svc.hot_add({"days": [1], "start": "00:00", "end": "23:59", "label": "x", "pct": 0})
     assert doc["hot_windows"][-1]["id"] == "h3"
+
+
+def test_typed_hot_window_without_end_gets_the_next_maintenance_end(store, clock):
+    """Plan 081: a typed recurring window carries an end; omitted, it is the
+    next maintenance end, and no occurrence starts at / after it."""
+    maint = T0 + dt.timedelta(days=2, hours=-1)  # Wed 11:00 UTC
+    svc = leveling.LevelingService(store, clock=clock, maint_end=lambda now: maint)
+    doc = svc.hot_add({"days": [0, 2], "start": "11:00", "end": "13:00", "label": "Hot",
+                       "pct": 50})
+    assert doc["hot_windows"][0]["until"] == maint.isoformat()
+    assert doc["hot"]["active"][0]["id"] == "h1"          # Monday's run is on
+    clock.advance(86400 * 2 - 3600)                        # Wed 11:00: the window has ended
+    doc = svc.view()
+    assert doc["hot"]["active"] == [] and doc["hot"]["next"] is None
+    assert doc["hot_windows"][0]["ended"] is True
+    # an explicit until wins; a past one is refused
+    doc = svc.hot_add({"days": [3], "start": "10:00", "end": "11:00", "label": "Thu",
+                       "pct": 20, "until": "2026-10-30T00:00:00+00:00"})
+    assert doc["hot_windows"][1]["until"] == "2026-10-30T00:00:00+00:00"
+    with pytest.raises(ValueError):
+        svc.hot_add({"days": [3], "start": "10:00", "end": "11:00", "label": "x", "pct": 1,
+                     "until": "2026-10-01T00:00:00+00:00"})
+    # a broken maintenance source falls back to 8 days
+    bad = leveling.LevelingService(store, clock=clock,
+                                   maint_end=lambda now: (_ for _ in ()).throw(RuntimeError()))
+    doc = bad.hot_add({"days": [4], "start": "10:00", "end": "11:00", "label": "y", "pct": 1})
+    assert doc["hot_windows"][-1]["until"] == (maint + dt.timedelta(days=8)).isoformat()
+
+
+def _notice_row(start, end, gno=7):
+    return {"start": start.isoformat(), "end": end.isoformat(), "label": "Hot Time",
+            "bonus": "Combat EXP +50%", "pct": 50,
+            "source": "https://www.naeu.playblackdesert.com/en-US/News/Detail?groupContentNo=7",
+            "group_no": gno}
+
+
+def test_overlapping_notice_window_retires_the_typed_one(svc, clock):
+    svc.hot_add({"days": [0, 2], "start": "11:00", "end": "13:00", "label": "typed", "pct": 50})
+    svc.hot_add({"days": [4], "start": "20:00", "end": "21:00", "label": "Fri", "pct": 10})
+    # the notice window covers Wednesday noon: the Mon / Wed typed window retires
+    wid = svc.hot_auto_add(_notice_row(T0 + dt.timedelta(days=2), T0 + dt.timedelta(days=2,
+                                                                                    hours=3)))
+    doc = svc.view()
+    assert [w["id"] for w in doc["hot_windows"]] == ["h2"]
+    r = doc["hot_retired"][0]
+    assert r["id"] == "h1" and r["retired_by"] == "notice" and r["notice_id"] == wid
+    # undoing the notice import brings it back
+    assert svc.hot_auto_del([wid]) == 1
+    doc = svc.view()
+    assert sorted(w["id"] for w in doc["hot_windows"]) == ["h1", "h2"]
+    assert doc["hot_retired"] == []
+
+
+def test_non_overlapping_notice_keeps_the_typed_window(svc):
+    svc.hot_add({"days": [0], "start": "11:00", "end": "13:00", "label": "typed", "pct": 50})
+    svc.hot_auto_add(_notice_row(T0 + dt.timedelta(days=1), T0 + dt.timedelta(days=1, hours=2)))
+    assert [w["id"] for w in svc.view()["hot_windows"]] == ["h1"]
+
+
+def test_pre_081_window_without_until_still_loads(store, clock):
+    store.put("leveling", {"samples": [], "milestones": [60], "next_id": 2,
+                           "hot_windows": [{"id": "h1", "days": [0], "start": "11:00",
+                                            "end": "13:00", "label": "old", "pct": 5}]})
+    doc = leveling.LevelingService(store, clock=clock).view()
+    assert doc["hot_windows"][0]["until"] is None and doc["hot"]["active"][0]["id"] == "h1"
 
 
 @pytest.mark.parametrize("arg", [
@@ -319,7 +387,7 @@ def test_milestones_set_sorted_unique(svc):
     assert svc.set_milestones([])["milestones"] == []
 
 
-@pytest.mark.parametrize("arg", [[0], [71], [50, 50], [50.0], [True], "50", None,
+@pytest.mark.parametrize("arg", [[0], [76], [50, 50], [50.0], [True], "50", None,
                                  list(range(1, 23))])
 def test_milestones_bad(svc, arg):
     with pytest.raises(ValueError):
@@ -523,3 +591,338 @@ def test_refute_r1_missing_milestones_keeps_samples(tmp_path):
 def _svc_for_refute(tmp_path):
     from server.ew import store as store_mod
     return leveling.LevelingService(store_mod.Store(tmp_path), clock=lambda: 1791190000.0)
+
+
+# --- plan 024: level-gated deadlines -------------------------------------------
+
+ENROL = T0 + dt.timedelta(days=10)  # 2026-10-15 12:00 UTC
+DL = {"id": "olvia-test", "label": "Olvia Academy", "needs_level": 60,
+      "enrol_by_utc": ENROL.isoformat(), "quests_by_utc": None, "source": "test", "verified": False}
+
+
+def _dsvc(store, clock, deadlines=None, epochs=()):
+    return leveling.LevelingService(store, clock=clock, epochs=list(epochs),
+                                    deadlines=[dict(DL)] if deadlines is None else deadlines)
+
+
+def _st(level, eta_s, now=T0):
+    return leveling.deadline_status(levels.validate_deadline(DL), level, eta_s, now)
+
+
+def test_eta_to_level():
+    assert leveling.eta_to_level_s(58, 50.0, 10.0, 60) == 15 * 3600  # 150 pct at 10/h
+    assert leveling.eta_to_level_s(60, 0, None, 60) == 0  # already there, no rate needed
+    assert leveling.eta_to_level_s(58, 50.0, None, 60) is None
+    assert leveling.eta_to_level_s(None, None, 10.0, 60) is None
+
+
+def test_deadline_status_each_state():
+    assert _st(60, 0) == {"state": "done", "reach_utc": None, "margin_h": None}
+    assert _st(61, None)["state"] == "done"
+    assert _st(58, None) == {"state": "unknown", "reach_utc": None, "margin_h": None}
+    assert _st(None, None)["state"] == "unknown"
+    on = _st(58, 24 * 3600)  # reach in 1 day, 9 days of margin
+    assert on == {"state": "on_track", "reach_utc": (T0 + dt.timedelta(days=1)).isoformat(),
+                  "margin_h": 216.0}
+    tight = _st(58, 8 * 86400)  # 2 days margin < 72 h
+    assert tight["state"] == "tight" and tight["margin_h"] == 48.0
+    edge = _st(58, 7 * 86400)  # exactly 72 h is not tight
+    assert edge["state"] == "on_track" and edge["margin_h"] == 72.0
+    late = _st(58, 11 * 86400)
+    assert late["state"] == "late" and late["margin_h"] == -24.0
+    # enrolment already closed, level not reached: late even without a rate
+    after = ENROL + dt.timedelta(hours=1)
+    assert _st(58, None, now=after)["state"] == "late"
+
+
+def test_deadline_state_agrees_with_rounded_margin():
+    # verifier r1 minor 3: 71.96 h rounds to 72.0 and must not read tight
+    assert _st(58, int(7 * 86400 + 0.04 * 3600)) == {
+        "state": "on_track", "reach_utc": (T0 + dt.timedelta(seconds=int(7 * 86400 + 144))).isoformat(),
+        "margin_h": 72.0}
+    zero = _st(58, 10 * 86400 + 100)  # -0.03 h shows 0.0: tight, not late
+    assert zero["state"] == "tight" and zero["margin_h"] == 0.0
+    assert _st(58, 10 * 86400 + 200)["margin_h"] == -0.1
+
+
+def test_deadline_hidden_after_final_cutoff(store, clock):
+    # verifier r1 minor 5: past quests_by_utc (or enrol when null) the row
+    # leaves the view, so the overlay pill does not stay red forever.
+    quests = (ENROL + dt.timedelta(days=6)).isoformat()
+    svc = _dsvc(store, clock, deadlines=[dict(DL, quests_by_utc=quests),
+                                         dict(DL, id="no-quests")])
+    clock.t = (ENROL + dt.timedelta(days=1)).timestamp()
+    v = svc.view()
+    assert [(d["id"], d["state"]) for d in v["deadlines"]] == [("olvia-test", "late")]
+    clock.t = (ENROL + dt.timedelta(days=6)).timestamp()
+    assert svc.view()["deadlines"] == []
+    assert svc.deadline_del("olvia-test")["deadlines"] == []  # still deletable
+
+
+def test_view_deadlines_from_rate(store, clock):
+    svc = _dsvc(store, clock)
+    assert svc.view()["deadlines"][0]["state"] == "unknown"
+    svc.sample({"level": 58, "pct": 0})
+    clock.advance(3600)
+    v = svc.sample({"level": 58, "pct": 10})  # 10 pct/h -> 190 pct left = 19 h
+    d = v["deadlines"][0]
+    assert d["id"] == "olvia-test" and d["tracked"] is True and d["state"] == "on_track"
+    assert d["reach_utc"] == (T0 + dt.timedelta(hours=1 + 19)).isoformat()
+    assert d["enrol_in_s"] == int((ENROL - T0).total_seconds()) - 3600
+    assert v["deadline_error"] is None
+
+
+def test_view_deadline_late_from_slow_rate(store, clock):
+    svc = _dsvc(store, clock)
+    svc.sample({"level": 58, "pct": 0})
+    clock.advance(36000)
+    v = svc.sample({"level": 58, "pct": 1})  # 0.1 pct/h -> 1990 h, far past ENROL
+    assert v["deadlines"][0]["state"] == "late"
+
+
+def test_deadline_across_epoch_boundary(store, clock):
+    # Fast pre-patch samples say on_track; the plan 018 epoch drops them, so
+    # with one post-patch sample there is no rate (unknown), then the slow
+    # post-patch rate makes it late.
+    epoch = {"id": "patch", "starts_utc": (T0 + dt.timedelta(hours=2)).isoformat(),
+             "label": "XP rescale", "source": "test", "verified": False}
+    svc = _dsvc(store, clock, epochs=[epoch])
+    svc.sample({"level": 58, "pct": 0})
+    clock.advance(3600)
+    assert svc.sample({"level": 59, "pct": 0})["deadlines"][0]["state"] == "on_track"
+    clock.advance(3 * 3600)  # past the epoch
+    assert svc.sample({"level": 59, "pct": 10})["deadlines"][0]["state"] == "unknown"
+    clock.advance(10 * 3600)
+    v = svc.sample({"level": 59, "pct": 11})  # 0.1 pct/h post-patch
+    assert v["rate_pct_h"] == pytest.approx(0.1)
+    assert v["deadlines"][0]["state"] == "late"
+
+
+def test_tracked_deadlines_file_is_valid():
+    rows = levels.load_deadlines()
+    olvia = {r["id"]: r for r in rows}["olvia-class-3"]
+    assert olvia["needs_level"] == 60 and olvia["verified"] is False
+    assert olvia["enrol_by_utc"].startswith("2026-11-05")
+    assert olvia["quests_by_utc"].startswith("2026-11-11")
+    assert "official notice" in olvia["note"]
+
+
+def test_bad_tracked_deadlines_file_degrades(tmp_path, store, clock, monkeypatch):
+    bad = tmp_path / "deadlines.json"
+    bad.write_text("{", encoding="ascii")
+    monkeypatch.setattr(levels.load_deadlines, "__defaults__", (bad,))
+    v = leveling.LevelingService(store, clock=clock, epochs=[]).view()
+    assert v["deadlines"] == [] and "unreadable" in v["deadline_error"]
+
+
+@pytest.mark.parametrize("patch,msg", [
+    ({"id": "Bad Id"}, "id"), ({"label": ""}, "label"), ({"label": "x" * 41}, "label"),
+    ({"needs_level": 0}, "needs_level"), ({"needs_level": 76}, "needs_level"),
+    ({"needs_level": True}, "needs_level"), ({"enrol_by_utc": "2026-11-05"}, "enrol_by_utc"),
+    ({"enrol_by_utc": "x"}, "enrol_by_utc"), ({"quests_by_utc": "2026-10-01T00:00:00Z"}, "quests"),
+    ({"source": ""}, "source"), ({"verified": 1}, "verified"), ({"note": 5}, "note"),
+    ({"extra": 1}, "deadline must be")])
+def test_deadline_set_validation(store, clock, patch, msg):
+    svc = _dsvc(store, clock)
+    with pytest.raises(ValueError, match=msg):
+        svc.deadline_set(dict(DL, **patch))
+    missing = dict(DL)
+    del missing["quests_by_utc"]
+    with pytest.raises(ValueError, match="deadline must be"):
+        svc.deadline_set(missing)
+    with pytest.raises(ValueError):
+        svc.deadline_set("x")
+    assert store.get("leveling").get("deadlines_added", []) == []
+
+
+def test_deadline_set_overrides_and_tombstones(store, clock):
+    svc = _dsvc(store, clock)
+    # correct the tracked row by id: operator copy wins, still flagged tracked
+    fixed = dict(DL, enrol_by_utc="2026-10-20T14:00:00Z", verified=True, note="official")
+    v = svc.deadline_set(fixed)
+    d = v["deadlines"][0]
+    assert d["enrol_by_utc"] == "2026-10-20T14:00:00+00:00" and d["verified"] is True
+    assert d["tracked"] is True and d["note"] == "official"
+    # a new operator row sorts by enrolment
+    v = svc.deadline_set(dict(DL, id="season-end", label="Season end", needs_level=61,
+                              enrol_by_utc="2026-10-10T00:00:00Z"))
+    assert [x["id"] for x in v["deadlines"]] == ["season-end", "olvia-test"]
+    assert v["deadlines"][0]["tracked"] is False
+    # delete the operator row: gone, no tombstone
+    v = svc.deadline_del("season-end")
+    assert [x["id"] for x in v["deadlines"]] == ["olvia-test"]
+    assert store.get("leveling")["deadlines_deleted"] == []
+    # delete the tracked row: override dropped + tombstone
+    v = svc.deadline_del("olvia-test")
+    assert v["deadlines"] == [] and store.get("leveling")["deadlines_deleted"] == ["olvia-test"]
+    with pytest.raises(ValueError, match="unknown deadline"):
+        svc.deadline_del("olvia-test")
+    with pytest.raises(ValueError, match="deadline id"):
+        svc.deadline_del(5)
+    # set again revives it (tombstone lifted)
+    v = svc.deadline_set(dict(DL))
+    assert [x["id"] for x in v["deadlines"]] == ["olvia-test"]
+    assert store.get("leveling")["deadlines_deleted"] == []
+
+
+def test_deadline_cap_and_corrupt_rows(store, clock):
+    svc = _dsvc(store, clock, deadlines=[])
+    for i in range(leveling.MAX_DEADLINES):
+        svc.deadline_set(dict(DL, id=f"d{i}"))
+    with pytest.raises(ValueError, match="at most"):
+        svc.deadline_set(dict(DL, id="one-more"))
+    svc.deadline_set(dict(DL, id="d0", label="replaced"))  # replacing at the cap is fine
+    doc = store.get("leveling")
+    doc["deadlines_added"] = [{"id": "bad"}, "x", dict(DL, id="ok")]
+    doc["deadlines_deleted"] = ["ok-too", 5, "Bad Id"]
+    store.put("leveling", doc)
+    assert [x["id"] for x in svc.view()["deadlines"]] == ["ok"]
+
+
+def test_events_lists_deadline_within_14_days(store, clock):
+    rows = [dict(DL, id="near", state="late", reach_utc=None),
+            dict(DL, id="far", enrol_by_utc=(T0 + dt.timedelta(days=15)).isoformat(),
+                 state="on_track", reach_utc=None),
+            dict(DL, id="done", state="done", reach_utc=None),
+            dict(DL, id="past", enrol_by_utc=(T0 - dt.timedelta(hours=1)).isoformat(),
+                 state="late", reach_utc=None)]
+    ev = ewevents.EventsService(store, clock=clock, deadlines=lambda: rows)
+    v = ev.view()
+    assert [d["id"] for d in v["deadlines"]] == ["near"]
+    assert v["deadlines"][0]["left_s"] == 10 * 86400 and v["deadlines"][0]["state"] == "late"
+    assert v["items"] == []  # never stored as an event entry
+    assert ewevents.EventsService(store, clock=clock).view()["deadlines"] == []
+
+
+def test_route_deadline_ops_and_events(tmp_path, clock):
+    s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
+                          sse_interval=0.05, market_seed=[], grind_clock=clock,
+                          leveling_clock=clock, events_clock=clock, profile_cfg={})
+    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t.start()
+    try:
+        doc = _req(s, "GET", "/api/leveling")[1]
+        assert "olvia-class-3" in [d["id"] for d in doc["deadlines"]]
+        # Olvia closes 2026-11-05, > 14 days after T0: not on the Events tab yet
+        assert _req(s, "GET", "/api/events")[1]["deadlines"] == []
+        st, doc, _ = _req(s, "POST", "/api/leveling", {"deadline_set": dict(DL)})
+        assert st == 200 and "olvia-test" in [d["id"] for d in doc["deadlines"]]
+        ev = _req(s, "GET", "/api/events")[1]
+        assert [d["id"] for d in ev["deadlines"]] == ["olvia-test"]
+        st, doc, _ = _req(s, "POST", "/api/leveling", {"deadline_del": "olvia-class-3"})
+        assert st == 200 and [d["id"] for d in doc["deadlines"]] == ["olvia-test"]
+        st, doc, _ = _req(s, "POST", "/api/leveling", {"deadline_set": {"id": "x"}})
+        assert st == 400 and "error" in doc
+    finally:
+        s.shutdown()
+        s.server_close()
+
+
+# --- plan 041: profile level markers ------------------------------------------
+
+def _m(minutes, level):
+    return {"ts": (T0 + dt.timedelta(minutes=minutes)).isoformat(), "level": level,
+            "pct": None, "source": "profile"}
+
+
+def test_clean_sample_keeps_profile_marker():
+    m = leveling._clean_sample(_m(0, 61))
+    assert m == {"ts": T0.isoformat(), "level": 61, "pct": None, "source": "profile"}
+
+
+@pytest.mark.parametrize("bad", [
+    {"pct": None}, {"pct": None, "source": "typed"}, {"pct": None, "source": "Profile"},
+    {"pct": None, "source": None}, {"pct": "x", "source": "profile"}])
+def test_clean_sample_drops_other_null_pct(bad):
+    s = dict({"ts": T0.isoformat(), "level": 61}, **bad)
+    assert leveling._clean_sample(s) is None
+
+
+def test_clean_sample_typed_shape_unchanged():
+    s = dict(_s(0, 52, 10), source="profile", extra=1)
+    assert leveling._clean_sample(s) == {"ts": T0.isoformat(), "level": 52, "pct": 10}
+
+
+def test_marker_between_typed_leaves_rate_and_eta(store, clock):
+    plain = [_s(0, 60, 10), _s(60, 60, 14), _s(120, 60, 20)]
+    with_m = [plain[0], _m(30, 61), plain[1], _m(90, 62), plain[2]]
+    assert leveling.rate_pct_h(with_m) == leveling.rate_pct_h(plain)
+    assert leveling._points(with_m) == leveling._points(plain)
+    clock.advance(3 * 3600)
+    store.put("leveling", {"samples": plain, "milestones": [70]})
+    a = leveling.LevelingService(store, clock=clock).view()
+    store.put("leveling", {"samples": [plain[0], _m(30, 60), plain[1], plain[2]],
+                           "milestones": [70]})
+    b = leveling.LevelingService(store, clock=clock).view()
+    for k in ("level", "pct", "rate_pct_h", "eta_next_s"):
+        assert a[k] == b[k], k
+    assert b["level_source"] == "typed" and len(b["samples"]) == 4
+
+
+def test_view_higher_marker_level_wins_pct_null(store, clock):
+    store.put("leveling", {"samples": [_s(0, 60, 10), _s(60, 60, 14), _m(90, 61)],
+                           "milestones": [61, 70]})
+    clock.advance(2 * 3600)
+    svc = leveling.LevelingService(store, clock=clock)
+    v = svc.view()
+    assert v["level"] == 61 and v["pct"] is None and v["level_source"] == "profile"
+    assert v["rate_pct_h"] == pytest.approx(4.0)  # from the typed samples
+    assert v["eta_next_s"] is None  # pct of the new level unknown
+    assert v["next_milestone"] == 70
+    assert v["samples"][0]["source"] == "profile" and "source" not in v["samples"][1]
+    assert svc.current_level() == 61
+
+
+def test_view_lower_marker_level_keeps_typed(store, clock):
+    store.put("leveling", {"samples": [_m(0, 59), _s(60, 60, 14)], "milestones": [70]})
+    v = leveling.LevelingService(store, clock=clock).view()
+    assert v["level"] == 60 and v["pct"] == 14 and v["level_source"] == "typed"
+
+
+def test_view_marker_only_and_empty(store, clock):
+    svc = leveling.LevelingService(store, clock=clock)
+    v = svc.view()
+    assert v["level"] is None and v["level_source"] is None
+    store.put("leveling", dict(store.get("leveling"), samples=[_m(0, 61)]))
+    v = svc.view()
+    assert v["level"] == 61 and v["pct"] is None and v["level_source"] == "profile"
+    assert v["rate_pct_h"] is None and v["eta_next_s"] is None
+
+
+def test_profile_marker_written_by_server_only(svc, clock):
+    svc.sample({"level": 60, "pct": 50})
+    clock.advance(60)
+    assert svc.profile_marker(60) is False  # nothing new
+    assert svc.profile_marker(61) is True
+    v = svc.view()
+    assert v["level"] == 61 and v["level_source"] == "profile"
+    assert v["samples"][0] == {"ts": (T0 + dt.timedelta(seconds=60)).isoformat(),
+                               "level": 61, "pct": None, "source": "profile",
+                               "pre_patch": False}
+    clock.advance(60)
+    assert svc.profile_marker(61) is False  # already known
+    for bad in (0, 76, "61", None, True):
+        assert svc.profile_marker(bad) is False
+    with pytest.raises(ValueError):
+        svc.sample({"level": 62, "pct": None})
+
+
+def test_profile_marker_never_replaces_typed_same_second(svc, clock):
+    svc.sample({"level": 60, "pct": 50})
+    assert svc.profile_marker(61) is False
+    v = svc.view()
+    assert v["samples"] == [{"ts": T0.isoformat(), "level": 60, "pct": 50, "pre_patch": False}]
+
+
+def test_sample_del_deletes_marker(svc, clock):
+    svc.profile_marker(61)
+    ts = svc.view()["samples"][0]["ts"]
+    v = svc.sample_del(ts)
+    assert v["samples"] == [] and v["level"] is None
+
+
+def test_typed_sample_after_marker_wins(svc, clock):
+    svc.profile_marker(61)
+    clock.advance(60)
+    v = svc.sample({"level": 61, "pct": 2.5})
+    assert v["level"] == 61 and v["pct"] == 2.5 and v["level_source"] == "typed"

@@ -2,11 +2,18 @@
    clicks each dashboard tab via executeJavaScript, measures page overflow,
    captures both windows to PNG (each dashboard capture only after
    showInactive() plus one completed paint, plan 010), checks overlay transparency and hotkey
-   registration. Never touches any other window or the game. */
+   registration, and (plan 022) that the overlay sits inside its display's work
+   area and off the minimap, and (plan 026) fires one synthetic toast + OS
+   notification, and (plan 047) counts scrolling cards per tab - a failure
+   only when o.freshStore (EW_SELFTEST_FRESH=1) - and (plan 076) fails on any
+   ellipsis-clipped element inside the What now card, and (plan 078) on a server
+   pill cut off at the 960 px minimum width and ui.scale 1.3. Never touches any other
+   window or the game. */
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
+const core = require('./shared/ewcore');
 
 function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
@@ -22,12 +29,54 @@ const MEASURE = '(function(){var d=document.documentElement,b=document.body;' +
   'return {scrollH:Math.max(d.scrollHeight,b.scrollHeight),clientH:d.clientHeight,' +
   'scrollW:Math.max(d.scrollWidth,b.scrollWidth),clientW:d.clientWidth,' +
   'active:a?a.dataset.tab:null,activeH:a?a.getBoundingClientRect().height:0,' +
+  // Plan 047: cards (or their list bodies) that scroll on this tab.
+  'cardsScroll:a?Array.prototype.filter.call(a.querySelectorAll(".ew-card,.ew-card .ew-cbody"),' +
+  'function(c){return c.scrollHeight>c.clientHeight+1;}).length:0,' +
+  // Plan 076: elements clipped with an ellipsis inside the What now card.
+  'wnClip:Array.prototype.filter.call(document.querySelectorAll("[data-card=\\"whatnow\\"] *"),' +
+  'function(n){return getComputedStyle(n).textOverflow==="ellipsis"&&n.scrollWidth>n.clientWidth;}).length,' +
   'tabs:Array.prototype.map.call(document.querySelectorAll(".ew-tab"),function(t){return t.dataset.tab;}),' +
   'pill:(document.getElementById("server-pill")||{}).textContent};})()';
 
 // A double rAF resolves only after the renderer has produced a frame.
 const PAINT = 'new Promise(function(r){requestAnimationFrame(function(){' +
   'requestAnimationFrame(function(){r(true);});});})';
+
+// Plan 078: the server pill against the viewport (CSS px) and whether the
+// top bar itself overflows.
+const TOPBAR = '(function(){var p=document.getElementById("server-pill"),t=document.querySelector(".ew-top");' +
+  'if(!p||!t)return null;var r=p.getBoundingClientRect();' +
+  'return {pillLeft:r.left,pillRight:r.right,pillW:r.width,viewW:document.documentElement.clientWidth,' +
+  'barScroll:t.scrollWidth>t.clientWidth+1};})()';
+const TOPBAR_SIZE = { width: 960, zoom: 1.3 }; // main.js minWidth, UI_SCALE max
+
+// Shrinks the dashboard to the minimum width at the top ui.scale, measures,
+// then restores both. Fake windows without the setters are measured as-is.
+async function topBar(win, pause) {
+  const wc = win.webContents;
+  const can = typeof win.setContentSize === 'function' && typeof wc.setZoomFactor === 'function';
+  const size = win.getContentSize();
+  const zoom = can && typeof wc.getZoomFactor === 'function' ? wc.getZoomFactor() : 1;
+  if (can) {
+    win.setContentSize(TOPBAR_SIZE.width, size[1]);
+    wc.setZoomFactor(TOPBAR_SIZE.zoom);
+    await pause(300);
+  }
+  let m = null;
+  try {
+    m = await wc.executeJavaScript(TOPBAR);
+  } finally {
+    if (can) {
+      win.setContentSize(size[0], size[1]);
+      wc.setZoomFactor(zoom);
+    }
+  }
+  const out = Object.assign({}, m || {}, { width: can ? TOPBAR_SIZE.width : size[0], zoom: can ? TOPBAR_SIZE.zoom : zoom });
+  out.fits = !!m && m.pillW > 0 && m.pillLeft >= 0 && m.pillRight <= m.viewW && !m.barScroll;
+  return out;
+}
+
+const NOTIFY_SELFTEST ='window.EWToast ? window.EWToast.selfTest() : null';
 
 // Chromium switches applied before app ready when EW_SELFTEST is set, so an
 // occluded (covered) dashboard still counts as visible and keeps painting.
@@ -76,6 +125,10 @@ async function run(o) {
       m.painted = didPaint;
       m.fits = m.scrollH <= m.clientH && m.scrollW <= m.clientW;
       m.switched = m.active === id && m.activeH > 0;
+      // Plan 047: on a fresh store no card scrolls; a lived-in store may.
+      m.cardsFit = !(m.cardsScroll > 0);
+      // Plan 076: the What now text is never clipped (any store).
+      m.wnFit = !(m.wnClip > 0);
       res.tabs.push(m);
       let img = await o.dashboard.webContents.capturePage();
       for (let i = 0; i < 5 && img.isEmpty(); i++) {
@@ -84,6 +137,16 @@ async function run(o) {
       }
       m.captured = !img.isEmpty();
       fs.writeFileSync(path.join(outDir, 'ew-dash-' + id + '.png'), img.toPNG());
+    }
+    res.topBar = await topBar(o.dashboard, pause);
+    // Plan 026 merge check: one synthetic market alert -> one toast + one
+    // ew:notify call. Reported only (OS notification support varies by host).
+    const shownBefore = o.notifyShown ? o.notifyShown() : null;
+    const n = await o.dashboard.webContents.executeJavaScript(NOTIFY_SELFTEST);
+    res.notify = n && typeof n === 'object' ? { hits: n.hits, toasts: n.toasts, bridge: n.notify || null } : null;
+    if (res.notify) {
+      res.notify.osShown = shownBefore === null ? null : o.notifyShown() - shownBefore;
+      res.notify.ok = res.notify.hits === 1 && res.notify.toasts >= 1;
     }
     res.hotkeys = {};
     Object.keys(o.keys).forEach(function (k) {
@@ -106,9 +169,20 @@ async function run(o) {
       hwnd: o.overlay.getNativeWindowHandle().readBigUInt64LE(0).toString(),
       bounds: o.overlay.getBounds()
     };
-    res.ok = res.tabs.every(function (t) { return t.fits && t.switched && t.painted && t.captured; }) &&
+    // Plan 022: inside the chosen display's work area; on the default anchor
+    // also clear of BDO's top-right minimap zone (null = not checked).
+    const place = o.overlayPlace || {};
+    res.overlay.workArea = place.workArea || null;
+    res.overlay.insideWorkArea = core.rectInside(res.overlay.bounds, place.workArea);
+    res.overlay.clearOfMinimap = place.defaultAnchor && place.workArea
+      ? !core.rectsIntersect(res.overlay.bounds, core.minimapZone(place.workArea)) : null;
+    res.freshStore = !!o.freshStore;
+    res.ok = res.tabs.every(function (t) {
+      return t.fits && t.switched && t.painted && t.captured && t.wnFit && (t.cardsFit || !res.freshStore);
+    }) && res.topBar.fits &&
       Object.keys(res.hotkeys).every(function (k) { return res.hotkeys[k].registered; }) &&
-      res.overlay.toggled && res.overlay.cornerAlpha === 0 && !res.overlay.focusable;
+      res.overlay.toggled && res.overlay.cornerAlpha === 0 && !res.overlay.focusable &&
+      res.overlay.insideWorkArea && res.overlay.clearOfMinimap !== false;
   } catch (e) {
     res.error = String(e && e.stack || e);
   }

@@ -1,0 +1,14 @@
+{
+ "_doc": "Plan 067: overlay widgets chosen by context. `priority` orders the contexts (first = primary); the shown list is pins, then each active context's widgets in priority order, deduped, blocks removed, capped at max_widgets (pins are never cut). A `hidden` context hides the whole overlay panel. Widget names are app/shared/ewcore.js WIDGETS plus `maintenance` (a countdown line).",
+ "max_widgets": 4,
+ "priority": ["closed", "maint_soon", "boss_soon", "reset_soon", "hot_time", "idle", "in_game"],
+ "contexts": {
+  "closed": {"hidden": true, "widgets": []},
+  "maint_soon": {"widgets": ["maintenance", "eventsSoon", "grindSession"]},
+  "boss_soon": {"widgets": ["worldBoss", "grindSession", "grindBuff"]},
+  "reset_soon": {"widgets": ["dice", "eventsSoon", "grindSession"]},
+  "hot_time": {"widgets": ["leveling", "grindBuff", "grindSession"]},
+  "idle": {"widgets": ["whatNow", "dice", "eventsSoon", "marketTicker", "season"]},
+  "in_game": {"widgets": ["whatNow", "grindSession", "grindBuff", "leveling", "eventsSoon"]}
+ }
+}
