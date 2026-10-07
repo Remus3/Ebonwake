@@ -166,6 +166,7 @@
     const meta = el('span', 'ew-tmeta');
     const pill = el('span', 'ew-pill unknown', '-');
     meta.appendChild(pill);
+    if (window.EWOverrides) window.EWOverrides.mount(meta, 'crafting'); // plan 079
     h.appendChild(meta);
     c.appendChild(h);
     const body = el('div', 'ew-cbody');

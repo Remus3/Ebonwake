@@ -14,7 +14,8 @@ block), /api/settings (plan 030), /api/pets
 /api/onboarding (plan 051), /api/crafting (plan 054), /api/imperial (plan 053),
 /api/overlay/context (plan 067; SSE `overlay_context` on change),
 /api/whatnow (plan 069; SSE `whatnow` carries the full view on change),
-/api/signals (plan 073, GET only), /api/prompts (plan 070: quiet gate, alert ladder,
+/api/signals (plan 073, GET only; plan 079 adds its `overrides` section),
+/api/overrides (plan 079, GET only; POST /api/settings {"clear": key} retires one), /api/prompts (plan 070: quiet gate, alert ladder,
 live prompts; stale suggestions / review rows / pending stops are left out of their own
 payloads), /api/maint/digest (plan 074: before-maintenance digest), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
@@ -40,7 +41,8 @@ from urllib.parse import parse_qs
 
 from . import (__version__, autotick, autowatch, bossdrift, bosses, context, coupons, crafting, deadeye,
                detect, enhance, eventnotices, events, gamewatch, grind, imperial, inventory, itemnames,
-               leveling, logindays, maint, maintdigest, market, mounts, ocr, ocrauto, onboarding, pets,
+               leveling, logindays, maint, maintdigest, market, mounts, ocr, ocrauto, onboarding, overrides,
+               pets,
                ports,
                playsession, progress, prompts, settings, shopping, signals, single, spots, summary,
                today, weekly, whatnow, xpbooks)
@@ -168,12 +170,17 @@ class EWServer(ThreadingHTTPServer):
         self.store = Store(store_root or RUNTIME / "store")
         # Plan 030: the only writer of config/local.json (allowlisted keys only).
         self.settings = settings.Settings(config_path or CONFIG_PATH, detected=detected)
+        # Plan 079: source / set-at / expiry for operator-set values; a live
+        # signal (VP timer, maintenance notice) supersedes an override.
+        self.overrides = overrides.OverrideLedger(self.store, clock=today_clock or time.time,
+                                                  maint_end=self._maint_end_after)
         self.sse_interval = sse_interval
         self.bus = DomainBus()
         seed = config_market_watch() if market_seed is None else market_seed
         self.market = market.MarketService(market_client or market.ArshaClient(),
                                            market.Watchlist(self.store, seed=seed),
                                            settings=config_market())
+        self.market.effective = self.tax
         # Plan 028: name index over the seed, util/db and this client's cache;
         # util/db rides the market client's fetch so a test client stays offline.
         mc = self.market.client
@@ -209,7 +216,7 @@ class EWServer(ThreadingHTTPServer):
             self.store, clock=grind_clock or time.time,
             epoch=lambda: self.leveling.active_epoch(),
             prices=lambda iid: market.price_of(self.market.client.sublist(iid)["data"]),
-            tax=lambda: self.market.settings)
+            tax=self.tax)
         # XP stack counts armed grind buffs that carry an xp_pct (plan 011).
         # Plan 060: Combat Secret Book ledger; Black Shrine books follow plan 033 ticks.
         self.leveling = leveling.LevelingService(
@@ -240,8 +247,7 @@ class EWServer(ThreadingHTTPServer):
         # undo) while notices.auto_add is on, Hot Time into plan 011's card.
         self.notices = eventnotices.NoticeService(
             notice_client, self.events, self.store, spawn=notice_spawn,
-            maint_start=lambda: self.settings.view()["settings"]["events.maintenance_start_utc"],
-            leveling=self.leveling,
+            maint_start=self._maint_start, leveling=self.leveling,
             auto_add=lambda: self.settings.view()["settings"]["notices.auto_add"])
         # Plan 074: before-maintenance digest - loss sentences from the cached
         # maintenance notices + what ends at the next maintenance; never fetches.
@@ -259,10 +265,9 @@ class EWServer(ThreadingHTTPServer):
         # Plan 043: operator-typed pet roster over the tracked pets.json rules.
         self.pets = pets.PetService(self.store)
         # Plan 045: operator-typed weight / storage planner; VP from plan 005's
-        # buff timer (else the market.vp setting), sales priced per plan 027.
+        # buff timer (else the market.vp override, plan 079), sales priced per plan 027.
         self.inventory = inventory.InventoryService(
-            self.store, buffs=lambda: self.grind.view()["buffs"],
-            tax=lambda: self.market.settings)
+            self.store, buffs=lambda: self.grind.view()["buffs"], tax=self.tax)
         # Plan 044: operator-typed mounts + sourced T10 breed rules.
         self.mounts = mounts.MountsService(self.store)
         # Plan 035: EV math on tracked rate rows; prices from the market cache only.
@@ -282,7 +287,7 @@ class EWServer(ThreadingHTTPServer):
         # Plan 054: operator recipes priced from the market cache only, taxed per plan 027.
         self.crafting = crafting.CraftingService(
             self.store, price=lambda iid: self.market.cached_price(iid),
-            tax=lambda: self.market.settings, name=self.names.name)
+            tax=self.tax, name=self.names.name)
         # Plan 071: auto-watch from the shopping list, the current / last spot's
         # loot and recipe inputs, curated before each watch refresh; cache prices only.
         self.autowatch = autowatch.AutoWatch(
@@ -313,12 +318,11 @@ class EWServer(ThreadingHTTPServer):
         # Plan 067: overlay widgets chosen by context (game state, clock, notices).
         self.context = context.ContextService(
             clock=context_clock or time.time, game=self.game.view,
-            settings=lambda: self.settings.view()["settings"],
+            settings=self.eff_settings,
             boss_at=lambda now: (bosses.next_spawns(now, 1, self.bosses.table) or [{}])[0].get(
                 "at_utc"),
             maint_window=lambda now: maint.next_window(
-                now, maint.slot(self.settings.view()["settings"]["events.maintenance_start_utc"]),
-                self.notices.maint_notices()),
+                now, maint.slot(self._maint_start()), self.notices.maint_notices()),
             reset_at=today.next_daily_reset, hot=self.leveling.hot_active)
         # Plan 075: logged-in minutes per UTC date -> qualifying login days per event.
         self.logindays = logindays.LoginDays(self.store, clock=events_clock or time.time)
@@ -389,10 +393,113 @@ class EWServer(ThreadingHTTPServer):
             "session_log": self._sig_session_log, "screenshots": self._sig_screenshots,
             "ocr": self._sig_ocr, "notices": self._sig_notices, "market": self._sig_market,
             "profile": self._sig_profile, "boss_drift": lambda: None},
-            clock=today_clock or time.time)
+            clock=today_clock or time.time, overrides=self._sig_overrides)
         if game_poll:  # off by default so tests never probe processes; main() turns it on
             self.game.start()
             self.ocr_auto.start()
+
+    # -- plan 079 override ledger --------------------------------------------------
+
+    def _maint_end_after(self, at, value):
+        """End (epoch) of the first maintenance ending after `at` with start `value`."""
+        win = maint.next_window(_dt.datetime.fromtimestamp(at, _dt.timezone.utc),
+                                maint.slot(value), self.notices.maint_notices())
+        return win[1].timestamp() if win else None
+
+    def _vp_live(self):
+        """An armed plan 005 "Value Pack" timer (plan 066 OCR arms the same row)."""
+        for b in self.grind.view()["buffs"]:
+            left = b.get("left_s")
+            if (str(b.get("name") or "").strip().lower() == inventory.VP_BUFF
+                    and isinstance(left, int) and left > 0):
+                return {"value": True, "signal": "vp_timer"}
+        return None
+
+    def _maint_live(self):
+        """A plan 064 maintenance notice for the next maintenance date."""
+        notices = self.notices.maint_notices()
+        if not notices:
+            return None
+        now = _dt.datetime.fromtimestamp(float(self.overrides.clock()), _dt.timezone.utc)
+        win = maint.next_window(now, maint.slot(""), notices)
+        if win and win[0].date().isoformat() in notices:
+            return {"value": "", "signal": "maint_notice"}
+        return None
+
+    def _live(self, fn):
+        try:
+            return fn()
+        except Exception:  # noqa: BLE001 - an unreadable signal is "no live value"
+            return None
+
+    def eff_settings(self):
+        """Settings with every ledger key resolved (plan 079): config imported
+        as `source: config`, then live signal > unexpired override > default.
+        The market keys resolve from the configured base `market.settings`."""
+        view = self.settings.view()
+        s, dflt = view["settings"], view["defaults"]
+        base = self.market.settings
+        s["market.vp"], s["market.fame_pct"] = base["vp"], base["fame_pct"]
+        try:
+            mtime = os.stat(self.settings.path).st_mtime
+        except OSError:
+            mtime = float(self.overrides.clock())
+        self.overrides.sync_config(s, dflt, mtime)
+        live = {"market.vp": self._vp_live, "events.maintenance_start_utc": self._maint_live}
+        spec = {k: (self._live(live[k]) if k in live else None, dflt[k]) for k in s}
+        for k, out in self.overrides.effective_many(spec).items():
+            s[k] = out["value"]
+        return s
+
+    def tax(self):
+        """{vp, fame_pct} in force for every net-proceeds reader (plan 027 / 079)."""
+        s = self.eff_settings()
+        return market.settings_from({"market": {"vp": s["market.vp"],
+                                                "fame_pct": s["market.fame_pct"]}})
+
+    def _maint_start(self):
+        return self.eff_settings()["events.maintenance_start_utc"]
+
+    def _derived_overrides(self, now):
+        """Typed values whose ledger lives elsewhere: gear AP / AAP / DP
+        (plan 066 `gs_src`, superseded by OCR) and manual watch thresholds."""
+        out = []
+        try:
+            ch = self.progress.view(refresh=False)["character"]
+        except Exception:  # noqa: BLE001 - a progress fault lists nothing
+            ch = {}
+        gs = ch.get("gs") if isinstance(ch.get("gs"), dict) else {}
+        for stat, src in sorted((ch.get("gs_src") or {}).items()):
+            if isinstance(src, dict) and src.get("source") == "typed":
+                out.append({"key": f"gear.{stat}", "label": f"Gear {stat.upper()} (typed)",
+                            "value": gs.get(stat), "source": "typed", "set_at": src.get("at"),
+                            "expires_at": None, "expires_in_s": None,
+                            "reason": "the next OCR read supersedes it", "cards": ["progress"],
+                            "clearable": False})
+        for w in self.market.watchlist.items():
+            if w.get("auto") is True or (w.get("below") is None and w.get("above") is None):
+                continue
+            out.append({"key": f"market.watch.{w['id']}.{w['sid']}",
+                        "label": "Watch threshold: " + str(self.names.name(w["id"], w["sid"])),
+                        "value": {"below": w.get("below"), "above": w.get("above")},
+                        "source": "typed", "set_at": None, "expires_at": None,
+                        "expires_in_s": None, "reason": "typed on the Market tab",
+                        "cards": ["market"], "clearable": False})
+        return out
+
+    def overrides_view(self):
+        """GET /api/overrides: active entries (labels, value, set-at, expires-in,
+        affected cards) after live signals and expiry have retired theirs."""
+        self.eff_settings()
+        self.overrides.sweep()
+        now = float(self.overrides.clock())
+        items = self.overrides.items(now, labels=getattr(settings, "LABELS", None))
+        items += self._derived_overrides(now)
+        return {"count": len(items), "items": items, "history": self.overrides.history()[:20]}
+
+    def _sig_overrides(self):
+        v = self.overrides_view()
+        return {"count": v["count"], "items": v["items"]}
 
     # -- plan 073 signal inputs ------------------------------------------------
 
@@ -440,8 +547,7 @@ class EWServer(ThreadingHTTPServer):
 
     def _maint_inputs(self):
         """Plan 069: the effective maintenance slot + official notices (plan 059 / 064)."""
-        start = self.settings.view()["settings"]["events.maintenance_start_utc"]
-        return {"slot": maint.slot(start),
+        return {"slot": maint.slot(self._maint_start()),
                 "notices": maint.clean_notices(self.store.get("maint_notices"))}
 
     def _market_alerts(self):
@@ -497,9 +603,8 @@ class EWServer(ThreadingHTTPServer):
             at = fn(when).timestamp()
             out.append({"key": f"resetSoon:{name}:{int(at)}", "at": at, "title": title})
         try:
-            win = maint.next_window(
-                when, maint.slot(self.settings.view()["settings"]["events.maintenance_start_utc"]),
-                self.notices.maint_notices())
+            win = maint.next_window(when, maint.slot(self._maint_start()),
+                                    self.notices.maint_notices())
         except Exception:  # noqa: BLE001 - a bad maintenance source never breaks the view
             win = None
         if win and win[0] > when:
@@ -704,6 +809,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.maintdigest.view())
         if path == "/api/signals":
             return self._send(200, self.server.signals.view())
+        if path == "/api/overrides":
+            return self._send(200, self.server.overrides_view())
         if path == "/events":
             return self._sse()
         if path == "/":  # plan 020: redirect so relative asset paths resolve
@@ -798,7 +905,24 @@ class Handler(BaseHTTPRequestHandler):
         return getattr(self.server.deadeye, op)(arg)
 
     def _post_settings(self, body):
+        led = self.server.overrides
+        clear = None
+        if isinstance(body, dict) and set(body) == {"clear"}:
+            # Plan 079: {"clear": key} retires the override and puts the key back
+            # to its default (so config/local.json never re-imports it).
+            clear = body["clear"]
+            if not (isinstance(clear, str) and clear in settings.SPEC and led.covers(clear)):
+                raise ValueError("clear: not a clearable override key")
+            body = {"set": {clear: settings.SPEC[clear][1]}}
         out = self.server.settings.apply(body)
+        dflt = out["defaults"]
+        for key, v in body["set"].items():  # typed writes become ledger entries
+            if not led.covers(key):
+                continue
+            if v == dflt[key]:
+                led.clear(key, by="operator")
+            else:
+                led.set(key, v, source="typed", reason="typed in Settings")
         if any(k.startswith("market.") for k in out["changed"]):  # net proceeds apply live
             s = out["settings"]
             self.server.market.settings = market.settings_from(
@@ -808,6 +932,7 @@ class Handler(BaseHTTPRequestHandler):
         if det is not None and any(k.startswith("bdo.") for k in out["changed"]):
             det.apply()
         self.server.context.invalidate()  # plan 067: pins / blocks / auto apply live
+        out["overrides"] = self.server.overrides_view()
         return out
 
     def _post_ocr(self, body):

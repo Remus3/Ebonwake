@@ -263,7 +263,26 @@ def test_digest_shape_and_order():
         assert set(r) == {"id", "name", "level", "age_s", "reason", "detail", "hint"}
         assert r["level"] in signals.LEVELS
     assert doc["bad"] == 0 and doc["worst"] in ("ok", "off")
-    assert set(doc) == {"rows", "bad", "worst", "at"}
+    assert set(doc) == {"rows", "bad", "worst", "at", "overrides"}
+    assert doc["overrides"] == {"count": 0, "items": []}  # plan 079: none by default
+
+
+def test_digest_carries_the_overrides_section():
+    item = {"key": "market.vp", "label": "Value Pack (typed)", "value": True,
+            "source": "typed", "expires_in_s": 3600, "cards": ["grind"]}
+    doc = signals.digest(_inputs(), NOW, overrides={"count": 9, "items": [item, "junk"]})
+    assert doc["overrides"] == {"count": 1, "items": [item]}
+    assert signals.digest(_inputs(), NOW, overrides="junk")["overrides"]["count"] == 0
+
+
+def test_service_overrides_fault_lists_none():
+    def boom():
+        raise RuntimeError("ledger")
+    svc = signals.SignalService({}, clock=lambda: NOW, overrides=boom)
+    assert svc.view()["overrides"] == {"count": 0, "items": []}
+    svc = signals.SignalService({}, clock=lambda: NOW,
+                                overrides=lambda: {"items": [{"key": "a"}]})
+    assert svc.view()["overrides"]["count"] == 1
 
 
 def test_missing_or_junk_input_never_raises():
@@ -394,3 +413,4 @@ def test_route_serves_digest(srv):
     assert rows["session_log"]["reason"] == "unconfigured"  # a bare server has no game folder
     assert rows["boss_drift"]["level"] == "off"
     assert rows["profile"]["level"] == "off"
+    assert doc["overrides"]["count"] == len(doc["overrides"]["items"])
