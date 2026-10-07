@@ -82,7 +82,10 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 075 | Login-day reward tracker: qualifying login days per event, days left, at-risk alert | [ ] open |
 | 076 | Home consolidation: full-width What now, one Timers card, quiet line for empty cards, no repeated facts | [ ] open |
 | 077 | One status truth: onboarding, profile card and stale styling derived from the signal digest | [ ] open |
-| 078 | Settings and formatting consistency: one control per overlay widget, human labels, local-time entry, palette button | [ ] open |
+| 078 | Settings and formatting consistency: one control per overlay widget, human labels, local-time display (no new entry), palette button | [ ] open |
+| 079 | Override ledger: source, set-at, expiry, superseded by live signals; override badges + digest list | [ ] open (priority) |
+| 080 | Settings purge: delete automation kill switches, manual overlay layout, per-rule notify toggles, tunables | [ ] open |
+| 081 | Derive typed planner inputs from live signals: silver, hours/day, inventory weight, CP, fame, loot counts, Hot Time ends | [ ] open |
 
 Deep dive 2026-10-06b (research 0008): two plans. 074 first (priority) -
 the official 2026-10-08 maintenance notice says unclaimed Tag Characters
@@ -104,6 +107,19 @@ started link dead-ends (smallest, highest correctness value). 078 (Settings dupl
 raw identifier labels, remaining UTC entry, palette button). 047 and 050
 are extended only for gaps found live. Not planned: shared snapshot store
 (0009 M9), overlay base rows by context (L3).
+
+Zero-touch audit 2026-10-06 (research 0010, operator order: self-adjusting
+EW, no toggles or typed data that get forgotten): 29 findings (4 H, 10 M,
+15 L). 079 first (priority) - the override ledger every other change writes
+through: source + set-at + expiry on any operator value that changes
+output, superseded by a live signal, badged on the card and listed in the
+073 digest (fixes `market.vp` silently inflating Grind / Crafting net
+proceeds). 080 and 081 depend on 079, not on each other: 080 deletes the
+seven automation kill switches, the manual overlay layout, per-rule notify
+opt-ins (four defaulted off) and tunables; 081 derives silver, hours/day,
+inventory weight, CP, fame, loot counts from OCR / session log. 078
+re-scoped: no new manual entry (local-time display only, no manual-layout
+sub-group). 077 unchanged (no conflict).
 
 Autonomy deep dive 2026-10-06 (research 0007, operator order: self-aware,
 low-input EW): 13 plans 061-073 ranked by operator inputs removed per play
