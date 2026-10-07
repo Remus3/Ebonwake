@@ -517,6 +517,7 @@
     S.panel = panel;
     panel.classList.add('ew-market');
     const w = card('Watchlist');
+    if (window.EWOverrides) window.EWOverrides.mount(w.card.querySelector('h2'), 'market'); // plan 079
     const it = card('Item detail');
     const calc = calcBox();
     it.card.appendChild(calc.box);

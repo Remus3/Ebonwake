@@ -478,6 +478,9 @@ class MarketService:
         self.settings = settings_from({"market": settings or {}})
         self._last = None  # freshness summary of the last watch refresh
         self.curate = None  # plan 071: () -> None, run before each watch refresh
+        # Plan 079: () -> {vp, fame_pct} after the override ledger; `settings`
+        # stays the configured base it resolves from.
+        self.effective = None
         self.samples = samples if samples is not None else PriceSamples(
             Path(client.cache_dir).parent / "market_samples.json", clock=client.clock)
 
@@ -495,10 +498,19 @@ class MarketService:
             return dict(b, basis="samples", age_s=max(0, int(now - b["to"] / 1000)))
         return None
 
+    def effective_settings(self):
+        """{vp, fame_pct} in force: the plan 079 resolver, else the configured base."""
+        if self.effective is not None:
+            try:
+                return settings_from({"market": self.effective()})
+            except Exception:  # noqa: BLE001 - a resolver fault falls back to the base
+                pass
+        return self.settings
+
     def tax(self):
         """Rates the dashboard's pair calculator mirrors (plan 027)."""
         r = load_rules()
-        return dict(self.settings, tax=r["tax"], vp_bonus=r["vp_bonus"],
+        return dict(self.effective_settings(), tax=r["tax"], vp_bonus=r["vp_bonus"],
                     fame_verified=r["fame_steps"]["verified"])
 
     def _quote(self, w, batch, rows):
@@ -523,7 +535,8 @@ class MarketService:
                 self.curate()
             except Exception:  # noqa: BLE001
                 pass
-        vp, fame = self.settings["vp"], self.settings["fame_pct"]
+        eff = self.effective_settings()
+        vp, fame = eff["vp"], eff["fame_pct"]
         watch = self.watchlist.items()
         base = [w["id"] for w in watch if w["sid"] == 0]
         batch, rows = None, {}

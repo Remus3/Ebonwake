@@ -1,0 +1,18 @@
+{
+ "_doc": "Plan 079: per override key, its expiry rule (days:N, until:maint_end, until:path_missing, or none - none only for the allowlisted keys in overrides.NONE_OK) and the dashboard cards that show its badge. A key ending in .* covers every key under that prefix.",
+ "keys": {
+  "market.vp": {"label": "Value Pack (typed)", "expiry": "days:30",
+                "cards": ["grind", "crafting", "inventory", "market"]},
+  "market.fame_pct": {"label": "Family fame bonus", "expiry": "none",
+                      "cards": ["grind", "crafting", "inventory", "market"]},
+  "profile.family": {"label": "Family name", "expiry": "none", "cards": ["progress"]},
+  "events.maintenance_start_utc": {"label": "Maintenance start (UTC)", "expiry": "until:maint_end",
+                                   "cards": ["events", "home"]},
+  "overlay.mode.*": {"label": "Overlay widget pin / block", "expiry": "days:7",
+                     "cards": ["overlay"]},
+  "bdo.install_dir": {"label": "BDO install folder", "expiry": "until:path_missing",
+                      "cards": ["system"]},
+  "bdo.documents_dir": {"label": "BDO Documents folder", "expiry": "until:path_missing",
+                        "cards": ["system"]}
+ }
+}

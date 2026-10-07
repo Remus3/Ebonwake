@@ -151,6 +151,9 @@ html, body {
 .ew-sigrow { display: flex; gap: 8px; align-items: baseline; font-size: 12px; }
 .ew-sigrow .ew-pill { flex: none; }
 .ew-hsig { margin: 0 0 6px; cursor: pointer; }
+/* Plan 079: override badges in card headers (title = value, source, expiry). */
+.ew-ovrs { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; }
+.ew-ovrs:empty { display: none; }
 
 /* Today tab (plan 003): checklists scroll inside their card (ew-mcard/ew-cbody). */
 .ew-tmeta { display: flex; gap: 6px; align-items: center; }

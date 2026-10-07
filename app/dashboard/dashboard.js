@@ -240,6 +240,22 @@
         if (r.hint && r.level !== 'ok') row.appendChild(el('span', 'ew-muted', r.hint));
         fr.appendChild(row);
       });
+      // Plan 079: the override ledger's active entries, each with clear.
+      C.overrideRows(H.signals.overrides).forEach(function (o) {
+        const row = el('div', 'ew-sigrow');
+        const p = el('span', 'ew-pill warn ew-ovr', 'override');
+        p.title = o.title;
+        row.appendChild(p);
+        row.appendChild(el('span', 'ew-muted', o.text));
+        if (o.clearable && window.EWOverrides) {
+          const x = el('button', 'ew-tx', 'clear');
+          x.type = 'button';
+          x.title = 'clear this override (back to the default)';
+          x.addEventListener('click', function () { window.EWOverrides.clear(o.key); });
+          row.appendChild(x);
+        }
+        fr.appendChild(row);
+      });
     } else if (fr) {
       fr.textContent = '';
       fr.classList.remove('ew-sig');

@@ -516,6 +516,7 @@
     const cp = card('Coupons');
     const sg = card('Suggested coupons');
     const ev = card('Events and drops');
+    if (window.EWOverrides) window.EWOverrides.mount(ev.card.querySelector('h2'), 'events'); // plan 079
     const sn = card('Suggested events');
     const src = card('Sources');
     src.pill.textContent = 'official';
