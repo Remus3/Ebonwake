@@ -442,6 +442,14 @@ class ProfileHistory:
         last = rows[-1]["at"]
         return _main_level([r for r in rows if r["at"] == last])
 
+    def character_count(self):
+        """Characters in the newest refresh, or None (no refresh yet)."""
+        rows = self.rows()
+        if not rows:
+            return None
+        last = rows[-1]["at"]
+        return sum(1 for r in rows if r["at"] == last)
+
     def main_snapshot(self):
         """Plan 042: the main character's row of the newest refresh, or None."""
         rows = self.rows()
