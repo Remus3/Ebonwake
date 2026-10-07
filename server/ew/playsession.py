@@ -239,6 +239,18 @@ class PlaySession:
         with self._lock:
             return [dict(h) for h in self._load()["history"]]
 
+    def windows(self):
+        """Plan 083: logged-in windows [{start, end|None}], oldest first; the open
+        session ends where the game last left logged_in (None while still in)."""
+        with self._lock:
+            d = self._load()
+        out = [{"start": h["start"], "end": h["end"]} for h in d["history"]]
+        o = d["open"]
+        if o is not None:
+            out.append({"start": _iso(o["start"]),
+                        "end": _iso(o["left_at"]) if o["left_at"] is not None else None})
+        return out
+
     def state(self):
         """GET /api/grind `session.play`: {state: open, id, start, spot} or None."""
         o = self.view()["open"]

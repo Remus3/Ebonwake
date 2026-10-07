@@ -115,7 +115,7 @@
     const b = document.getElementById('class-chip');
     if (!b) return;
     const chip = C.portraitChip(portraits, C.classOfTab(active, portraits));
-    const sig = [chip.cls, chip.src, chip.title].join('|');
+    const sig = [chip.cls, chip.src, chip.title, chip.pinned].join('|');
     if (b.dataset.sig === sig) return;
     b.dataset.sig = sig;
     b.textContent = '';
@@ -130,6 +130,8 @@
       pic.alt = chip.alt;
     }
     b.appendChild(pic);
+    // Plan 083: a gallery pick (plan 079 override) shows an accent dot.
+    if (chip.pinned) b.appendChild(el('span', 'ew-chip-dot'));
     b.appendChild(el('span', 'ew-chip-name', chip.cls || 'EBONWAKE'));
     b.title = chip.title;
   }

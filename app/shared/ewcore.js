@@ -5175,7 +5175,10 @@
   // server checks the ledger).
   function validSettingsBody(body) {
     if (plainObject(body) && Object.keys(body).length === 1 && typeof body.clear === 'string') {
-      return Object.prototype.hasOwnProperty.call(SETTINGS_FIELDS, body.clear) || INCIDENT_KEYS.indexOf(body.clear) >= 0;
+      // Plan 083: a gallery pick clears like any override ("Use newest").
+      return Object.prototype.hasOwnProperty.call(SETTINGS_FIELDS, body.clear) ||
+        INCIDENT_KEYS.indexOf(body.clear) >= 0 ||
+        /^portrait\.[A-Za-z][A-Za-z ]{0,39}$/.test(body.clear);
     }
     if (!plainObject(body) || Object.keys(body).length !== 1 || !plainObject(body.set)) return false;
     const keys = Object.keys(body.set);
@@ -5925,7 +5928,7 @@
     '/api/bosses': validBossesBody, '/api/pets': validPetsBody, '/api/inventory': validInventoryBody,
     '/api/mounts': validMountsBody, '/api/onboarding': validOnboardingBody,
     '/api/crafting': validCraftingBody, '/api/imperial': validImperialBody,
-    '/api/maint/digest': validMaintDigestBody
+    '/api/maint/digest': validMaintDigestBody, '/api/portraits': validPortraitsBody
   };
   const POST_ROUTES = Object.keys(POST_VALIDATORS);
 
@@ -5996,13 +5999,94 @@
     const name = cls || 'Character';
     const row = cls && v.classes && typeof v.classes === 'object' ? v.classes[cls] : null;
     const cur = row && row.current && typeof row.current === 'object' ? row.current : null;
-    if (!cur || typeof cur.id !== 'string' || !/^\d{6,20}-\d{1,12}$/.test(cur.id)) {
+    if (!cur || !portraitId(cur.id)) {
       return { cls: cls, src: null, alt: name + ': no portrait yet', title: PORTRAIT_HINT, empty: true };
     }
     const f = typeof cur.at === 'string' ? fmtLocal(cur.at, opts) : null;
     const when = f ? f.text : '';
-    return { cls: cls, src: SERVER + '/api/portraits/img/' + encodeURIComponent(cur.id) + '?size=s',
-      alt: name + ' portrait', title: name + ' portrait' + (when ? ', taken ' + when : ''), empty: false };
+    // Plan 083: a gallery pick (plan 079 override) shows its image + an accent dot.
+    const pinned = cur.from === 'override';
+    const p = pinned && typeof cur.set_at === 'string' ? fmtLocal(cur.set_at, opts) : null;
+    return { cls: cls, src: portraitSrc(cur, 's'), alt: name + ' portrait',
+      title: name + ' portrait' + (when ? ', taken ' + when : '') +
+        (pinned ? '; pinned' + (p ? ' ' + p.text.slice(0, 10) : '') + ' (override)' : ''),
+      empty: false, pinned: pinned };
+  }
+
+  // Plan 083: index ids only - an archived portrait `<char_no>-<mtime>` or a
+  // screenshot `s<16 hex>`; anything else never becomes a src.
+  const PORTRAIT_ID_RE = /^\d{6,20}-\d{1,12}$/;
+  const SHOT_ID_RE = /^s[0-9a-f]{16}$/;
+  function portraitId(id) {
+    return typeof id === 'string' && (PORTRAIT_ID_RE.test(id) || SHOT_ID_RE.test(id));
+  }
+  // A screenshot is served as its original (no stdlib JPEG thumbnail).
+  function portraitSrc(item, size) {
+    if (!item || !portraitId(item.id)) return null;
+    const base = SERVER + '/api/portraits/img/' + encodeURIComponent(item.id);
+    return SHOT_ID_RE.test(item.id) ? base : base + '?size=' + size;
+  }
+
+  function galleryAlt(cls, item, opts) {
+    const f = typeof item.at === 'string' ? fmtLocal(item.at, opts) : null;
+    return (cls || 'Character') + (item.kind === 'shot' ? ' screenshot' : ' portrait') + (f ? ', ' + f.text : '');
+  }
+
+  // Plan 083: Deadeye tab "Portraits" card model from GET /api/portraits?cls=.
+  // {cls, empty, emptyText, current: {id, src, alt, pinned, source, badge, key}
+  // | null, items: [{id, kind, src, alt, pressed, tabindex}] (history, then
+  // screenshots), unknown: [{id, kind, src, alt}]}.
+  function portraitGallery(view, cls, opts) {
+    const v = plainObject(view) ? view : {};
+    const name = typeof cls === 'string' && cls ? cls : (typeof v.cls === 'string' ? v.cls : null);
+    const row = name && plainObject(v.classes) && plainObject(v.classes[name]) ? v.classes[name] : null;
+    const cur = row && plainObject(row.current) && portraitId(row.current.id) ? row.current : null;
+    const list = function (a) { return Array.isArray(a) ? a.filter(function (i) { return plainObject(i) && portraitId(i.id); }) : []; };
+    const rows = list(v.history).map(function (i) { return Object.assign({}, i, { kind: 'portrait' }); })
+      .concat(list(v.shots).map(function (i) { return Object.assign({}, i, { kind: 'shot' }); }));
+    const curId = cur ? cur.id : null;
+    let focus = rows.findIndex(function (i) { return i.id === curId; });
+    if (focus < 0) focus = 0;
+    const items = rows.map(function (i, k) {
+      return { id: i.id, kind: i.kind, src: portraitSrc(i, 's'), alt: galleryAlt(name, i, opts),
+        pressed: i.id === curId, tabindex: k === focus ? 0 : -1 };
+    });
+    const unknown = list(v.unknown_items).map(function (i) {
+      return { id: i.id, kind: i.kind === 'shot' ? 'shot' : 'portrait', src: portraitSrc(i, 's'),
+        alt: galleryAlt('Unknown character', i, opts) };
+    });
+    let current = null;
+    if (cur) {
+      const pinned = cur.from === 'override';
+      const at = fmtLocal(cur.at, opts);
+      const set = pinned ? fmtLocal(cur.set_at, opts) : null;
+      current = { id: cur.id, src: portraitSrc(cur, 'm'), alt: galleryAlt(name, cur, opts), pinned: pinned,
+        source: pinned ? 'pinned ' + (set ? set.text.slice(0, 10) : '') : 'auto - newest portrait' + (at ? ', ' + at.text : ''),
+        badge: pinned ? overrideBadge(cur.entry) : null, key: 'portrait.' + name };
+    }
+    return { cls: name, empty: !current && !items.length,
+      emptyText: 'No ' + (name || 'Deadeye') + ' portrait yet', current: current, items: items, unknown: unknown };
+  }
+
+  // Roving tabindex: the next focused index for a key, or null (not handled).
+  function galleryMove(index, key, n) {
+    if (!(n > 0)) return null;
+    const i = Number.isInteger(index) ? Math.min(Math.max(index, 0), n - 1) : 0;
+    if (key === 'ArrowRight' || key === 'ArrowDown') return Math.min(i + 1, n - 1);
+    if (key === 'ArrowLeft' || key === 'ArrowUp') return Math.max(i - 1, 0);
+    if (key === 'Home') return 0;
+    if (key === 'End') return n - 1;
+    return null;
+  }
+
+  // POST /api/portraits bodies (dashboard bridge).
+  const PORTRAIT_CLS_RE = /^[A-Za-z][A-Za-z ]{0,39}$/;
+  function validPortraitsBody(body) {
+    if (!plainObject(body) || Object.keys(body).length !== 1) return false;
+    if (typeof body.clear === 'string') return /^portrait\.[A-Za-z][A-Za-z ]{0,39}$/.test(body.clear);
+    const p = plainObject(body.pick) ? body.pick : (plainObject(body.bind) ? body.bind : null);
+    return !!p && Object.keys(p).length === 2 && typeof p.cls === 'string' && PORTRAIT_CLS_RE.test(p.cls) &&
+      portraitId(p.id);
   }
 
   function squash(s) { return String(s).toLowerCase().replace(/\s+/g, ' ').trim(); }
@@ -6400,7 +6484,8 @@
     '/api/leveling': 'Leveling', '/api/settings': 'Settings', '/api/bosses': 'World bosses',
     '/api/pets': 'Pets', '/api/inventory': 'Inventory', '/api/mounts': 'Mounts',
     '/api/onboarding': 'Get started', '/api/crafting': 'Crafting',
-    '/api/imperial': 'Imperial delivery', '/api/maint/digest': 'Maintenance warning'
+    '/api/imperial': 'Imperial delivery', '/api/maint/digest': 'Maintenance warning',
+    '/api/portraits': 'Portraits'
   };
 
   // One POST result (the ew:post bridge reply) -> one toast.
@@ -7087,6 +7172,9 @@
     paletteKey: paletteKey,
     paletteTitle: paletteTitle,
     portraitChip: portraitChip,
+    portraitGallery: portraitGallery,
+    galleryMove: galleryMove,
+    validPortraitsBody: validPortraitsBody,
     classOfTab: classOfTab,
     tabOfClass: tabOfClass,
     PORTRAIT_HINT: PORTRAIT_HINT,
