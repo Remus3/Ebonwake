@@ -6013,6 +6013,47 @@
       empty: false, pinned: pinned };
   }
 
+  // Plan 084: left-rail character card (End Game card style). Class choice as
+  // portraitChip; src is the 312 x 402 `m` thumb. The card block values
+  // (leveling, Life & CP, Imperial CP) belong to the Progress character, so
+  // another class shows its class line only. Hidden / missing values are
+  // omitted - never "0" for unknown, never "?".
+  function cardCount(v) { return typeof v === 'number' && Number.isInteger(v) && v >= 0; }
+
+  function portraitCard(view, activeCls, opts) {
+    const v = view && typeof view === 'object' ? view : {};
+    const chip = portraitChip(v, activeCls, opts);
+    const cls = chip.cls;
+    const mine = !!cls && (typeof v.progress_cls !== 'string' || !v.progress_cls || v.progress_cls === cls);
+    const card = mine && plainObject(v.card) ? v.card : {};
+    const age = function (src, at) {
+      const f = typeof at === 'string' ? fmtLocal(at, opts) : null;
+      const bits = [typeof src === 'string' && src ? src : null, f ? f.text : null].filter(Boolean);
+      return bits.length ? ' (' + bits.join(', ') + ')' : '';
+    };
+    const lines = [];
+    const info = [];
+    if (cardCount(card.level) && card.level > 0) {
+      lines.push({ k: 'level', text: 'Lv.' + card.level });
+      info.push('Lv.' + card.level + age(card.level_source, card.level_at));
+    }
+    if (cls) lines.push({ k: 'cls', text: cls });
+    if (typeof card.name === 'string' && card.name) lines.push({ k: 'name', text: card.name });
+    const over = [];
+    if (cardCount(card.energy)) {
+      over.push({ k: 'energy', text: 'Energy ' + card.energy });
+      info.push('Energy ' + card.energy + age('profile', card.energy_at));
+    }
+    if (cardCount(card.cp)) {
+      over.push({ k: 'cp', text: 'CP ' + card.cp });
+      info.push('CP ' + card.cp + age(card.cp_src, card.cp_at));
+    }
+    const head = (cls ? cls + ' character card; ' : '') + chip.title;
+    return { cls: cls, src: chip.empty ? null : chip.src.replace(/\?size=s$/, '?size=m'),
+      alt: chip.alt, title: [head].concat(info).join('; '), empty: chip.empty,
+      pinned: !!chip.pinned, lines: lines, over: chip.empty ? [] : over };
+  }
+
   // Plan 083: index ids only - an archived portrait `<char_no>-<mtime>` or a
   // screenshot `s<16 hex>`; anything else never becomes a src.
   const PORTRAIT_ID_RE = /^\d{6,20}-\d{1,12}$/;
@@ -7172,6 +7213,7 @@
     paletteKey: paletteKey,
     paletteTitle: paletteTitle,
     portraitChip: portraitChip,
+    portraitCard: portraitCard,
     portraitGallery: portraitGallery,
     galleryMove: galleryMove,
     validPortraitsBody: validPortraitsBody,

@@ -140,3 +140,5 @@ by the lane (decision / alternatives / why / reverses if).
    tests are relaxed.
 8. Progress class is read per poll from the store (`progress._load()`), not
    `progress.view()`, to keep the 2 s poller cheap. Reverses if: never.
+9. Plan 084 (2026-10-07): the top-bar chip is superseded at >= 600 CSS px
+   by the left-rail character card; below 600 px the chip shows unchanged.

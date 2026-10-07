@@ -605,6 +605,15 @@ class LevelingService:
         profile marker), or None (plan 013 season auto-tick)."""
         return _level_now(self._load()["samples"])[0]
 
+    def level_info(self):
+        """Plan 084 card: {level, level_source, level_at}; level_at is the ts of
+        the newest sample at that level (None with no level)."""
+        samples = self._load()["samples"]
+        level, _, src = _level_now(samples)
+        at = next((s["ts"] for s in reversed(samples) if s["level"] == level), None) \
+            if level is not None else None
+        return {"level": level, "level_source": src, "level_at": at}
+
     def profile_marker(self, level):
         """Plan 041: the main character's profile level rose. Adds a marker
         {ts, level, pct: None, source: "profile"} when `level` is above the

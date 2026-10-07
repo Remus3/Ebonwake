@@ -313,3 +313,73 @@ def test_image_rejects_bad_size(env):
     _face(face, CHAR_A, bmp(4, 4), T0 - 10)
     pid = svc.scan()[0]
     assert svc.image(pid, "huge") is None and svc.image(pid, "s") is not None
+
+
+# -- plan 084: character card block --------------------------------------------
+
+def test_card_block_from_existing_views():
+    life = {"status": "ok", "character": "Testarcher", "at": "2026-10-06T19:00:00+00:00",
+            "energy": 412, "cp": {"value": 388}}
+    c = portraits.card_block(
+        {"level": 62, "level_source": "ocr", "level_at": "2026-10-06T18:00:00+00:00"},
+        life, {"value": 390, "source": "ocr", "at": "2026-10-06T20:00:00+00:00"})
+    assert c == {"level": 62, "level_source": "ocr", "level_at": "2026-10-06T18:00:00+00:00",
+                 "energy": 412, "energy_at": "2026-10-06T19:00:00+00:00",
+                 "cp": 390, "cp_src": "ocr", "cp_at": "2026-10-06T20:00:00+00:00",
+                 "name": "Testarcher"}
+
+
+def test_card_block_hidden_and_missing_are_none():
+    life = {"status": "ok", "character": None, "at": "2026-10-06T19:00:00+00:00",
+            "energy": "hidden", "cp": "hidden"}
+    c = portraits.card_block({"level": None, "level_source": None, "level_at": None}, life, None)
+    assert c == {"level": None, "level_source": None, "level_at": None, "energy": None,
+                 "energy_at": None, "cp": None, "cp_src": None, "cp_at": None, "name": None}
+    assert portraits.card_block(None, None, None) == c
+    # junk never becomes a number (no "0", no bool)
+    junk = portraits.card_block({"level": True, "level_source": "x"},
+                                {"status": "ok", "energy": True, "character": 5},
+                                {"value": "12", "source": "ocr"})
+    assert junk["level"] is None and junk["energy"] is None and junk["cp"] is None
+    assert junk["name"] is None and junk["level_source"] is None
+
+
+def test_card_block_profile_cp_takes_snapshot_age():
+    life = {"status": "ok", "character": "Testarcher", "at": "2026-10-06T19:00:00+00:00",
+            "energy": 10, "cp": {"value": 300}}
+    c = portraits.card_block(None, life, {"value": 300, "source": "profile", "at": None})
+    assert (c["cp"], c["cp_src"], c["cp_at"]) == (300, "profile", "2026-10-06T19:00:00+00:00")
+
+
+def test_view_carries_card_and_writes_no_store_field(env):
+    svc, _, st, _ = env
+    st["loads"] = [{"char_no": CHAR_A, "at": "a"}]
+    svc.poll("logged_in", T0)
+    before = svc.store.get("portraits")
+    assert svc.view()["card"] is None  # no card source wired
+    svc.card = lambda: {"level": 61}
+    assert svc.view()["card"] == {"level": 61}
+
+    def boom():
+        raise RuntimeError("x")
+    svc.card = boom
+    assert svc.view()["card"] is None  # a broken source never breaks the chip
+    assert svc.store.get("portraits") == before
+
+
+def test_leveling_level_info(tmp_path):
+    from server.ew import leveling
+    lv = leveling.LevelingService(Store(tmp_path / "store"), clock=Clock())
+    assert lv.level_info() == {"level": None, "level_source": None, "level_at": None}
+    lv.sample({"level": 61, "pct": 12.5})
+    info = lv.level_info()
+    assert info["level"] == 61 and info["level_source"] == "typed"
+    assert info["level_at"].startswith("2027-01-15")
+
+
+def test_imperial_cp_info(tmp_path):
+    from server.ew import imperial
+    s = imperial.ImperialService(Store(tmp_path / "store"), clock=Clock(), cp=lambda: 300)
+    assert s.cp_info() == {"value": 300, "source": "profile", "at": None}
+    t = imperial.ImperialService(Store(tmp_path / "s2"), clock=Clock())
+    assert t.cp_info() == {"value": None, "source": None, "at": None}
