@@ -8,7 +8,12 @@ const C = require('../shared/ewcore');
 
 test('profile.base_url is an allowlisted Profile setting', () => {
   const g = C.SETTINGS_GROUPS.find((x) => x.id === 'profile');
-  assert.deepStrictEqual(g.fields.map((f) => f.key), ['profile.family', 'profile.base_url']);
+  assert.deepStrictEqual(g.fields.map((f) => f.key),
+    ['profile.family', 'profile.base_url', 'profile.multi_character']);
+});
+
+test('profile.multi_character is a bool (off = one character, Tag / alt warnings hidden)', () => {
+  assert.strictEqual(C.SETTINGS_FIELDS['profile.multi_character'].type, 'bool');
 });
 
 test('validProfileBase mirrors progress.base_ok', () => {

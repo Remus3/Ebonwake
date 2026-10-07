@@ -5062,7 +5062,9 @@
     { id: 'profile', title: 'Profile', fields: [
       { key: 'profile.family', label: 'Family name (blank = none)', type: 'family' },
       // Plan 061: self-hosted BDO-REST-API base; blank = profile source off.
-      { key: 'profile.base_url', label: 'Self-hosted profile API base (blank = off)', type: 'baseurl' }
+      { key: 'profile.base_url', label: 'Self-hosted profile API base (blank = off)', type: 'baseurl' },
+      // Off = one character: Tag / alt-only maintenance loss warnings are hidden.
+      { key: 'profile.multi_character', label: 'More than one character (Tag / alts)', type: 'bool' }
     ] },
     { id: 'appearance', title: 'Appearance', fields: [
       { key: 'ui.theme', label: 'Theme', type: 'enum', options: THEMES },

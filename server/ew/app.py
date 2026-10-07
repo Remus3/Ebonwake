@@ -260,7 +260,8 @@ class EWServer(ThreadingHTTPServer):
             items=lambda: self.events.view()["items"],
             hot=lambda: self.leveling.view()["hot_auto"],
             weekly=lambda: self.leveling.view()["hot_windows"],
-            maint_inputs=self._maint_inputs, clock=today_clock or time.time)
+            maint_inputs=self._maint_inputs, clock=today_clock or time.time,
+            multi_character=lambda: self.settings.view()["settings"]["profile.multi_character"])
         # Plan 031: NA world boss table + operator loot ticks.
         self.bosses = bosses.BossService(self.store, clock=bosses_clock or time.time)
         # Plan 072: daily robots-gated diff against a public NA table; off

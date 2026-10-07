@@ -864,12 +864,15 @@ def test_dice_corrupt_store_degrades(tmp_path):
 
 
 def test_dice_never_auto_ticks_today(tmp_path):
+    # Pinned clock: a wall clock within ~62 min after the 05:00 UTC reset split
+    # the session across the reset and earned only 1 die (flaky).
+    noon = datetime.datetime(2026, 10, 7, 12, tzinfo=datetime.timezone.utc).timestamp()
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
-                          market_seed=[], profile_cfg={})
+                          market_seed=[], profile_cfg={}, today_clock=lambda: noon)
     try:
         assert s.dice.on_game in s.game.listeners
         assert s.dice.grants == [0, 30, 60] and s.dice.rule == FIVE
-        s.dice.on_game("running", "logged_in", time.time() - 3700)
+        s.dice.on_game("running", "logged_in", noon - 3700)
         v = s.today_view()
         assert v["dice"]["earned"] == 3 and v["dice"]["max"] == 3
         dice = [i for i in v["items"] if i["id"] == "black-spirits-adventure-dice"]
