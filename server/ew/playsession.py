@@ -14,7 +14,8 @@ auto-open until the game is next seen not_running.
 
 Store domain `playsession`: {"open": {id, start, spot, auto, grind_started,
 seen, left_at, down_since}|null, "last": {id, start, end, spot, auto}|null,
-"suppressed": bool, "next_id": int}. Times are ISO UTC.
+"suppressed": bool, "next_id": int, "history": [{id, start, end}] (plan 081:
+closed sessions, oldest first, at most MAX_HISTORY)}. Times are ISO UTC.
 """
 
 import datetime as _dt
@@ -29,6 +30,7 @@ GRACE_RANGE = (60, 600)
 SEEN_S = 60  # tick() refreshes `seen` at most once a minute while logged in
 DOWN = ("not_running", "disconnected")
 ID_RE = re.compile(r"^p[0-9]{1,9}$")
+MAX_HISTORY = 100
 
 
 def grace_of(v):
@@ -89,8 +91,14 @@ class PlaySession:
         doc = self.store.get("playsession")
         nxt = doc.get("next_id")
         nxt = nxt if isinstance(nxt, int) and not isinstance(nxt, bool) and nxt >= 1 else 1
+        hist = []
+        for h in doc.get("history") if isinstance(doc.get("history"), list) else []:
+            if isinstance(h, dict) and isinstance(h.get("id"), str) \
+                    and _ts(h.get("start")) is not None and _ts(h.get("end")) is not None:
+                hist.append({"id": h["id"], "start": h["start"], "end": h["end"]})
         return {"open": _clean_open(doc.get("open")), "last": _clean_last(doc.get("last")),
-                "suppressed": doc.get("suppressed") is True, "next_id": nxt}
+                "suppressed": doc.get("suppressed") is True, "next_id": nxt,
+                "history": hist[-MAX_HISTORY:]}
 
     def _save(self, d):
         o = d["open"]
@@ -99,7 +107,8 @@ class PlaySession:
                      and v is not None else v) for k, v in o.items()}
         self.store.put("playsession", {"open": o, "last": d["last"],
                                        "suppressed": d["suppressed"],
-                                       "next_id": d["next_id"]})
+                                       "next_id": d["next_id"],
+                                       "history": d["history"][-MAX_HISTORY:]})
 
     def _conf(self):
         try:
@@ -129,6 +138,7 @@ class PlaySession:
         self.summary.record_play(since, until)
         d["last"] = {"id": o["id"], "start": _iso(o["start"]), "end": _iso(end),
                      "spot": o["spot"], "auto": o["auto"]}
+        d["history"].append({"id": o["id"], "start": _iso(o["start"]), "end": _iso(end)})
         d["open"] = None
         return {"state": "closed", "id": o["id"]}
 
@@ -222,6 +232,11 @@ class PlaySession:
         if o is not None:
             o = {"id": o["id"], "start": _iso(o["start"]), "spot": o["spot"], "auto": o["auto"]}
         return {"open": o, "last": d["last"], "suppressed": d["suppressed"]}
+
+    def sessions(self):
+        """Plan 081: closed play sessions [{id, start, end}], oldest first."""
+        with self._lock:
+            return [dict(h) for h in self._load()["history"]]
 
     def state(self):
         """GET /api/grind `session.play`: {state: open, id, start, spot} or None."""

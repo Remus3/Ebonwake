@@ -20,6 +20,7 @@ import time
 from fractions import Fraction
 from pathlib import Path
 
+from . import derived
 from .market import FAME_MAX, net_proceeds
 from .today import slug
 
@@ -40,6 +41,7 @@ MAX_TOWNS = 40
 MAX_SALES = 500
 LEDGER_WINDOW_S = 30 * 86400
 SET_FIELDS = ("base_lt", "slots", "slots_used", "fame_vt", "vp_cost")
+TYPED_FIELDS = ("base_lt", "slots", "slots_used")  # plan 081: superseded by an OCR read
 SOURCE_FIELDS = ("lt", "next_lt", "next_cost", "note")
 TOWN_FIELDS = ("name", "used", "total", "note")
 
@@ -156,9 +158,16 @@ class InventoryService:
     [{id, name, used, total, note}], "sales": [{id, at, price, vp, fame_pct}],
     "next_sale", "updated"}."""
 
-    def __init__(self, store, clock=time.time, data_path=None, buffs=None, tax=None):
+    def __init__(self, store, clock=time.time, data_path=None, buffs=None, tax=None, reads=None,
+                 fame=None):
         self.store = store
         self.clock = clock
+        # Plan 081: fame() -> the fame bonus in force {value, source, at, age_s,
+        # stale} (source + age beside the net-proceeds figures), or None.
+        self.fame = fame or (lambda: None)
+        # Plan 081: reads(kind) -> the newest committed OCR read {value, at, source}
+        # of kind "weight" ({used, max} LT) / "slots" ({used, total}), or None.
+        self.reads = reads or (lambda kind: None)
         self.buffs = buffs or (lambda: [])
         self.tax = tax or (lambda: {"vp": False, "fame_pct": 0})
         try:
@@ -202,6 +211,9 @@ class InventoryService:
                else None}
         used = doc.get("slots_used")
         out["slots_used"] = used if _int_in(used, 0, MAX_SLOTS) else None
+        ta = doc.get("typed_at") if isinstance(doc.get("typed_at"), dict) else {}
+        out["typed_at"] = {k: ta[k] for k in TYPED_FIELDS
+                           if out[k] is not None and _ts(ta.get(k)) is not None}
         raw = doc.get("sources")
         sources = {}
         for sid, v in (raw.items() if isinstance(raw, dict) else ()):
@@ -294,6 +306,51 @@ class InventoryService:
         return {"sales": sales, "count": len(sales), "gain_total": total, "gain_30d": recent,
                 "vp_cost": cost, "net_30d": recent - cost if cost is not None else None}
 
+    def _read(self, kind):
+        try:
+            r = self.reads(kind)
+        except Exception:  # noqa: BLE001 - a broken OCR feed falls back to the typed values
+            return None
+        return r if isinstance(r, dict) and isinstance(r.get("value"), dict) else None
+
+    def _inputs(self, doc, owned, vp_lt, vp_slots, now):
+        """Plan 081: base LT, base slots and slots used as derived.pick() rows
+        (an OCR read newer than the typed value supersedes it) + the weight now.
+        The weight read "x / y LT" gives base LT = y - owned sources - VP LT."""
+        w, s = self._read("weight"), self._read("slots")
+        live = {}
+        weight = None
+        if w is not None:
+            mx, used = w["value"].get("max"), w["value"].get("used")
+            base = int(round(mx - owned - vp_lt)) if isinstance(mx, (int, float)) else None
+            if base is not None and 0 <= base <= MAX_BASE_LT:
+                live["base_lt"] = dict(w, value=base)
+            weight = dict(derived.pick(None, w, now), used=used, max=mx)
+            weight.pop("value", None)
+        if s is not None:
+            tot, used = s["value"].get("total"), s["value"].get("used")
+            if _int_in(tot, 1, MAX_SLOTS) and _int_in(tot - vp_slots, 1, MAX_SLOTS):
+                live["slots"] = dict(s, value=tot - vp_slots)
+            if _int_in(used, 0, MAX_SLOTS):
+                live["slots_used"] = dict(s, value=used)
+        out = {}
+        for k in TYPED_FIELDS:
+            typed = {"value": doc[k], "at": doc["typed_at"].get(k)} if doc[k] is not None else None
+            out[k] = derived.pick(typed, live.get(k), now)
+        return out, weight
+
+    def typed_overrides(self):
+        """Plan 081: typed base LT / slots in force, as /api/overrides rows."""
+        with self._lock:
+            doc = self._load()
+        v = self._view(doc)
+        labels = {"base_lt": "Base LT (typed)", "slots": "Inventory slots (typed)",
+                  "slots_used": "Slots used (typed)"}
+        return [{"key": f"inventory.{k}", "label": labels[k], "value": row["value"],
+                 "set_at": row["at"], "reason": "the next inventory screenshot supersedes it",
+                 "cards": ["inventory"]}
+                for k, row in v["inputs"].items() if row["source"] == "typed"]
+
     def _view(self, doc):
         now = self.clock()
         vpd = self.data["value_pack"]
@@ -314,18 +371,19 @@ class InventoryService:
                       for s in sources if s["next_lt"] and s["next_cost"] is not None),
                      key=lambda n: (Fraction(n["next_cost"], n["next_lt"]), n["next_cost"]))
         vp_slots = vpd["inventory_slots"] if vp["active"] else 0
-        total = doc["slots"] + vp_slots if doc["slots"] is not None else None
-        used = doc["slots_used"]
+        inputs, weight = self._inputs(doc, owned, vp_lt, vp_slots, now)
+        base_lt, base_slots, used = (inputs[k]["value"] for k in TYPED_FIELDS)
+        total = base_slots + vp_slots if base_slots is not None else None
         wh = self.data["warehouse"]
         towns = [dict(t, free=t["total"] - t["used"]
                       if t["total"] is not None and t["used"] is not None else None)
                  for t in doc["towns"]]
         return {"sources": sources, "sources_note": self.data["sources"]["note"],
-                "base_lt": doc["base_lt"], "lt_owned": owned, "vp_lt": vp_lt,
-                "lt_total": doc["base_lt"] + owned + vp_lt if doc["base_lt"] is not None
-                else None,
+                "base_lt": base_lt, "lt_owned": owned, "vp_lt": vp_lt,
+                "lt_total": base_lt + owned + vp_lt if base_lt is not None else None,
+                "inputs": inputs, "weight_now": weight,
                 "next_cheapest": nxt,
-                "slots": {"base": doc["slots"], "used": used, "vp": vp_slots, "total": total,
+                "slots": {"base": base_slots, "used": used, "vp": vp_slots, "total": total,
                           "free": total - used if total is not None and used is not None
                           else None},
                 "warehouse": {"vt": wh["base_vt"] + (wh["fame_vt"] if doc["fame_vt"] else 0),
@@ -335,7 +393,15 @@ class InventoryService:
                 "towns": towns,
                 "town_slots": {"used": sum(t["used"] or 0 for t in towns),
                                "total": sum(t["total"] or 0 for t in towns)},
-                "vp": vp, "ledger": self._ledger(doc, now), "error": self.error}
+                "vp": vp, "ledger": self._ledger(doc, now), "fame": self._fame(),
+                "error": self.error}
+
+    def _fame(self):
+        try:
+            f = self.fame()
+        except Exception:  # noqa: BLE001 - the source line is an extra, never fatal
+            return None
+        return f if isinstance(f, dict) else None
 
     def view(self):
         """GET /api/inventory body."""
@@ -365,6 +431,12 @@ class InventoryService:
         with self._lock:
             doc = self._load()
             doc.update(f)
+            for k in TYPED_FIELDS:
+                if k in f:
+                    if f[k] is None:
+                        doc["typed_at"].pop(k, None)
+                    else:
+                        doc["typed_at"][k] = _iso(self.clock())
             self._save(doc)
             return self._view(doc)
 

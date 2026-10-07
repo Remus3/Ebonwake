@@ -265,6 +265,67 @@ def test_vp_buffs_callable_failure_degrades(tmp_path, env):
     assert s.view()["vp"]["active"] is False
 
 
+# --- plan 081: weight / slots from the inventory screenshot -------------------------
+
+def _iso(ts):
+    return dt.datetime.fromtimestamp(ts, dt.timezone.utc).replace(microsecond=0).isoformat()
+
+
+def test_committed_read_supersedes_typed_and_clears_the_badge(tmp_path, env, clock):
+    reads = {}
+    s = inventory.InventoryService(Store(tmp_path / "store"), clock=clock,
+                                   buffs=lambda: env.buffs, tax=lambda: env.tax,
+                                   reads=lambda k: reads.get(k))
+    s.set({"base_lt": 1000, "slots": 100, "slots_used": 10})
+    s.source({"id": "pearl", "lt": 100})
+    assert sorted(r["key"] for r in s.typed_overrides()) == [
+        "inventory.base_lt", "inventory.slots", "inventory.slots_used"]
+    env.buffs = [vp_buff(DAY)]  # VP on: +200 LT, +16 slots
+    clock.t = T0 + 600
+    reads["weight"] = {"value": {"used": 812.35, "max": 1560}, "at": _iso(T0 + 300),
+                       "source": "ocr:inv.jpg"}
+    reads["slots"] = {"value": {"used": 48, "total": 192}, "at": _iso(T0 + 300),
+                      "source": "ocr:inv.jpg"}
+    v = s.view()
+    assert v["base_lt"] == 1560 - 100 - 200 and v["lt_total"] == 1560
+    assert v["inputs"]["base_lt"]["source"] == "ocr:inv.jpg"
+    assert v["inputs"]["base_lt"]["typed"] == 1000 and v["inputs"]["base_lt"]["age_s"] == 300
+    assert v["slots"] == {"base": 176, "used": 48, "vp": 16, "total": 192, "free": 144}
+    assert v["weight_now"]["used"] == 812.35 and v["weight_now"]["max"] == 1560
+    assert s.typed_overrides() == []
+    # typing after the read corrects it
+    clock.t = T0 + 900
+    v = s.set({"slots_used": 50})
+    assert v["slots"]["used"] == 50 and v["inputs"]["slots_used"]["source"] == "typed"
+    assert [r["key"] for r in s.typed_overrides()] == ["inventory.slots_used"]
+    # stale after 7 days, never silent
+    clock.t = T0 + 8 * DAY
+    assert s.view()["inputs"]["base_lt"]["stale"] is True
+
+
+def test_implausible_weight_read_keeps_the_typed_base(tmp_path, env, clock):
+    reads = {"weight": {"value": {"used": 10, "max": 50}, "at": _iso(T0), "source": "ocr:x"}}
+    s = inventory.InventoryService(Store(tmp_path / "store"), clock=clock,
+                                   buffs=lambda: env.buffs, tax=lambda: env.tax,
+                                   reads=lambda k: reads.get(k))
+    s.source({"id": "pearl", "lt": 100})
+    clock.t = T0 - 60
+    v = s.set({"base_lt": 1000})
+    clock.t = T0 + 60
+    v = s.view()   # max 50 - owned 100 < 0: no base LT from that read
+    assert v["base_lt"] == 1000 and v["inputs"]["base_lt"]["source"] == "typed"
+
+
+def test_fame_source_rides_the_view(tmp_path, env):
+    s = inventory.InventoryService(Store(tmp_path / "store"), clock=Clock(),
+                                   fame=lambda: {"value": 1.25, "source": "ocr", "at": _iso(T0),
+                                                 "age_s": 0, "stale": False})
+    assert s.view()["fame"]["source"] == "ocr"
+    boom = inventory.InventoryService(Store(tmp_path / "s2"), clock=Clock(),
+                                      fame=lambda: 1 / 0)
+    assert boom.view()["fame"] is None
+
+
 # --- ledger ---------------------------------------------------------------------------
 
 def test_ledger_maths(svc, env, clock):

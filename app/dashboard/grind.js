@@ -18,7 +18,7 @@
     loot: null, lootSpot: null, lootErr: null, lootCounts: {},
     // Plan 040: "Import from screenshot" pre-fills lootCounts; `lootLow` marks
     // rows the OCR read with a fuzzy name (shown with "?").
-    lootImport: { busy: false, msg: '' }, lootLow: {},
+    lootImport: { busy: false, msg: '' }, lootLow: {}, lootTyped: {},
     // Plan 046: GET /api/summary (last game session, today, this week).
     summary: null, summaryErr: null
   };
@@ -99,14 +99,24 @@
     if (!S.ui) return;
     const spot = lootSpot();
     if (!force && spot === S.lootSpot) return;
-    if (spot !== S.lootSpot) { S.lootCounts = {}; S.lootLow = {}; S.lootImport.msg = ''; }
+    if (spot !== S.lootSpot) { S.lootCounts = {}; S.lootLow = {}; S.lootTyped = {}; S.lootImport.msg = ''; }
     S.lootSpot = spot;
     if (!spot) { S.loot = null; S.lootErr = null; drawLoot(); return; }
     getJSON('/api/grind/loot?spot=' + encodeURIComponent(spot)).then(function (d) {
       if (spot !== S.lootSpot) return;
       S.loot = d && Array.isArray(d.items) ? d : null;
       S.lootErr = S.loot ? null : 'bad loot reply';
+      if (S.loot) applyPrefill(S.loot.prefill);
     }, function (e) { S.lootErr = e.message; }).then(drawLoot);
+  }
+
+  // Plan 081: the running session's screenshot counts fill empty (or still
+  // prefilled) count boxes; a typed count is never overwritten.
+  function applyPrefill(p) {
+    const r = C.lootPrefill(p, S.lootCounts, S.lootTyped);
+    Object.keys(r.counts).forEach(function (n) { S.lootCounts[n] = r.counts[n]; });
+    r.low.forEach(function (n) { S.lootLow[n] = true; });
+    if (r.text) S.lootImport.msg = r.text;
   }
 
   function lootRows() {
@@ -409,7 +419,7 @@
       n.maxLength = 8;
       n.placeholder = 'count';
       n.value = S.lootCounts[it.name] || '';
-      n.addEventListener('input', function () { S.lootCounts[it.name] = n.value; delete S.lootLow[it.name]; });
+      n.addEventListener('input', function () { S.lootCounts[it.name] = n.value; S.lootTyped[it.name] = true; delete S.lootLow[it.name]; });
       r.appendChild(n);
       const h = el('span', 'ew-muted', C.lootHintText(it.hint));
       const hint = it.hint || {};

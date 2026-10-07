@@ -79,6 +79,79 @@ def test_gear_fields():
     assert ocrinfer.gear_fields(_doc("AP 1296", "DP", "Map 300")) == []
 
 
+# -- plan 081: weight, slots, CP, fame ---------------------------------------------
+
+@pytest.mark.parametrize("text,used,mx,lo,hi", [
+    ("Weight 812.350 / 1,560 LT", 812.35, 1560, 0.9, 1.0),      # 3 decimals, comma groups
+    ("1,234.5 / 2,345 LT", 1234.5, 2345, 0.9, 1.0),
+    ("812.3/1560 LT", 812.3, 1560, 0.9, 1.0),
+    ("812,350 / 1.560 LT", 812.35, 1560, 0.6, 0.89),          # comma variant: review
+    ("812,3 / 1560 LT", 812.3, 1560, 0.6, 0.89),              # decimal comma
+])
+def test_weight_field(text, used, mx, lo, hi):
+    f = ocrinfer.weight_field(_doc(text))
+    assert f["kind"] == "weight" and f["value"] == {"used": used, "max": mx}
+    assert lo <= f["conf"] <= hi, f
+    assert f["why"]
+
+
+@pytest.mark.parametrize("texts", [("812 / 99999 LT",), ("Silver 1,234,567",), ("5000 / 100 LT",),
+                                   ("812.350 / 1,560",)])
+def test_weight_field_none(texts):
+    assert ocrinfer.weight_field(_doc(*texts)) is None
+
+
+def test_slots_field_needs_a_label_the_weight_line_or_the_region():
+    f = ocrinfer.slots_field(_doc("Inventory 48/192"))
+    assert f["value"] == {"used": 48, "total": 192} and f["conf"] >= 0.9
+    f = ocrinfer.slots_field(_doc("812.350 / 1,560 LT", "48 / 192"))  # beside the weight line
+    assert f["value"] == {"used": 48, "total": 192} and f["conf"] >= 0.9
+    assert ocrinfer.slots_field(_doc("Quest 3/5", "48 / 192")) is None   # bare fraction anywhere
+    assert ocrinfer.slots_field(_doc("Inventory 200/192")) is None       # used over total
+    assert ocrinfer.slots_field(_doc("Inventory 48/192%")) is None
+    # inside the slots region (frame size known)
+    doc = {"text": "", "lines": [_ln("48 / 192", y=900, x=1500)]}
+    f = ocrinfer.slots_field(doc, size=(1920, 1080), regions=ocrinfer.load_regions())
+    assert f["value"] == {"used": 48, "total": 192}
+
+
+@pytest.mark.parametrize("text,value,lo,hi", [
+    ("Contribution Points 120 / 312", 312, 0.9, 1.0),
+    ("CP: 23/300", 300, 0.9, 1.0),
+    ("Contribution Points 312", 312, 0.6, 0.89),   # one number: left or total? review
+])
+def test_cp_field(text, value, lo, hi):
+    f = ocrinfer.cp_field(_doc(text))
+    assert f["kind"] == "cp" and f["value"] == value and lo <= f["conf"] <= hi
+
+
+@pytest.mark.parametrize("texts", [("CP 400/300",), ("AP 296",), ("Contribution Points 99999",)])
+def test_cp_field_none(texts):
+    assert ocrinfer.cp_field(_doc(*texts)) is None
+
+
+@pytest.mark.parametrize("text,value,lo,hi", [
+    ("Family Fame bonus +1.250%", 1.25, 0.9, 1.0),
+    ("Fame bonus: 0.500 %", 0.5, 0.9, 1.0),
+    ("Family Fame +1%", 1, 0.9, 1.0),
+    ("Family Fame bonus +1,250%", 1.25, 0.6, 0.89),   # decimal comma: review
+])
+def test_fame_field(text, value, lo, hi):
+    f = ocrinfer.fame_field(_doc(text))
+    assert f["kind"] == "fame" and f["value"] == value and lo <= f["conf"] <= hi
+
+
+def test_fame_field_none():
+    assert ocrinfer.fame_field(_doc("Family Fame bonus +12.000%")) is None
+    assert ocrinfer.fame_field(_doc("Value Pack +30%")) is None
+
+
+def test_planner_fields_one_doc():
+    fs = ocrinfer.planner_fields(_doc("812.350 / 1,560 LT", "48 / 192",
+                                      "Contribution Points 120 / 312"))
+    assert sorted(f["kind"] for f in fs) == ["cp", "slots", "weight"]
+
+
 def test_regions_file_is_relative_and_unverified():
     doc = ocrinfer.load_regions()
     assert doc["scales"], doc
@@ -386,6 +459,73 @@ def test_without_services_the_plan_063_fields_only(tmp_path):
     auto.drain()
     v = auto.view()
     assert v["review"] == [] and v["commits"] == [] and v["silver_h"] is None
+
+
+# -- plan 081: planner reads through the pipeline ---------------------------------
+
+def test_planner_reads_commit_above_the_gate_and_latest_wins(env):
+    _run(env, [("inv.jpg", T0, _doc("812.350 / 1,560 LT", "48 / 192")),
+               ("cp.jpg", T0 + 60, _doc("Contribution Points 120 / 312")),
+               ("sell.jpg", T0 + 120, _doc("Family Fame bonus +1.250%"))])
+    assert env.auto.latest("weight") == {"value": {"used": 812.35, "max": 1560},
+                                         "at": _iso(T0), "source": "ocr:inv.jpg"}
+    assert env.auto.latest("slots")["value"] == {"used": 48, "total": 192}
+    assert env.auto.latest("cp")["value"] == 312
+    assert env.auto.latest("fame")["value"] == 1.25
+    assert env.auto.view()["review"] == []
+    # an older shot read later never becomes the latest
+    _run(env, [("old.jpg", T0 - 600, _doc("Contribution Points 100 / 200"))])
+    assert env.auto.latest("cp")["value"] == 312
+    # undo removes the read
+    uid = next(c["id"] for c in env.auto.view()["commits"] if c["kind"] == "fame")
+    env.auto.undo(uid)
+    assert env.auto.latest("fame") is None
+
+
+def test_planner_read_below_the_gate_queues_and_fix_commits(env):
+    _run(env, [("inv.jpg", T0, _doc("812,350 / 1.560 LT"))])  # comma variant
+    assert env.auto.latest("weight") is None
+    item = next(r for r in env.auto.view()["review"] if r["kind"] == "weight")
+    with pytest.raises(ValueError):
+        env.auto.review({"id": item["id"], "action": "fix", "value": {"used": 1, "max": 0}})
+    env.auto.review({"id": item["id"], "action": "fix", "value": {"used": 812.35, "max": 1560}})
+    assert env.auto.latest("weight")["value"] == {"used": 812.35, "max": 1560}
+
+
+def test_latest_silver_is_the_newest_shot(env):
+    _run(env, [("a.jpg", T0 + 60, _doc("Silver 6,000,000")),
+               ("b.jpg", T0, _doc("Silver 5,000,000"))])
+    assert env.auto.latest("silver") == {"value": 6_000_000, "at": _iso(T0 + 60),
+                                         "source": "ocr:a.jpg"}
+    with pytest.raises(ValueError):
+        env.auto.latest("nope")
+
+
+def test_loot_counts_of_the_running_session_prefill_the_form(env):
+    g = env.grind
+    g.add_spot("Hystria")
+    g.loot_item({"spot": "hystria", "name": "Ancient Relic Crystal Shard", "marketable": True,
+                 "id": 4987})
+    g.loot_item({"spot": "hystria", "name": "Sealed Black Magic Crystal", "marketable": True,
+                 "id": 4990})
+    env.clock.t = T0 - 300
+    g.start("hystria")
+    env.auto.loot_target = g.loot_target
+    g.ocr_loot = env.auto.loot_prefill
+    _run(env, [("l1.jpg", T0, _doc("Ancient Relic Crystal Shard x12")),
+               ("l2.jpg", T0 + 600, _doc("Ancient Relic Crystal Shard x30",
+                                         "Sealed Black Magic Crystal x2"))])
+    p = g.loot("hystria")["prefill"]
+    assert p["source"] == "ocr" and p["at"] == _iso(T0 + 600)
+    assert {r["name"]: r["count"] for r in p["items"]} == {
+        "Ancient Relic Crystal Shard": 30, "Sealed Black Magic Crystal": 2}
+    # a shot from before the session started is never read into it
+    _run(env, [("pre.jpg", T0 - 900, _doc("Sealed Black Magic Crystal x99"))])
+    p = g.loot("hystria")["prefill"]
+    assert {r["name"]: r["count"] for r in p["items"]}["Sealed Black Magic Crystal"] == 2
+    # stopping the session ends the prefill
+    g.stop({"silver": 0, "trash": 0})
+    assert g.loot("hystria")["prefill"] is None
 
 
 def test_leveling_clean_sample_keeps_ocr_source_only():

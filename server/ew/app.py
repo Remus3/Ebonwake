@@ -40,7 +40,7 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 from . import (__version__, autotick, autowatch, bossdrift, bosses, context, coupons, crafting, deadeye,
-               detect, enhance, eventnotices, events, gamewatch, grind, imperial, inventory, itemnames,
+               derived, detect, enhance, eventnotices, events, gamewatch, grind, imperial, inventory, itemnames,
                leveling, logindays, maint, maintdigest, market, mounts, ocr, ocrauto, onboarding, overrides,
                pets,
                ports,
@@ -219,11 +219,13 @@ class EWServer(ThreadingHTTPServer):
             tax=self.tax)
         # XP stack counts armed grind buffs that carry an xp_pct (plan 011).
         # Plan 060: Combat Secret Book ledger; Black Shrine books follow plan 033 ticks.
+        # Plan 081: a typed Hot Time window ends at the next maintenance end.
         self.leveling = leveling.LevelingService(
             self.store, clock=leveling_clock or time.time,
             buffs=lambda: self.grind.view()["buffs"],
             books=xpbooks.XpBooksService(self.store, clock=leveling_clock or time.time,
-                                         weekly=lambda: self.weekly.counts()))
+                                         weekly=lambda: self.weekly.counts()),
+            maint_end=self._hot_until)
         # Plan 012: plan 004's character + plan 005's per-spot silver/h; plan
         # 018: the newest started XP epoch flags rows to re-verify.
         self.spots = spots.SpotsService.from_file(
@@ -266,8 +268,10 @@ class EWServer(ThreadingHTTPServer):
         self.pets = pets.PetService(self.store)
         # Plan 045: operator-typed weight / storage planner; VP from plan 005's
         # buff timer (else the market.vp override, plan 079), sales priced per plan 027.
+        # Plan 081: base LT / slots from the newest inventory screenshot read.
         self.inventory = inventory.InventoryService(
-            self.store, buffs=lambda: self.grind.view()["buffs"], tax=self.tax)
+            self.store, buffs=lambda: self.grind.view()["buffs"], tax=self.tax,
+            reads=self._ocr_read, fame=self._fame_row)
         # Plan 044: operator-typed mounts + sourced T10 breed rules.
         self.mounts = mounts.MountsService(self.store)
         # Plan 035: EV math on tracked rate rows; prices from the market cache only.
@@ -283,7 +287,12 @@ class EWServer(ThreadingHTTPServer):
             quote=self.market.cached_quote, name=self.names.name,
             silver_per_h=lambda: shopping.average_silver_per_h(self.grind.view()["spots"]),
             watched=lambda: {w["id"] for w in self.market.watchlist.items() if w["sid"] == 0},
-            clock=deadeye_clock or time.time)
+            clock=deadeye_clock or time.time,
+            # Plan 081: silver on hand from the newest OCR read, hours / day from
+            # the plan 062 play sessions; each supersedes the typed value.
+            silver_read=lambda: self._ocr_read("silver"),
+            play_hours=lambda: derived.hours_per_day(self.play.sessions(),
+                                                     self.shopping.clock()))
         # Plan 054: operator recipes priced from the market cache only, taxed per plan 027.
         self.crafting = crafting.CraftingService(
             self.store, price=lambda iid: self.market.cached_price(iid),
@@ -350,7 +359,9 @@ class EWServer(ThreadingHTTPServer):
             self.store, self.game, self.ocr, self.grind,
             settings=lambda: self.settings.view()["settings"], clock=grind_clock or time.time,
             on_change=self._ocr_auto_changed, leveling=self.leveling, progress=self.progress,
-            play=self.play.view)
+            play=self.play.view, loot_target=self.grind.loot_target)
+        # Plan 081: the running session's OCR loot counts prefill the loot form.
+        self.grind.ocr_loot = self.ocr_auto.loot_prefill
         if isinstance(listeners, list):
             listeners.append(self.ocr_auto.on_game)
         # Plan 068: login / logged-minute rows tick themselves (undoable); a shot
@@ -376,10 +387,11 @@ class EWServer(ThreadingHTTPServer):
                                                        detected=detected,
                                                        signals=lambda: self.signals.view())
         # Plan 053: imperial delivery planner; CP from plan 042's card, else typed.
+        # Plan 081: else the newer of the typed CP and the newest CP screenshot read.
         self.imperial = imperial.ImperialService(
             self.store, clock=today_clock or time.time,
             cp=lambda: (self.progress.lifeskill_view().get("cp") or {}).get("value"),
-            prices=self.market.cached_prices, name=self.names.name)
+            prices=self.market.cached_prices, name=self.names.name, reads=self._ocr_read)
         # Plan 069: next best action over the views above; never fetches (market
         # prices come from the cache only, coupons / notices from the store).
         self.whatnow = whatnow.WhatNowService({
@@ -434,6 +446,45 @@ class EWServer(ThreadingHTTPServer):
         except Exception:  # noqa: BLE001 - an unreadable signal is "no live value"
             return None
 
+    # -- plan 081 derived planner inputs ---------------------------------------
+
+    def _ocr_read(self, kind):
+        """Newest committed OCR read of `kind` {value, at, source}, or None."""
+        auto = getattr(self, "ocr_auto", None)
+        return auto.latest(kind) if auto is not None else None
+
+    def _fame_live(self):
+        """The newest market sell dialog fame read, when it is at least as new as
+        the market.fame_pct override (typed or config) - a newer typed value wins."""
+        r = self._ocr_read("fame")
+        if r is None or not market._valid_fame(r.get("value")):
+            return None
+        e = self.overrides.doc()["live"].get("market.fame_pct")
+        if e is not None:
+            r_at, e_at = overrides._ts(r.get("at")), overrides._ts(e.get("set_at"))
+            if r_at is None or (e_at is not None and r_at < e_at):
+                return None
+        return {"value": r["value"], "signal": "ocr_fame"}
+
+    def _fame_row(self):
+        """Fame bonus in force with its source and age (spec section 4)."""
+        fame = self.tax()["fame_pct"]
+        r = self._ocr_read("fame")
+        now = float(self.overrides.clock())
+        if r is not None and r.get("value") == fame and self._fame_live() is not None:
+            row = derived.pick(None, r, now)
+            return dict(row, value=fame, source="ocr")
+        e = self.overrides.doc()["live"].get("market.fame_pct")
+        if e is not None:
+            return {"value": fame, "source": e["source"], "at": e["set_at"],
+                    "age_s": None, "stale": False}
+        return {"value": fame, "source": "default", "at": None, "age_s": None, "stale": False}
+
+    def _hot_until(self, now):
+        """Plan 081: end (utc datetime) of the next maintenance after `now`."""
+        end = self._maint_end_after(now.timestamp(), self._maint_start())
+        return _dt.datetime.fromtimestamp(end, _dt.timezone.utc) if end else None
+
     def eff_settings(self):
         """Settings with every ledger key resolved (plan 079): config imported
         as `source: config`, then live signal > unexpired override > default.
@@ -447,7 +498,8 @@ class EWServer(ThreadingHTTPServer):
         except OSError:
             mtime = float(self.overrides.clock())
         self.overrides.sync_config(s, dflt, mtime)
-        live = {"market.vp": self._vp_live, "events.maintenance_start_utc": self._maint_live}
+        live = {"market.vp": self._vp_live, "events.maintenance_start_utc": self._maint_live,
+                "market.fame_pct": self._fame_live}
         spec = {k: (self._live(live[k]) if k in live else None, dflt[k]) for k in s}
         for k, out in self.overrides.effective_many(spec).items():
             s[k] = out["value"]
@@ -478,6 +530,15 @@ class EWServer(ThreadingHTTPServer):
                             "expires_at": None, "expires_in_s": None,
                             "reason": "the next OCR read supersedes it", "cards": ["progress"],
                             "clearable": False})
+        # Plan 081: typed planner inputs still in force (a newer live read clears them).
+        for svc in (self.shopping, self.inventory, self.imperial):
+            try:
+                rows = svc.typed_overrides()
+            except Exception:  # noqa: BLE001 - a service fault lists nothing
+                rows = []
+            for r in rows:
+                out.append(dict(r, source="typed", expires_at=None, expires_in_s=None,
+                                clearable=False))
         for w in self.market.watchlist.items():
             if w.get("auto") is True or (w.get("below") is None and w.get("above") is None):
                 continue

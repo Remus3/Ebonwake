@@ -13,7 +13,7 @@ import threading
 import pytest
 
 from server.ew import app as ewapp
-from server.ew import deadeye, enhance, market, shopping
+from server.ew import deadeye, derived, enhance, market, shopping
 from server.ew.store import Store, atomic_write_json
 
 T0 = 1_790_000_000  # 2026-09-21T14:13:20Z
@@ -371,3 +371,105 @@ def test_route_never_fetches(srv):
     st, doc = _req(srv, "GET", "/api/deadeye/shopping")
     assert st == 200 and doc["missing_prices"] == [16080]
     assert _lines(doc)[16080]["note"] == "missing price"
+
+
+# --- plan 081: silver on hand from OCR, hours / day from play sessions ----------------
+
+def _iso(ts):
+    return dt.datetime.fromtimestamp(ts, dt.timezone.utc).replace(microsecond=0).isoformat()
+
+
+class DerivedWorld(World):
+    def __init__(self, tmp_path):
+        super().__init__(tmp_path)
+        self.t = T0
+        self.read = None
+        self.sessions = []
+        self.svc = shopping.ShoppingService(
+            self.store, plan=lambda: self.deadeye.view()["plan"], enhance=self.enhance,
+            quote=self.quote, name=lambda i: None, silver_per_h=lambda: self.sph,
+            clock=lambda: self.t, silver_read=lambda: self.read,
+            play_hours=lambda: derived.hours_per_day(self.sessions, self.t))
+
+
+def test_ocr_silver_supersedes_typed_and_typing_corrects(tmp_path):
+    w = DerivedWorld(tmp_path)
+    w.svc.set({"silver_on_hand": 5_000_000})
+    inp = w.svc.view()["inputs"]["silver_on_hand"]
+    assert inp["source"] == "typed" and inp["value"] == 5_000_000
+    assert [r["key"] for r in w.svc.typed_overrides()] == ["shopping.silver_on_hand"]
+    w.t = T0 + 3600
+    w.read = {"value": 9_000_000, "at": _iso(T0 + 600), "source": "ocr:s.jpg"}
+    body = w.svc.view()
+    inp = body["inputs"]["silver_on_hand"]
+    assert inp["value"] == 9_000_000 and inp["source"] == "ocr:s.jpg"
+    assert inp["superseded"] is True and inp["typed"] == 5_000_000 and inp["age_s"] == 3000
+    assert body["settings"]["silver_on_hand"] == 9_000_000
+    assert w.svc.typed_overrides() == []          # badge cleared
+    w.svc.set({"silver_on_hand": 1})              # typed after the read: it wins
+    assert w.svc.view()["settings"]["silver_on_hand"] == 1
+    w.t = T0 + 8 * 86400
+    w.read = {"value": 2, "at": _iso(T0 + 7200), "source": "ocr:t.jpg"}
+    inp = w.svc.view()["inputs"]["silver_on_hand"]
+    assert inp["value"] == 2 and inp["stale"] is True   # > 7 d: the muted marker
+
+
+def _ses(day, start_h, hours):
+    st = T0 - day * 86400 + start_h * 3600
+    return {"id": f"p{day}", "start": _iso(st), "end": _iso(st + hours * 3600)}
+
+
+def test_hours_per_day_from_sessions_needs_three(tmp_path):
+    w = DerivedWorld(tmp_path)
+    w.t = T0 - 5 * 86400
+    w.svc.set({"hours_per_day": 5})                     # typed before the sessions below
+    w.t = T0
+    w.sessions = [_ses(1, -10, 2), _ses(2, -10, 4)]
+    h = w.svc.view()["inputs"]["hours_per_day"]
+    assert h["source"] == "typed" and h["value"] == 5   # 2 sessions: typed still in force
+    w.sessions.append(_ses(3, -10, 3))
+    h = w.svc.view()["inputs"]["hours_per_day"]
+    assert h["value"] == 3 and h["source"] == "sessions:3" and h["sessions"] == 3
+    assert w.svc.view()["afford"]["hours_per_day"] == 3
+    assert w.svc.typed_overrides() == []
+    w.svc.set({"hours_per_day": 1.5})  # typed after the newest session: wins until the next
+    assert w.svc.view()["inputs"]["hours_per_day"]["source"] == "typed"
+    w.t = T0 + 3 * 3600
+    w.sessions.append(_ses(0, 1, 1))   # a session closed after the typing
+    assert w.svc.view()["inputs"]["hours_per_day"]["source"] == "sessions:4"
+
+
+def test_hours_per_day_median_split_window_and_minimum():
+    rows = [_ses(1, -10, 1), _ses(2, -10, 2), _ses(20, -10, 9)]  # 20 d ago: outside
+    assert derived.hours_per_day(rows, T0) is None              # 3 in the window needed
+    rows += [_ses(3, -10, 6), _ses(4, -10, 2.5)]
+    r = derived.hours_per_day(rows, T0)
+    assert r["value"] == 2.2 and r["n"] == 4 and r["days"] == 4  # median(1, 2, 2.5, 6) = 2.25
+    # two sessions on one date add up; a session over midnight splits
+    day = dt.datetime(2026, 9, 20, tzinfo=dt.timezone.utc).timestamp()
+    rows = [{"start": _iso(day + 3600), "end": _iso(day + 7200)},
+            {"start": _iso(day + 10800), "end": _iso(day + 14400)},
+            {"start": _iso(day + 82800), "end": _iso(day + 90000)}]  # 23:00 -> 01:00
+    r = derived.hours_per_day(rows, day + 2 * 86400)
+    assert r["days"] == 2 and r["value"] == 2.0                    # 3 h and 1 h: median 2
+    assert derived.hours_per_day([{"start": "x", "end": None}] * 5, T0) is None
+
+
+def test_no_typed_value_no_read_is_the_default(tmp_path):
+    w = DerivedWorld(tmp_path)
+    body = w.svc.view()
+    assert body["settings"] == {"silver_on_hand": 0, "hours_per_day": 3}
+    assert body["inputs"]["silver_on_hand"]["source"] == "default"
+    assert w.svc.typed_overrides() == []
+
+
+def test_pick_rules():
+    now = T0
+    typed = {"value": 1, "at": _iso(T0 - 100)}
+    live = {"value": 2, "at": _iso(T0 - 50), "source": "ocr:x"}
+    assert derived.pick(typed, live, now)["value"] == 2
+    assert derived.pick(typed, dict(live, at=_iso(T0 - 200)), now)["source"] == "typed"
+    assert derived.pick({"value": 1, "at": None}, live, now)["value"] == 2  # untimed typed
+    assert derived.pick(None, None, now, default=7) == {
+        "value": 7, "source": "default", "at": None, "age_s": None, "stale": False,
+        "superseded": False, "typed": None}

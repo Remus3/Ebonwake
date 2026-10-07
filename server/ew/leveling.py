@@ -39,6 +39,10 @@ DEADLINE_TIGHT_H = 72
 HOT_ID_RE = re.compile(r"^h[0-9]{1,9}$")
 AUTO_ID_RE = re.compile(r"^a[0-9]{1,9}$")  # plan 064 auto (notice) windows
 AUTO_KEEP_S = 7 * 86400  # an auto window ended this long ago is pruned on the next add
+# Plan 081: a typed recurring window carries an end (`until`); without one given
+# it ends at the next maintenance end, else after this fallback (the weekly slot).
+HOT_UNTIL_FALLBACK_S = 8 * 86400
+MAX_HOT_RETIRED = 20
 HHMM_RE = re.compile(r"^([01][0-9]|2[0-3]):([0-5][0-9])$")
 MARKER_SOURCE = "profile"  # plan 041: server-written level marker, pct unknown
 OCR_SOURCE = "ocr"  # plan 066: a sample read from a screenshot (ts = the shot time)
@@ -165,11 +169,32 @@ def _minutes(hhmm):
     return int(m.group(1)) * 60 + int(m.group(2))
 
 
+def occurrences(w, frm, to):
+    """[(start, end)] UTC datetimes of a recurring window `w` that start in
+    [frm - 1 day, to) (the day before catches a wrap still running) and before
+    its plan 081 `until`."""
+    start = _minutes(w["start"])
+    dur = (_minutes(w["end"]) - start) % 1440
+    until = _parse_iso(w.get("until")) if w.get("until") else None
+    day = frm.astimezone(_UTC).replace(hour=0, minute=0, second=0, microsecond=0) \
+        - _dt.timedelta(days=1)
+    out = []
+    while day < to:
+        if day.weekday() in w["days"]:
+            st = day + _dt.timedelta(minutes=start)
+            if st < to and (until is None or st < until):
+                out.append((st, st + _dt.timedelta(minutes=dur)))
+        day += _dt.timedelta(days=1)
+    return out
+
+
 def hot_status(windows, now, dated=()):
     """{active: [{id, label, pct, ends_in_s}], next: {id, label, pct,
     starts_in_s}|None} at `now`, all in UTC. Start inclusive, end exclusive;
     an end at or before the start wraps past midnight into the next day.
-    `dated` (plan 064) are one-off {id, start, end (ISO UTC), label, pct}."""
+    `dated` (plan 064) are one-off {id, start, end (ISO UTC), label, pct}.
+    Plan 081: a recurring window has no occurrence starting at / after its
+    `until`."""
     now = now.astimezone(_UTC)
     midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     active, nxt = [], None
@@ -183,14 +208,8 @@ def hot_status(windows, now, dated=()):
             if nxt is None or secs < nxt["starts_in_s"]:
                 nxt = dict(base, starts_in_s=secs)
     for w in windows:
-        start = _minutes(w["start"])
-        dur = (_minutes(w["end"]) - start) % 1440
-        for back in range(-1, 8):  # yesterday (a wrap still running) .. same day next week
-            day = midnight + _dt.timedelta(days=back)
-            if day.weekday() not in w["days"]:
-                continue
-            st = day + _dt.timedelta(minutes=start)
-            en = st + _dt.timedelta(minutes=dur)
+        # yesterday (a wrap still running) .. same day next week
+        for st, en in occurrences(w, midnight, midnight + _dt.timedelta(days=8)):
             base = {"id": w["id"], "label": w["label"], "pct": w["pct"]}
             if st <= now < en:
                 active.append(dict(base, ends_in_s=int((en - now).total_seconds())))
@@ -311,12 +330,27 @@ def _clean_window(w):
             or not HOT_ID_RE.match(w["id"]):
         return None
     try:
-        return {"id": w["id"], "days": _check_days(w.get("days")),
-                "start": _check_hhmm(w.get("start"), "start"),
-                "end": _check_hhmm(w.get("end"), "end"),
-                "label": _check_label(w.get("label")), "pct": _check_xp(w.get("pct"), "pct")}
+        out = {"id": w["id"], "days": _check_days(w.get("days")),
+               "start": _check_hhmm(w.get("start"), "start"),
+               "end": _check_hhmm(w.get("end"), "end"),
+               "label": _check_label(w.get("label")), "pct": _check_xp(w.get("pct"), "pct")}
     except ValueError:
         return None
+    until = _parse_iso(w.get("until")) if isinstance(w.get("until"), str) else None
+    out["until"] = _iso(until) if until is not None else None  # None: a pre-081 window
+    return out
+
+
+def _clean_retired(w):
+    """Plan 081: a typed window retired by a notice window {.., retired_at,
+    retired_by: "notice", notice_id}."""
+    c = _clean_window(w)
+    if c is None or _parse_iso(w.get("retired_at")) is None \
+            or not isinstance(w.get("retired_by"), str):
+        return None
+    nid = w.get("notice_id")
+    return dict(c, retired_at=w["retired_at"], retired_by=w["retired_by"],
+                notice_id=nid if isinstance(nid, str) and AUTO_ID_RE.match(nid) else None)
 
 
 def _clean_auto(w):
@@ -396,11 +430,14 @@ class LevelingService:
     its own store domain); without one the view's `books` is None."""
 
     def __init__(self, store, clock=time.time, buffs=None, epochs=None, deadlines=None,
-                 books=None):
+                 books=None, maint_end=None):
         self.store = store
         self.clock = clock
         self.buffs = buffs
         self.books = books
+        # Plan 081: maint_end(now utc datetime) -> end of the next maintenance
+        # (utc datetime) or None: the default `until` of a typed Hot Time window.
+        self.maint_end = maint_end
         self.seq = 0
         self.epoch_error = None
         self.deadline_error = None
@@ -448,13 +485,16 @@ class LevelingService:
                 seen.add(c["id"])
                 windows.append(c)
         auto = _clean_rows(doc.get("hot_auto"), _clean_auto, MAX_HOT)
+        retired = [c for c in map(_clean_retired, doc.get("hot_retired") if isinstance(
+            doc.get("hot_retired"), list) else []) if c is not None][-MAX_HOT_RETIRED:]
         raw = doc.get("milestones")
         ms = sorted({m for m in (raw if isinstance(raw, list) else [])
                      if _ok_int(m, *LEVEL_RANGE)})[:MAX_MILESTONES]
         nxt = doc.get("next_id")
-        top = max((int(w["id"][1:]) for w in windows + auto), default=0) + 1
+        top = max((int(w["id"][1:]) for w in windows + auto + retired), default=0) + 1
         nxt = max(nxt, top) if _ok_int(nxt, 1, 10 ** 9 - 1) else top
         return {"samples": samples, "hot_windows": windows, "hot_auto": auto,
+                "hot_retired": retired,
                 "milestones": ms, "next_id": nxt,
                 "epochs_added": _clean_rows(doc.get("epochs_added"), _clean_epoch, MAX_EPOCHS),
                 "epochs_deleted": _clean_ids(doc.get("epochs_deleted")),
@@ -532,7 +572,10 @@ class LevelingService:
                 "milestone_labels": {str(m): MILESTONE_LABELS[m] for m in doc["milestones"]
                                      if m in MILESTONE_LABELS},
                 "milestones_seed": doc["milestones"] == SEED_MILESTONES,
-                "hot_windows": doc["hot_windows"],
+                "hot_windows": [dict(w, ended=w["until"] is not None
+                                     and _parse_iso(w["until"]) <= now)
+                                for w in doc["hot_windows"]],
+                "hot_retired": list(reversed(doc["hot_retired"])),
                 # plan 064: notice windows not over yet, soonest end first
                 "hot_auto": sorted((w for w in doc["hot_auto"] if _parse_iso(w["end"]) > now),
                                    key=lambda w: (w["end"], w["id"])),
@@ -660,9 +703,25 @@ class LevelingService:
             self._save(doc)
         return self.view()
 
+    def _default_until(self, now):
+        """Plan 081: the next maintenance end, else now + HOT_UNTIL_FALLBACK_S."""
+        end = None
+        if self.maint_end is not None:
+            try:
+                end = self.maint_end(now)
+            except Exception:  # noqa: BLE001 - no maintenance known: the weekly fallback
+                end = None
+        if isinstance(end, _dt.datetime) and end.tzinfo is not None and end > now:
+            return end
+        return now + _dt.timedelta(seconds=HOT_UNTIL_FALLBACK_S)
+
     def hot_add(self, arg):
-        """{days, start, end, label, pct}; UTC, end may wrap past midnight."""
-        arg = _fields(arg, "hot_add", ("days", "start", "end", "label", "pct"))
+        """{days, start, end, label, pct, until?}; UTC, end may wrap past
+        midnight. Plan 081: `until` (ISO UTC, in the future) ends the recurring
+        window; omitted, it ends at the next maintenance end."""
+        keys = ("days", "start", "end", "label", "pct")
+        arg = _fields(arg, "hot_add", keys + ("until",) if isinstance(arg, dict)
+                      and "until" in arg else keys)
         days = _check_days(arg["days"])
         start = _check_hhmm(arg["start"], "start")
         end = _check_hhmm(arg["end"], "end")
@@ -670,6 +729,13 @@ class LevelingService:
             raise ValueError("start and end must differ")
         label = _check_label(arg["label"])
         pct = _check_xp(arg["pct"], "pct")
+        now = self._now()
+        if "until" in arg:
+            until = _parse_iso(arg["until"]) if isinstance(arg["until"], str) else None
+            if until is None or until <= now:
+                raise ValueError("until must be a future ISO UTC time")
+        else:
+            until = self._default_until(now)
         with self._lock:
             doc = self._load()
             if len(doc["hot_windows"]) >= MAX_HOT:
@@ -677,9 +743,26 @@ class LevelingService:
             wid = f"h{doc['next_id']}"
             doc["next_id"] += 1
             doc["hot_windows"].append({"id": wid, "days": days, "start": start, "end": end,
-                                       "label": label, "pct": pct})
+                                       "label": label, "pct": pct, "until": _iso(until)})
             self._save(doc)
         return self.view()
+
+    @staticmethod
+    def _retire_overlapping(doc, auto, now):
+        """Plan 081: typed windows with an occurrence overlapping the notice
+        window `auto` move to `hot_retired` (retired_by "notice"). Returns the
+        number retired."""
+        st, en = _parse_iso(auto["start"]), _parse_iso(auto["end"])
+        keep, gone = [], []
+        for w in doc["hot_windows"]:
+            hit = any(a < en and st < b for a, b in occurrences(w, st, en))
+            (gone if hit else keep).append(w)
+        if gone:
+            doc["hot_windows"] = keep
+            doc["hot_retired"] = (doc["hot_retired"] + [
+                dict(w, retired_at=_iso(now), retired_by="notice", notice_id=auto["id"])
+                for w in gone])[-MAX_HOT_RETIRED:]
+        return len(gone)
 
     def hot_del(self, wid):
         if not isinstance(wid, str) or not HOT_ID_RE.match(wid):
@@ -712,6 +795,7 @@ class LevelingService:
                 return None
             doc["next_id"] += 1
             doc["hot_auto"].append(c)
+            self._retire_overlapping(doc, c, self._now())
             self._save(doc)
         return wid
 
@@ -725,6 +809,14 @@ class LevelingService:
             n = len(doc["hot_auto"]) - len(keep)
             if n:
                 doc["hot_auto"] = keep
+                # plan 081: typed windows that notice retired come back
+                back = [w for w in doc["hot_retired"] if w["notice_id"] in ids]
+                live = {w["id"] for w in doc["hot_windows"]}
+                doc["hot_retired"] = [w for w in doc["hot_retired"] if w not in back]
+                doc["hot_windows"] += [{k: w[k] for k in ("id", "days", "start", "end",
+                                                          "label", "pct", "until")}
+                                       for w in back if w["id"] not in live][
+                    :max(0, MAX_HOT - len(doc["hot_windows"]))]
                 self._save(doc)
         return n
 

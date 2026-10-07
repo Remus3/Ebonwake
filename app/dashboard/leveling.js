@@ -175,6 +175,9 @@
         C.fmtDays(w.days) + ' ' + w.start + '-' + w.end + ' UTC');
       if (v) when.title = v.title;
       r.appendChild(when);
+      // Plan 081: the window's end (next maintenance unless typed); an ended one is muted.
+      const u = C.hotUntilText(w, { now: now });
+      if (u.text) r.appendChild(el('span', 'ew-muted ew-gnum' + (u.ended ? ' ew-stale' : ''), u.text));
       r.appendChild(el('span', 'ew-mprice ew-gnum', '+' + w.pct + '%'));
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';

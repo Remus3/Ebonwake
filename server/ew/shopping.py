@@ -19,7 +19,7 @@ import math
 import threading
 import time
 
-from . import enhance
+from . import derived, enhance
 from .deadeye import LEVELS
 
 MAX_SILVER = 10 ** 15
@@ -80,10 +80,15 @@ def levels_between(current, target):
 
 class ShoppingService:
     """Store domain `shopping`: {"silver_on_hand": int, "hours_per_day": num,
-    "steps": {step_id: {family?, fs?, crons?}}}."""
+    "silver_at", "hours_at" (plan 081: when each was typed), "steps": {step_id:
+    {family?, fs?, crons?}}}.
+
+    Plan 081: `silver_read()` -> the newest plan 066 OCR silver read {value, at,
+    source} and `play_hours()` -> derived.hours_per_day over plan 062 play
+    sessions; each supersedes the typed value once newer than it."""
 
     def __init__(self, store, plan, enhance, quote, name, silver_per_h, watched=None,
-                 clock=time.time):
+                 clock=time.time, silver_read=None, play_hours=None):
         self.store = store
         self.plan = plan                    # () -> plan 007 view rows
         self.enhance = enhance              # plan 035 EnhanceService
@@ -92,6 +97,8 @@ class ShoppingService:
         self.silver_per_h = silver_per_h    # () -> int or None (plan 005)
         self.watched = watched or (lambda: set())
         self.clock = clock
+        self.silver_read = silver_read or (lambda: None)
+        self.play_hours = play_hours or (lambda: None)
         self._lock = threading.Lock()
 
     # -- stored settings (corrupt entries degrade, never raise) ---------------
@@ -114,9 +121,40 @@ class ShoppingService:
             if isinstance(s.get("crons"), bool):
                 c["crons"] = s["crons"]
             steps[sid] = c
-        return {"silver_on_hand": on_hand if _ok_silver(on_hand) else 0,
-                "hours_per_day": hours if _ok_hours(hours) else DEFAULT_HOURS,
+        return {"silver_on_hand": on_hand if _ok_silver(on_hand) else None,
+                "hours_per_day": hours if _ok_hours(hours) else None,
+                "silver_at": doc.get("silver_at") if isinstance(doc.get("silver_at"), str)
+                else None,
+                "hours_at": doc.get("hours_at") if isinstance(doc.get("hours_at"), str) else None,
                 "steps": steps}
+
+    def _live(self, fn):
+        try:
+            v = fn()
+        except Exception:  # noqa: BLE001 - a broken signal falls back to the typed value
+            return None
+        return v if isinstance(v, dict) else None
+
+    def _inputs(self, conf):
+        """Plan 081: effective silver on hand and hours / day, each a
+        derived.pick() row (value, source, at, age_s, stale, ...)."""
+        now = self.clock()
+        silver = self._live(self.silver_read)
+        if silver is not None and not _ok_silver(silver.get("value")):
+            silver = None
+        hours = self._live(self.play_hours)
+        live_h = None
+        if hours is not None and _ok_hours(hours.get("value")):
+            live_h = {"value": hours["value"], "at": hours.get("at"),
+                      "source": f"sessions:{hours.get('n')}"}
+
+        def typed(k, at):
+            return {"value": conf[k], "at": conf[at]} if conf[k] is not None else None
+        s = derived.pick(typed("silver_on_hand", "silver_at"), silver, now, default=0)
+        h = derived.pick(typed("hours_per_day", "hours_at"), live_h, now, default=DEFAULT_HOURS)
+        if live_h is not None and h["source"] == live_h["source"]:
+            h["sessions"] = hours.get("n")
+        return {"silver_on_hand": s, "hours_per_day": h}
 
     # -- math ------------------------------------------------------------------
 
@@ -233,12 +271,13 @@ class ShoppingService:
         missing = sorted(ln["id"] for ln in lines if ln["total"] is None)
         priced = sum(ln["total"] for ln in lines if ln["total"] is not None)
         total = None if missing else priced
-        by, afford = self._afford(total, conf)
+        inputs = self._inputs(conf)
+        eff = {k: inputs[k]["value"] for k in inputs}
+        by, afford = self._afford(total, eff)
         return {"lines": lines, "total": total, "priced_total": priced,
                 "missing_prices": missing, "can_afford_by": by, "afford": afford,
                 "steps": steps, "families": families, "cron_item_id": cron_id,
-                "settings": {"silver_on_hand": conf["silver_on_hand"],
-                             "hours_per_day": conf["hours_per_day"]}}
+                "settings": eff, "inputs": inputs}
 
     # -- writes (each returns the GET body) -----------------------------------
 
@@ -254,11 +293,34 @@ class ShoppingService:
             raise ValueError(f"silver_on_hand must be an int in 0..{MAX_SILVER}")
         if "hours_per_day" in arg and not _ok_hours(arg["hours_per_day"]):
             raise ValueError(f"hours_per_day must be a number in (0, {MAX_HOURS}]")
+        at = _dt.datetime.fromtimestamp(self.clock(), _dt.timezone.utc).replace(
+            microsecond=0).isoformat()
         with self._lock:
             conf = self._load()
             conf.update(arg)
+            if "silver_on_hand" in arg:
+                conf["silver_at"] = at
+            if "hours_per_day" in arg:
+                conf["hours_at"] = at
             self._save(conf)
         return self.view()
+
+    def typed_overrides(self):
+        """Plan 081: typed inputs in force (not superseded by a live read), as
+        /api/overrides rows {key, label, value, set_at, reason}."""
+        conf = self._load()
+        inputs = self._inputs(conf)
+        out = []
+        for k, label, reason in (
+                ("silver_on_hand", "Silver on hand (typed)", "the next OCR silver read supersedes it"),
+                ("hours_per_day", "Hours / day (typed)",
+                 f"{derived.HOURS_MIN_SESSIONS} play sessions in {derived.HOURS_WINDOW_DAYS} days "
+                 "supersede it")):
+            row = inputs[k]
+            if row["source"] == "typed":
+                out.append({"key": f"shopping.{k}", "label": label, "value": row["value"],
+                            "set_at": row["at"], "reason": reason, "cards": ["deadeye"]})
+        return out
 
     def step(self, arg):
         """`shop_step` {id, family? (null = guess), fs?, crons?} (at least one)."""
