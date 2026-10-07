@@ -2132,7 +2132,8 @@
   const EVENT_FIELDS = {
     code: validCode, rewards: validRewards, url: validUrl,
     starts: function (v) { return eventDateMs(v, false) !== null; },
-    ends: function (v) { return eventDateMs(v, true) !== null; }
+    ends: function (v) { return eventDateMs(v, true) !== null; },
+    login_rule: function (v) { return validLoginRule(v) && onlyKeys(v, ['days_needed', 'min_minutes', 'weekend_minutes']); }
   };
 
   function eventFieldsOk(o, allowNull) {
@@ -2158,15 +2159,16 @@
     if (k === 'delete') return validRef(v, EVENT_ID_RE);
     if (k === 'purge_expired') return v === true;
     if (k === 'dismiss_notice' || k === 'undo_notice') return validNoticeNo(v);
+    if (k === 'login_mark') return exact(v, ['date', 'on']) && typeof v.date === 'string' && ISO_DAY.test(v.date) && typeof v.on === 'boolean';
     if (k === 'done') return exact(v, ['id', 'done']) && validRef(v.id, EVENT_ID_RE) && typeof v.done === 'boolean';
     if (k === 'add') {
-      if (!plainObject(v) || !onlyKeys(v, ['kind', 'title', 'code', 'rewards', 'starts', 'ends', 'url'])) return false;
+      if (!plainObject(v) || !onlyKeys(v, ['kind', 'title', 'code', 'rewards', 'starts', 'ends', 'url', 'login_rule'])) return false;
       if (EVENT_KINDS.indexOf(v.kind) < 0 || !validTitle(v.title)) return false;
       if ((v.kind === 'coupon') !== ('code' in v)) return false;
       return eventFieldsOk(v, false);
     }
     if (k === 'edit') {
-      if (!plainObject(v) || !onlyKeys(v, ['id', 'title', 'code', 'rewards', 'starts', 'ends', 'url'])) return false;
+      if (!plainObject(v) || !onlyKeys(v, ['id', 'title', 'code', 'rewards', 'starts', 'ends', 'url', 'login_rule'])) return false;
       if (!validRef(v.id, EVENT_ID_RE) || Object.keys(v).length < 2) return false;
       if ('title' in v && !validTitle(v.title)) return false;
       return eventFieldsOk(v, true);
@@ -2231,6 +2233,71 @@
       out.push({ code: code, title: c.title, url: c.url, date: date });
     });
     return out;
+  }
+
+  // ---- plan 075: login-day reward tracker (server `login_days` block) ----
+
+  function intIn(v, lo, hi) { return typeof v === 'number' && Math.floor(v) === v && v >= lo && v <= hi; }
+
+  function validLoginRule(r) {
+    return plainObject(r) && intIn(r.days_needed, 1, 60) && intIn(r.min_minutes, 0, 600) &&
+      (r.weekend_minutes === undefined || intIn(r.weekend_minutes, 0, 600));
+  }
+
+  // `login_days` -> {byId: {item id: row}, suggest: {item id: suggestion}}; bad rows dropped.
+  function loginDays(block) {
+    const b = plainObject(block) ? block : {};
+    const out = { byId: {}, suggest: {}, loggedIn: b.logged_in === true };
+    (Array.isArray(b.rows) ? b.rows : []).forEach(function (r) {
+      if (!plainObject(r) || typeof r.id !== 'string' || !intIn(r.credited, 0, 60) ||
+        !intIn(r.needed, 1, 60) || !intIn(r.days_left, 0, 100000)) return;
+      out.byId[r.id] = r;
+    });
+    (Array.isArray(b.suggest) ? b.suggest : []).forEach(function (s) {
+      if (plainObject(s) && typeof s.id === 'string' && validLoginRule(s.rule)) out.suggest[s.id] = s;
+    });
+    return out;
+  }
+
+  // "Login days 6/14 - 22 days left" (mirrors server logindays.label).
+  function loginDayText(r) {
+    const left = r.days_left;
+    const tail = left <= 0 ? 'ended' : left + ' day' + (left === 1 ? '' : 's') + ' left';
+    return 'Login days ' + r.credited + '/' + r.needed + ' - ' + tail;
+  }
+
+  // "38/60 min today" for a minute rule while logged in (or once some minutes count), else null.
+  function loginTodayText(r, loggedIn) {
+    if (!plainObject(r) || !intIn(r.min_minutes, 1, 600) || r.today_done === true && !loggedIn) return null;
+    if (!loggedIn && !(r.today_minutes > 0)) return null;
+    const m = intIn(r.today_minutes, 0, 1440) ? Math.min(r.today_minutes, r.min_minutes) : 0;
+    return m + '/' + r.min_minutes + ' min today';
+  }
+
+  // {cls, text} pill for a tracked row.
+  function loginPill(r) {
+    if (r.complete === true) return { cls: 'ok', text: 'complete' };
+    if (r.lost === true) return { cls: 'bad', text: 'lost' };
+    if (r.at_risk === true) return { cls: 'warn', text: 'at risk' };
+    if (r.today_done === true) return { cls: 'ok', text: 'today done' };
+    return { cls: 'unknown', text: 'log in today' };
+  }
+
+  function loginWeekendText(r) {
+    const w = plainObject(r) ? r.weekend : null;
+    if (!plainObject(w) || !intIn(w.credited, 0, 1000) || !intIn(w.total, 0, 1000)) return null;
+    return 'weekend bonus ' + w.credited + '/' + w.total + ' (' + w.minutes + ' min)';
+  }
+
+  // Suggestion -> POST /api/events body (one click to track), or null.
+  function loginTrackBody(s) {
+    if (!plainObject(s) || typeof s.id !== 'string' || !validLoginRule(s.rule)) return null;
+    return { edit: { id: s.id, login_rule: s.rule } };
+  }
+
+  // "I logged in that day" -> POST body, or null for a bad date.
+  function loginMarkBody(date) {
+    return typeof date === 'string' && ISO_DAY.test(date) ? { login_mark: { date: date, on: true } } : null;
   }
 
   // Candidate -> POST /api/events body (a plain coupon add), or null.
@@ -4659,7 +4726,7 @@
   const THEMES = ['system', 'dark', 'light'];
   const UI_SCALE = [0.9, 1.3];
   const NOTIFY_RULES_PREFS = ['marketAlert', 'buffEnding', 'hotTime', 'resetPassed', 'newCoupon', 'gameExit', 'bossSoon',
-    'resetSoon'];
+    'resetSoon', 'loginRisk'];
   const SETTINGS_GROUPS = [
     { id: 'overlay', title: 'Overlay', fields: WIDGETS.map(function (w) {
       return { key: 'overlay.widgets.' + w, label: 'Widget: ' + w, type: 'bool' };
@@ -5800,7 +5867,7 @@
   const TOAST_ONCE_MS = 600000; // prompt_ttl.json ttl_s.toast
   const LADDER_MIN = [15, 5, 1];
   const QUIET_STATES = ['not_running'];
-  const QUIET_ALLOW = ['marketAlert', 'couponExpiry', 'gameExit'];
+  const QUIET_ALLOW = ['marketAlert', 'couponExpiry', 'gameExit', 'loginRisk'];  // plan 075: loginRisk
 
   function validLadder(v) {
     return Array.isArray(v) && v.length >= 1 && v.length <= 6 && v.every(function (m, i) {
@@ -6041,6 +6108,19 @@
       'A grind session is still running - stop it in the Grind tab')];
   }
 
+  // Plan 075: one toast per at-risk login-day event per UTC day (key carries the date).
+  function loginRiskHits(prev, next) {
+    if (!plainObject(next.events) || !plainObject(next.events.login_days)) return [];
+    const day = next.events.login_days.today;
+    if (typeof day !== 'string' || !ISO_DAY.test(day)) return [];
+    const rows = loginDays(next.events.login_days).byId;
+    return Object.keys(rows).filter(function (id) { return rows[id].at_risk === true; }).map(function (id) {
+      const r = rows[id];
+      const title = typeof r.title === 'string' && r.title ? r.title : id;
+      return hit('loginRisk:' + id + ':' + day, 'Log in today: ' + title, loginDayText(r));
+    });
+  }
+
   // The rule table. Names are stable (config notify.<name>); later plans push
   // {name, defaultOn, fire(prev, next, nowMs) -> [{key, title, body}]}.
   const NOTIFY_RULES = [
@@ -6051,7 +6131,8 @@
     { name: 'newCoupon', defaultOn: false, fire: couponHits },
     { name: 'gameExit', defaultOn: false, fire: gameHits },
     { name: 'bossSoon', defaultOn: false, fire: bossHits },
-    { name: 'resetSoon', defaultOn: false, fire: resetSoonHits }
+    { name: 'resetSoon', defaultOn: false, fire: resetSoonHits },
+    { name: 'loginRisk', defaultOn: false, fire: loginRiskHits }
   ];
 
   // config/local.json `notify` block -> {rule: bool}; non-booleans keep the default.
@@ -6354,6 +6435,13 @@
     validEventsBody: validEventsBody,
     parseEventForm: parseEventForm,
     suggestedRows: suggestedRows,
+    loginDays: loginDays,
+    loginDayText: loginDayText,
+    loginTodayText: loginTodayText,
+    loginPill: loginPill,
+    loginWeekendText: loginWeekendText,
+    loginTrackBody: loginTrackBody,
+    loginMarkBody: loginMarkBody,
     suggestAddBody: suggestAddBody,
     suggestStatus: suggestStatus,
     noticeRows: noticeRows,

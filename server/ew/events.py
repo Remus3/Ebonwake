@@ -11,6 +11,7 @@ import re
 import threading
 import time
 
+from . import logindays
 from .today import _iso, _parse_iso
 
 KINDS = ("coupon", "event", "drop")
@@ -27,7 +28,7 @@ URL_RE = re.compile(r"^https://[^\s/?#]+[^\s]*$")
 DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 STAMP_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?"
                       r"(Z|[+-][0-9]{2}:[0-9]{2})$")
-OPTIONAL = ("code", "rewards", "starts", "ends", "url")
+OPTIONAL = ("code", "rewards", "starts", "ends", "url", "login_rule")  # plan 075: login_rule
 EDITABLE = ("title",) + OPTIONAL
 
 SOURCES = [
@@ -146,6 +147,9 @@ def _clean_item(it):
         out["done_at"] = done_at
     if it.get("auto") is True:  # plan 064: added from an official notice
         out["auto"] = True
+    rule = logindays.clean_rule(it.get("login_rule"))
+    if rule is not None:  # plan 075: qualifying login days are tracked
+        out["login_rule"] = rule
     return out
 
 
@@ -279,7 +283,7 @@ class EventsService:
     # -- writes (each returns the GET body) -----------------------------------
 
     def add(self, arg, auto=False):
-        """`{kind, title, code?, rewards?, starts?, ends?, url?}`; body adds `item`.
+        """`{kind, title, code?, rewards?, starts?, ends?, url?, login_rule?}`; body adds `item`.
         `auto` (plan 064, server side only) marks a notice import."""
         arg = _keys(arg, "add", ("kind", "title"), ("kind", "title") + OPTIONAL)
         kind = arg["kind"]
@@ -294,6 +298,7 @@ class EventsService:
             code = None
         rewards = _rewards(arg.get("rewards"))
         url = _url(arg.get("url"))
+        rule = logindays.validate_rule(arg.get("login_rule"))
         with self._lock:
             now = self._now()
             starts = _when(arg.get("starts"), "starts", now, False)
@@ -310,7 +315,8 @@ class EventsService:
             doc["next_id"] += 1
             doc["items"].append(dict({"id": iid, "kind": kind, "title": title, "code": code,
                                       "rewards": rewards, "starts": starts, "ends": ends,
-                                      "url": url, "done": False}, **({"auto": True} if auto else {})))
+                                      "url": url, "done": False}, **({"auto": True} if auto else {}),
+                                     **({"login_rule": rule} if rule is not None else {})))
             self._save(doc)
             out = self.view()
         out["item"] = next(i for i in out["items"] if i["id"] == iid)
@@ -336,6 +342,11 @@ class EventsService:
                 it["rewards"] = _rewards(arg["rewards"])
             if "url" in arg:
                 it["url"] = _url(arg["url"])
+            if "login_rule" in arg:  # plan 075: null stops tracking
+                rule = logindays.validate_rule(arg["login_rule"])
+                it.pop("login_rule", None)
+                if rule is not None:
+                    it["login_rule"] = rule
             for key, eod in (("starts", False), ("ends", True)):
                 if key in arg:
                     when = _when(arg[key], key, now, eod)

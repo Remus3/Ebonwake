@@ -35,7 +35,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import __version__, maint
+from . import __version__, logindays, maint
 from .coupons import HOST, MAX_BYTES, ROBOTS, TIMEOUT_S, UA_TOKEN, robots_verdict
 from .coupons import _TOKEN_RE, _clean_title, copy_codes, is_code, is_word_code, parse_date
 from .httpcache import CachedClient, UpstreamError, freshness, read_json
@@ -565,14 +565,15 @@ def parse_codes(page, lines):
 
 def parse_notice(page, title, ref_year, ref_month=None):
     """Everything plan 059 + 064 read from one Detail page: {window, maint,
-    hot, codes}."""
+    hot, codes} + plan 075 `login` (a suggested login rule, or None)."""
     text = page if isinstance(page, str) else _decode(page)
     lines = _lines(text)
     window = next((w for w in (parse_window(ln, ref_year, ref_month) for ln in lines)
                    if w is not None), None)
     return {"window": window, "maint": parse_maint(text, title, ref_year, ref_month),
             "hot": parse_hot(lines, title, ref_year, ref_month),
-            "codes": parse_codes(text, lines)}
+            "codes": parse_codes(text, lines),
+            "login": logindays.suggest_rule([title] + lines if isinstance(title, str) else lines)}
 
 
 def parse_rss_titles(text):
@@ -696,7 +697,8 @@ def _clean_detail(entry):
     if (m is not None and cm is None) or (h is not None and ch is None):
         return None
     return {"stamp": stamp, "fetched_at": at, "window": cw, "maint": cm, "hot": ch,
-            "codes": _clean_codes(entry.get("codes"))}
+            "codes": _clean_codes(entry.get("codes")),
+            "login": logindays.clean_suggestion(entry.get("login"))}  # plan 075; pre-075 None
 
 
 def _clean_notice(n):
@@ -1097,6 +1099,15 @@ class NoticeService:
             self.store.put(DOMAIN, {"dismissed": doc["dismissed"],
                                     "auto": (doc["auto"] + new)[-MAX_AUTO:]})
         return mn
+
+    def login_suggestions(self):
+        """Plan 075: {notice url: suggested login rule} from cached Detail reads
+        only (never fetches); dismissed notices skipped."""
+        if self.client is None:
+            return {}
+        dismissed = set(self.dismissed())
+        return {detail_url(no): d["login"] for no, d in self.client.details().items()
+                if d.get("login") is not None and no not in dismissed}
 
     def coupon_extra(self):
         """Plan 064: codes read from notices, as plan 014 coupon candidates

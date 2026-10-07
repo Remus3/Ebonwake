@@ -2,7 +2,7 @@
 
 Pure inference over views EW already serves (bosses 031, resets 021, grind
 buffs 005, Hot Time 011 / 064, maintenance 059 / 064, coupons 006, dice 056,
-market alerts 002, level deadlines 024, OCR review 063) plus an injected
+market alerts 002, level deadlines 024, OCR review 063, login days 075) plus an injected
 clock; nothing reads the game. Each adapter turns one view into candidates
 {source, text, why, due, left_s}; `rank` scores them
 
@@ -280,6 +280,21 @@ def from_events(view, now):
     return out
 
 
+def login_days(view, now):
+    """Plan 075: a login-day event at risk (today not yet credited), due the
+    end of today's UTC date."""
+    out = []
+    end = _dt.datetime.combine(now.astimezone(_UTC).date() + _dt.timedelta(days=1),
+                               _dt.time(0), _UTC)
+    for r in _list(_dict(view).get("rows")):
+        r = _dict(r)
+        if r.get("at_risk") is not True or not isinstance(r.get("title"), str):
+            continue
+        why = f"login days {r.get('credited')}/{r.get('needed')}, {r.get('days_left')} days left"
+        out.append(_cand("deadline", f"Log in today for {r['title']}", why, end, now))
+    return out
+
+
 def _is_dice(it):
     return isinstance(it, dict) and (it.get("id") == DICE_ITEM_ID or (
         isinstance(it.get("title"), str) and it["title"].strip().lower().replace(
@@ -334,6 +349,7 @@ ADAPTERS = {
     "events": [from_events],
     "market": [market_alerts],
     "ocr": [ocr_review],
+    "logins": [login_days],
 }
 
 
