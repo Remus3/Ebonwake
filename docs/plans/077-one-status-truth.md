@@ -51,6 +51,58 @@ client file content); no game input.
 
 Depends on: 051, 061, 065, 073.
 
+## As-built deviations
+
+1. Digest source for onboarding. Decision: `OnboardingService(signals=...)`
+   reads the live `/api/signals` body (wired in `app.py`); `status()` without
+   one (or with an unreadable one) runs the same `signals.digest()` classifier
+   over the resolved folders. Alternatives: live digest only (breaks bare
+   `status()` callers and tests); keep onboarding's own probes (two truths).
+   Why: one classifier either way, no second rule set. Reverses if: the
+   digest grows a folder state onboarding must not see.
+2. "Documents not found" needed a digest state. Decision: `gamewatch.health()`
+   adds `install_ok` / `documents_ok` (parent folder stat), and a set-but-gone
+   parent is row reason `unconfigured` (detail "... folder not found") so
+   Get started keeps its Settings link. Alternatives: a new reason (hint file
+   + REASONS churn); leave it as `folder_missing` (would tell the operator to
+   take a screenshot when the folder path is wrong). Why: the plan's
+   "not set / not found -> Settings link" needs the digest to tell them apart.
+   Reverses if: Signal health must show "not found" and "not set" differently.
+3. Plan 065's "detected folder counts as done before Log / ScreenShot exist"
+   is replaced (tests in `tests/test_detect.py` updated): detected without the
+   subfolder is now the in-game act step, no link - the plan's own spec.
+   Reverses if: the operator wants first-run to hide on detection alone.
+4. Opacity 0.9, not 0.85. `--fk-text-muted` at .85 on `--fk-surface-2` is
+   4.3:1 in light (4.5 needed); .9 is 4.8:1 light, dark well above.
+   `app/test/density.test.js` computes it from `ops/fleet_kit/tokens.css`.
+   Reverses if: the kit tokens change so .85 passes.
+5. Text markers: `.ew-list.ew-stale::before` prints `stale`; expired event
+   rows already read `ended` in their clock (`fmtLeft`), so no new node.
+   Row-level `.ew-stale` (market rows, leveling rows, overlay values) gets the
+   contrast fix only - a pseudo-element in their grid layouts would shift
+   columns. Alternatives: a marker span at each of ~25 call sites. Why: same
+   reading with no layout risk. Reverses if: a row-level stale state is found
+   with no other text cue.
+6. Profile pill label: the hint's lead clause (before " - ", <= 48 chars);
+   the full hint is the card's muted line and the pill title. 078's label
+   map was absent, so hints use plain "Settings > Group > Field" strings;
+   signal hints that named config keys (`ocr.auto`, `events.notice_check`,
+   "Settings > paths") were reworded too (test forbids `plan NNN` and
+   `bdo.` / `ocr.` / `events.` / `profile.` keys in hints).
+7. JS tests for `profilePill` live in `app/test/signals.test.js` (with the
+   signal fixtures), not `progress.test.js`.
+8. Verification record: plan 077 accepted at refute-rounds 2/3. Both refutes
+   were procedural only (the verifier's Bash was denied, so it could not re-run
+   the gates). Neither round found a code defect; round 1's copy point
+   (progress.js config-key text) was fixed. The producer re-ran the gates
+   green, and the adjudicator re-ran them independently: pytest pass,
+   app 632/632, ruff clean. leak_sweep --tree was clean (producer run).
+   Round 3 was not spent. Alternatives rejected: a round-3 verifier (same tool
+   denial) and leaving the work unmerged. Reverses if: the loop merge's CI
+   re-run fails on this diff, or a later review finds a defect.
+   Follow-up for the loop: give the verifier agent Bash for read-only gate
+   commands.
+
 Dependency guard: before writing code the lane checks that
 `server/ew/signals.py` (plan 073) and `server/ew/onboarding.py` (plan 051)
 exist. If either is missing, the lane changes nothing, writes

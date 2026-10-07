@@ -312,10 +312,17 @@ def _done(v):
 def test_onboarding_ticks_from_detected_paths(tmp_path):
     inst, docs = tmp_path / "inst", tmp_path / "docs"
     inst.mkdir()
-    docs.mkdir()  # no Log / ScreenShot yet: detection already proved them
+    docs.mkdir()
+    # Plan 077: no Log / ScreenShot yet = an in-game act with no Settings link.
     v, _, _ = _ob(tmp_path, detected={"install_dir": str(inst), "documents_dir": str(docs)})
     d = _done(v)
-    assert d["log"] and d["screenshots"] and d["overlay"]
+    assert not d["log"] and not d["screenshots"] and d["overlay"]
+    assert all(s["link"] is None for s in v["steps"] if s["id"] in ("log", "screenshots"))
+    (inst / "Log").mkdir()
+    (docs / "ScreenShot").mkdir()
+    v, _, _ = _ob(tmp_path, detected={"install_dir": str(inst), "documents_dir": str(docs)})
+    d = _done(v)
+    assert d["log"] and d["screenshots"]
 
 
 def test_onboarding_detected_path_that_vanished_is_not_done(tmp_path):
@@ -326,8 +333,8 @@ def test_onboarding_detected_path_that_vanished_is_not_done(tmp_path):
 
 def test_onboarding_hides_when_only_optional_steps_left(tmp_path):
     inst, docs = tmp_path / "inst", tmp_path / "docs"
-    inst.mkdir()
-    docs.mkdir()
+    (inst / "Log").mkdir(parents=True)
+    (docs / "ScreenShot").mkdir(parents=True)
     v, _, _ = _ob(tmp_path, detected={"install_dir": str(inst), "documents_dir": str(docs)},
                   cfg={"profile": {"family": "Moonfam"}})
     left = [s for s in v["steps"] if not s["done"]]
@@ -368,6 +375,15 @@ def test_server_wires_the_detector(tmp_path):
         st, _, body = _get(s, "/api/settings")
         assert st == 200
         assert json.loads(body)["detected"]["bdo.install_dir"] == str(inst)
+        ob = json.loads(_get(s, "/api/onboarding")[2])
+        # plan 077: detected, no Log / ScreenShot yet -> in-game acts, no link
+        assert _done(ob)["log"] is False and _done(ob)["screenshots"] is False
+        assert [x["link"] for x in ob["steps"] if x["id"] in ("log", "screenshots")] == [None, None]
+        sig = {r["id"]: r for r in json.loads(_get(s, "/api/signals")[2])["rows"]}
+        assert sig["screenshots"]["reason"] == "folder_missing"  # same story
+        (inst / "Log").mkdir()
+        (docs / "ScreenShot").mkdir()
+        gw.poll()
         ob = json.loads(_get(s, "/api/onboarding")[2])
         assert _done(ob)["log"] is True and _done(ob)["screenshots"] is True
         assert str(tmp_path) not in json.dumps(ob)

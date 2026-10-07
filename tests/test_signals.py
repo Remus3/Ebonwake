@@ -59,6 +59,16 @@ def test_hints_file_is_ascii_and_covers_every_reason():
             assert len(text) <= 100 and "\n" not in text  # one line
 
 
+def test_no_hint_names_a_plan_number_or_config_key():
+    """Plan 077: hints state what is wrong and name Settings labels."""
+    import re
+    texts = list(signals.load_hints()["hints"].values()) + list(signals._DEFAULT["hints"].values())
+    for text in texts:
+        assert not re.search(r"plan \d{3}", text, re.I), text
+        assert not re.search(r"\b(bdo|ocr|events|profile)\.[a-z_]+", text), text
+    assert "plan" not in _row(signals.digest(_inputs(), NOW), "boss_drift")["detail"]
+
+
 def test_hints_bad_file_falls_back(tmp_path):
     p = tmp_path / "h.json"
     p.write_text("{not json", encoding="utf-8")
@@ -122,6 +132,11 @@ def test_session_log_config_problems():
     assert (r["level"], r["reason"]) == ("warn", "unconfigured")
     r = _row(signals.digest(_inputs(session_log=_game(log_dir_ok=False)), NOW), "session_log")
     assert (r["level"], r["reason"]) == ("bad", "log_dir_missing")
+    # plan 077: a set install folder that does not exist reads as not set
+    r = _row(signals.digest(_inputs(session_log=_game(install_ok=False, log_dir_ok=False)), NOW),
+             "session_log")
+    assert (r["level"], r["reason"], r["detail"]) == ("warn", "unconfigured",
+                                                      "install folder not found")
 
 
 def test_session_log_stalled_watcher_is_bad_even_with_game_closed():
@@ -148,6 +163,10 @@ def test_screenshots_rows():
     assert (r(configured=False)["level"], r(configured=False)["reason"]) == \
         ("warn", "unconfigured")
     assert (r(dir_ok=False)["level"], r(dir_ok=False)["reason"]) == ("warn", "folder_missing")
+    gone = r(documents_ok=False, dir_ok=False)  # plan 077: Documents itself missing = not set
+    assert (gone["level"], gone["reason"], gone["detail"]) == ("warn", "unconfigured",
+                                                               "Documents folder not found")
+    assert r(documents_ok=True, dir_ok=False)["reason"] == "folder_missing"
 
 
 # --- OCR -------------------------------------------------------------------------------
@@ -296,6 +315,9 @@ def test_gamewatch_health_tracks_last_line_and_folders(tmp_path):
     h = w.health()
     assert h["configured"] and h["log_dir_ok"] and h["shots_configured"]
     assert h["shots_dir_ok"] is False and h["line_at"] is None and h["polled_at"] is None
+    assert h["install_ok"] is True and h["documents_ok"] is False  # plan 077 parents
+    docs.mkdir()
+    assert w.health()["documents_ok"] is True and w.health()["shots_dir_ok"] is False
     log = inst / "Log" / "Client_2026-10-05_120000.json"
     line = json.dumps({"Date": "x", "LogType": "Info", "Log": "connect success"}) + "\r\n"
     log.write_bytes(b"\xff\xfe" + line.encode("utf-16-le"))

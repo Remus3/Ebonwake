@@ -366,9 +366,11 @@ class EWServer(ThreadingHTTPServer):
         if isinstance(listeners, list):
             listeners.append(self.prompts.on_game)
         # Plan 051: first-run checklist over the same config file + store.
+        # Plan 077: its folder steps read the signal digest (self.signals, below).
         self.onboarding = onboarding.OnboardingService(self.store, self.settings.path,
                                                        clock=today_clock or time.time,
-                                                       detected=detected)
+                                                       detected=detected,
+                                                       signals=lambda: self.signals.view())
         # Plan 053: imperial delivery planner; CP from plan 042's card, else typed.
         self.imperial = imperial.ImperialService(
             self.store, clock=today_clock or time.time,
@@ -403,11 +405,13 @@ class EWServer(ThreadingHTTPServer):
     def _sig_session_log(self):
         h = self._game_health()
         return None if h is None else {k: h[k] for k in (
-            "configured", "log_dir_ok", "state", "line_at", "since", "polled_at")}
+            "configured", "log_dir_ok", "state", "line_at", "since", "polled_at")} | {
+            "install_ok": h.get("install_ok")}
 
     def _sig_screenshots(self):
         h = self._game_health()
         return None if h is None else {"configured": h["shots_configured"],
+                                       "documents_ok": h.get("documents_ok"),
                                        "dir_ok": h["shots_dir_ok"], "state": h["state"],
                                        "last_at": h["last_shot_at"]}
 

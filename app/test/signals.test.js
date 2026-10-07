@@ -64,3 +64,37 @@ test('Home reads /api/signals and shows the pill only via C.signalPill', () => {
   assert.match(h, /C\.signalPill\(S\.snap\.signals\)/);
   assert.match(h, /openTab\(pill\.tab\)/);
 });
+
+// Plan 077: one status truth - the profile row of /api/signals drives the pill.
+function sigProfile(level, hint) {
+  return { rows: [{ id: 'profile', name: 'Profile', level: level, age_s: 21600,
+    reason: level === 'off' ? 'no_base' : 'error', detail: 'x', hint: hint }] };
+}
+
+test('profilePill: signal off -> muted unknown, label and text from the hint', () => {
+  const hint = 'profile off: public API disallows robots - Settings > Profile > Self-hosted profile API base';
+  const stale = { data: { family: 'F' }, status: 'stale',
+    freshness: { fetched_at: 'x', age_s: 6 * 3600, ttl_s: 3600, stale: true, error: null } };
+  assert.strictEqual(C.profilePill(stale).cls, 'bad');  // the live red pill without the digest
+  const p = C.profilePill(stale, sigProfile('off', hint));
+  assert.strictEqual(p.cls, 'unknown');
+  assert.strictEqual(p.off, true);
+  assert.strictEqual(p.label, 'profile off: public API disallows robots');
+  assert.strictEqual(p.text, hint);
+  assert.strictEqual(C.profilePill(null, sigProfile('off', null)).off, true);
+});
+
+test('profilePill: a real fetch error stays bad when the signal is not off', () => {
+  const err = { data: {}, status: 'error',
+    freshness: { fetched_at: 'x', age_s: 4 * 3600, ttl_s: 3600, stale: true, error: 'HTTP 503' } };
+  assert.strictEqual(C.profilePill(err, sigProfile('bad', 'profile fetch failing')).cls, 'bad');
+  assert.strictEqual(C.profilePill(err, null).cls, 'bad');
+  assert.strictEqual(C.profilePill(err, { rows: 'junk' }).cls, 'bad');
+});
+
+test('progress.js: profile and Life & CP cards read /api/signals through profilePill', () => {
+  const src = read('dashboard/progress.js');
+  assert.match(src, /getJSON\('\/api\/signals'\)/);
+  assert.strictEqual((src.match(/C\.profilePill\([^)]*S\.signals\)/g) || []).length, 2);
+  assert.doesNotMatch(src, /C\.profilePill\(S\.data\.profile\)\./);
+});
