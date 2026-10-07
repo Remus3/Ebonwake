@@ -5,11 +5,13 @@
    /api/onboarding - the "Get started" first-run card, plan 069
    /api/whatnow - the "What now" card on top, also replaced from each SSE
    `whatnow` event's full view, plan 073 /api/signals - one pill on top only
-   while a signal is bad) and
+   while a signal is bad, plan 074 /api/maint/digest - the "Before
+   maintenance" card from T-24 h) and
    lets C.composeNow order the cards; a 404 (old server) drops that payload's
    card, other errors keep the last data. Read-only except the one-click tick
    of a daily, which reuses the Today tick route through the dashboard preload,
-   and the first-run card's dismiss (POST /api/onboarding, same bridge).
+   the first-run card's dismiss (POST /api/onboarding, same bridge) and the
+   ack of one loss warning (POST /api/maint/digest, same bridge).
    Countdowns update in place every second; a structural change redraws. Every
    node is built with DOM APIs - no HTML from data. */
 (function () {
@@ -18,9 +20,10 @@
   const POLL_MS = 60000;
   const SOURCES = { today: '/api/today', grind: '/api/grind', leveling: '/api/leveling',
     events: '/api/events', market: '/api/market/watch', bosses: '/api/bosses', summary: '/api/summary',
-    onboarding: '/api/onboarding', whatnow: '/api/whatnow', signals: '/api/signals' };
+    onboarding: '/api/onboarding', whatnow: '/api/whatnow', signals: '/api/signals',
+    maint: '/api/maint/digest' };
   const S = { snap: { at: {} }, err: {}, last: null, timer: null, panel: null, shape: null, vals: [],
-    pending: {}, msg: '', obMsg: '' };
+    pending: {}, msg: '', obMsg: '', mdMsg: '' };
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -87,6 +90,30 @@
     });
   }
 
+  // Plan 074: hide one loss warning until its maintenance is over.
+  function ackMaint(key) {
+    const pk = 'ack:' + key;
+    if (pk in S.pending) return;
+    const b = bridge();
+    if (!b) { S.mdMsg = 'ack needs the Ebonwake app window'; draw(); return; }
+    S.pending[pk] = true;
+    S.mdMsg = '';
+    draw();
+    const done = function (res) {
+      delete S.pending[pk];
+      if (res && res.ok && res.data && Array.isArray(res.data.warnings)) {
+        S.snap.maint = res.data;
+        S.snap.at.maint = Date.now();
+      } else {
+        S.mdMsg = 'ack failed: ' + ((res && res.error) || 'unknown error');
+      }
+      draw();
+    };
+    window.EWToast.via(b).post('/api/maint/digest', { ack: key }).then(done, function (e) {
+      done({ ok: false, error: String(e && e.message || e) });
+    });
+  }
+
   // Plan 051: hide the first-run card for good (stored server-side; only an
   // API POST {restore: true} brings it back).
   function dismissOnboarding() {
@@ -138,8 +165,9 @@
   // only the countdown values are refreshed in place.
   function shapeOf(cards) {
     return JSON.stringify(cards.map(function (c) {
-      return [c.id, c.meta, c.empty, c.rows.map(function (r) { return [r.label, r.note, r.cls, r.tick]; })];
+      return [c.id, c.title, c.meta, c.empty, c.rows.map(function (r) { return [r.label, r.note, r.cls, r.tick, r.ack]; })];
     })) + '|' + JSON.stringify(S.err) + '|' + Object.keys(S.pending).join(',') + '|' + S.msg + '|' + S.obMsg +
+      '|' + S.mdMsg +
       '|' + JSON.stringify(C.signalPill(S.snap.signals));
   }
 
@@ -163,6 +191,14 @@
       b.disabled = r.tick in S.pending;
       b.addEventListener('click', function () { tickDaily(r.tick); });
       n.appendChild(b);
+    }
+    if (r.ack) {
+      const a = el('button', 'ew-btn ew-htick', 'ack');
+      a.type = 'button';
+      a.title = 'claimed - hide until this maintenance is over';
+      a.disabled = ('ack:' + r.ack) in S.pending;
+      a.addEventListener('click', function () { ackMaint(r.ack); });
+      n.appendChild(a);
     }
     if (r.go) {
       const g = el('button', 'ew-btn ew-htick', 'open');
@@ -205,6 +241,7 @@
     const body = el('div', 'ew-cbody');
     if (c.id === 'dailies' && S.msg) body.appendChild(el('div', 'ew-err', S.msg));
     if (c.id === 'onboarding' && S.obMsg) body.appendChild(el('div', 'ew-err', S.obMsg));
+    if (c.id === 'maintdigest' && S.mdMsg) body.appendChild(el('div', 'ew-err', S.mdMsg));
     if (c.empty) body.appendChild(el('div', 'ew-muted', c.empty));
     const list = el('div', 'ew-list');
     c.rows.forEach(function (r) { list.appendChild(rowNode(r)); });

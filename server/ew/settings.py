@@ -30,7 +30,7 @@ WIDGETS = {"grindSession": True, "grindBuff": True, "eventsSoon": True,
 # except marketAlert and buffEnding.
 NOTIFY = {"marketAlert": True, "buffEnding": True, "hotTime": False,
           "resetPassed": False, "newCoupon": False, "gameExit": False,
-          "bossSoon": False, "resetSoon": False}
+          "bossSoon": False, "resetSoon": False, "maintLoss": False}
 THEMES = ("system", "dark", "light")
 OVERLAY_MODES = ("auto", "pin", "block")  # plan 067: per-widget pin / block
 MODS = ("Control", "Ctrl", "Alt", "Shift", "CommandOrControl", "Super")

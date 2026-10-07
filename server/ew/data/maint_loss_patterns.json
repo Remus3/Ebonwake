@@ -1,0 +1,11 @@
+{
+  "_doc": "Plan 074: loss-warning sentences kept from official maintenance notices. Each pattern is a case-insensitive Python regex searched in one sentence; a sentence matching any pattern is kept (at most 5 per notice, cut to 200 ASCII chars). Data, not code: add a phrase here when a notice words a loss differently.",
+  "patterns": [
+    "\\bwill be (?:deleted|removed|erased|reset|lost)\\b",
+    "\\bcannot be (?:recovered|restored|claimed)\\b",
+    "\\bwill disappear\\b",
+    "\\bclaim\\b.{0,80}\\bbefore\\b",
+    "\\bclaim\\b.{0,80}\\bbeforehand\\b",
+    "\\bno longer be (?:available|claimable|obtainable)\\b"
+  ]
+}

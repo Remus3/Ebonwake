@@ -218,8 +218,10 @@ def test_coupon_adapter_open_coupons_with_end():
         {"id": "e4", "kind": "coupon", "title": "Open-ended", "code": "OPEN-1",
          "ends": None, "status": "active", "done": False}]}
     out = whatnow.from_events(view, NOW)
-    assert [(c["text"], c["left_s"]) for c in out] == [("Redeem coupon FALL-2026", 72000)]
-    assert out[0]["source"] == "coupon" and out[0]["why"] == "Fall gift expires"
+    # plan 074: open events with an end rank too, as source `event`
+    assert [(c["source"], c["text"], c["left_s"]) for c in out] == [
+        ("coupon", "Redeem coupon FALL-2026", 72000), ("event", "Not a coupon ends", 3600)]
+    assert out[0]["why"] == "Fall gift expires" and out[1]["why"] == "event ends"
 
 
 def test_dice_adapter():

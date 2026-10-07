@@ -26,8 +26,12 @@ from . import maint as _maint
 from .today import _parse_iso
 
 WEIGHTS_FILE = Path(__file__).resolve().parent / "data" / "whatnow_weights.json"
-SOURCES = ("boss", "reset", "buff", "hot", "maint", "coupon", "dice", "market", "deadline", "ocr")
+SOURCES = ("boss", "reset", "buff", "hot", "maint", "coupon", "dice", "market", "deadline", "ocr",
+           "maint_loss", "event")
 DEFAULT_WEIGHTS = {
+    # plan 074: a loss warning outranks the plain maintenance row at the same due
+    "maint_loss": {"weight": 2.0, "horizon_s": 86400, "nominal_s": 3600},
+    "event": {"weight": 0.5, "horizon_s": 86400, "nominal_s": 86400},
     "boss": {"weight": 1.0, "horizon_s": 1800, "nominal_s": 1800},
     "reset": {"weight": 1.0, "horizon_s": 10800, "nominal_s": 3600},
     "buff": {"weight": 1.2, "horizon_s": 900, "nominal_s": 900},
@@ -40,6 +44,7 @@ DEFAULT_WEIGHTS = {
     "ocr": {"weight": 0.3, "horizon_s": 86400, "nominal_s": 7200},
 }
 EMPTY_TEXT = "All clear - play"
+TEXT_MAX = 80  # = ewcore.js TITLE_MAX: a longer action text is dropped by the client
 NEXT_MAX = 2
 MIN_LEFT_S = 60
 DEADLINE_STATES = ("tight", "late")
@@ -262,21 +267,45 @@ def maintenance(now, slot, notices):
     return []
 
 
+def _clip(s, n=TEXT_MAX):
+    return s if len(s) <= n else s[:n - 3].rstrip() + "..."
+
+
 def from_events(view, now):
-    """Plan 006: an open coupon with an end date, due that end."""
+    """Plan 006: an open coupon with an end date, due that end; plan 074: an
+    open event with an end date too (source `event`)."""
     out = []
     for it in _list(_dict(view).get("items")):
         it = _dict(it)
-        if it.get("kind") != "coupon" or it.get("done") is True:
+        kind = it.get("kind")
+        if kind not in ("coupon", "event") or it.get("done") is True:
             continue
         if it.get("status") not in ("active", "upcoming"):
             continue
         ends = _parse_iso(it.get("ends"))
         if ends is None or ends <= now:
             continue
+        if kind == "event":
+            if isinstance(it.get("title"), str) and it["title"]:
+                out.append(_cand("event", _clip(f"{it['title']} ends"), "event ends", ends, now))
+            continue
         name = it["code"] if isinstance(it.get("code"), str) else it.get("title")
         title = it["title"] if isinstance(it.get("title"), str) else name
         out.append(_cand("coupon", f"Redeem coupon {name}", f"{title} expires", ends, now))
+    return out
+
+
+def maint_loss(view, now):
+    """Plan 074: one candidate per unacked loss warning of the before-maintenance
+    digest, due its maintenance start."""
+    out = []
+    for w in _list(_dict(view).get("warnings")):
+        w = _dict(w)
+        due = _parse_iso(w.get("due_utc"))
+        if due is None or not isinstance(w.get("text"), str) or not w["text"]:
+            continue
+        why = f"official notice {w['notice_no']}" if _num(w.get("notice_no")) else "official notice"
+        out.append(_cand("maint_loss", _clip("Before maintenance: " + w["text"]), why, due, now))
     return out
 
 
@@ -332,6 +361,7 @@ ADAPTERS = {
     "leveling": [hot_time, deadlines],
     "maint": [lambda d, now: maintenance(now, _dict(d).get("slot"), _dict(d).get("notices"))],
     "events": [from_events],
+    "maint_digest": [maint_loss],
     "market": [market_alerts],
     "ocr": [ocr_review],
 }
