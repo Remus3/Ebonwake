@@ -56,11 +56,12 @@ def test_ladder_setting_parse_and_validate():
     assert prompts.parse_ladder("30, 10") == (30, 10)
     for bad in ("", "1,5", "5,5", "0", "121", "a,b", "15;5", "1,2,3,4,5,6,7", None, 15, chr(0x661)):
         assert prompts.parse_ladder(bad) is None, bad
-    ok, dflt = settings.SPEC["notify.ladder_min"]
+    # Plan 080: fixed tunables, no per-rule switch.
+    ok, dflt = settings.FIXED["notify.ladder_min"]
     assert dflt == "15,5,1" and ok("10,2") and not ok("2,10") and not ok([15, 5, 1])
-    ok, dflt = settings.SPEC["notify.quiet_closed"]
+    ok, dflt = settings.FIXED["notify.quiet_closed"]
     assert dflt is True and ok(False) and not ok("no")
-    assert settings.SPEC["notify.resetSoon"][1] is False
+    assert "notify.resetSoon" not in settings.SPEC and "notify.ladder_min" not in settings.SPEC
 
 
 # --- expiry + dedupe -----------------------------------------------------------------------

@@ -56,10 +56,21 @@ test('ladderStep and parseLadder', () => {
   assert.strictEqual(C.ladderStep(10 * MIN, [10, 30]), 15, 'bad steps -> default ladder');
   assert.deepStrictEqual(C.parseLadder('15, 5,1'), [15, 5, 1]);
   for (const bad of ['', '1,5', '5,5', '0', '121', 'a', '1,2,3,4,5,6,7', null, 15]) assert.strictEqual(C.parseLadder(bad), null, String(bad));
-  assert.strictEqual(C.validSettingsBody({ set: { 'notify.ladder_min': '30,10' } }), true);
-  assert.strictEqual(C.validSettingsBody({ set: { 'notify.ladder_min': '10,30' } }), false);
-  assert.strictEqual(C.validSettingsBody({ set: { 'notify.quiet_closed': false } }), true);
-  assert.ok(C.parseSettingInput('notify.ladder_min', 'x').error.indexOf('15,5,1') >= 0);
+  // Plan 080: the ladder and the quiet are fixed, not settable.
+  assert.strictEqual(C.validSettingsBody({ set: { 'notify.ladder_min': '30,10' } }), false);
+  assert.strictEqual(C.validSettingsBody({ set: { 'notify.quiet_closed': false } }), false);
+  assert.ok(C.parseSettingInput('notify.ladder_min', '15,5,1').error);
+});
+
+test('plan 080: notify.mute_until drops every hit until it passes', () => {
+  const hits = [{ key: 'm', rule: 'marketAlert' }, { key: 'b:15', rule: 'bossSoon', ladder: true }];
+  const until = new Date(T0 + 60 * MIN).toISOString();
+  const g = C.promptGate(hits, { state: 'logged_in', configured: true }, { muted_until: until }, T0);
+  assert.deepStrictEqual(g, { fire: [], drop: hits });
+  const after = C.promptGate(hits, { state: 'logged_in', configured: true }, { muted_until: until }, T0 + 61 * MIN);
+  assert.deepStrictEqual(after, { fire: hits, drop: [] });
+  assert.deepStrictEqual(C.promptGate(hits, null, { muted_until: null }, T0).fire, hits);
+  assert.ok(read('dashboard/toast.js').indexOf('next.game, next.prompts, t)') >= 0);
 });
 
 test('promptGate: closed game lets only allowlisted rules through; stale ladder hits drop', () => {
@@ -88,8 +99,8 @@ test('ladder respects notify.ladder_min from /api/prompts', () => {
   assert.deepStrictEqual(fired, ['World boss in 30m: Kzarka', 'World boss in 10m: Kzarka']);
 });
 
-test('resetSoon: server timers on the ladder, default off', () => {
-  assert.strictEqual(C.notifyPrefs({}).resetSoon, false);
+test('resetSoon: server timers on the ladder, on with zero config (plan 080)', () => {
+  assert.strictEqual(C.notifyPrefs({}).resetSoon, true);
   const iso = (ms) => new Date(ms).toISOString().replace('.000Z', '+00:00');
   const p = { timers: [{ key: 'resetSoon:daily:1', at: iso(T0 + 5 * MIN), title: 'Daily reset' },
     { key: 'resetSoon:maint:2', at: iso(T0 + 3 * 3600000), title: 'Maintenance' }, { key: 7 }, null] };

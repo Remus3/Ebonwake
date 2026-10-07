@@ -24,12 +24,10 @@ test('sessionPill: an older server without session falls back to active.auto', (
   assert.strictEqual(C.sessionPill({ active: ACTIVE, session: { auto: 'yes' } }).text, 'running');
 });
 
-test('play settings: auto_session bool, grace_s whole seconds 60-600', () => {
-  assert.strictEqual(C.validSettingsBody({ set: { 'play.auto_session': false, 'play.grace_s': 300 } }), true);
-  for (const v of [59, 601, 120.5, '120', true]) {
-    assert.strictEqual(C.validSettingsBody({ set: { 'play.grace_s': v } }), false, String(v));
-  }
-  assert.strictEqual(C.validSettingsBody({ set: { 'play.auto_session': 1 } }), false);
+test('play settings: auto_session and grace_s are fixed, not settable (plan 080)', () => {
+  assert.strictEqual(C.validSettingsBody({ set: { 'play.auto_session': false } }), false);
+  assert.strictEqual(C.validSettingsBody({ set: { 'play.grace_s': 300 } }), false);
+  assert.ok(C.INCIDENT_KEYS.includes('play.auto_session') && C.INCIDENT_KEYS.includes('play.grace_s'));
 });
 
 test('grind.js draws the session pill through sessionPill', () => {

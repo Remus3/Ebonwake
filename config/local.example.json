@@ -1,12 +1,12 @@
 {
-  "_doc": "Copy to config/local.json (gitignored). Secrets are REFERENCES resolved by ops/fleet_kit/fleet_secrets.py - never a literal value here.",
+  "_doc": "Copy to config/local.json (gitignored). Secrets are REFERENCES resolved by ops/fleet_kit/fleet_secrets.py - never a literal value here. Plan 080: zero config is the intended setup; automation, notification rules and tunables are fixed (a value for one of those here is an incident switch that expires 24 h after Ebonwake first reads it).",
   "region": "na",
   "hotkeys": {
     "toggleOverlay": "Control+Alt+E",
     "showDashboard": "Control+Alt+D"
   },
   "bdo": {
-    "_doc": "Plan 065. Blank = auto-detect (Steam libraryfolders.vdf -> <library>/steamapps/common/Black Desert Online; Documents known folder -> Black Desert). A path here (or Settings > bdo.*) always wins.",
+    "_doc": "Plan 065. Blank = auto (Steam libraryfolders.vdf -> <library>/steamapps/common/Black Desert Online; Documents known folder -> Black Desert). A path here (or Settings > Game folders) always wins.",
     "install_dir": "",
     "documents_dir": ""
   },
@@ -14,49 +14,35 @@
     "_example_ocr_key": {"env": "EW_OCR_API_KEY"}
   },
   "overlay": {
-    "_doc": "Plan 022. anchor: tl|tr|bl|br|ml|mr or {\"x\": int, \"y\": int} (work-area relative); default ml keeps it off the top-right minimap. display: index into the display list, null = primary. scale 0.8-1.6. opacity (panel) 0.5-0.95.",
+    "_doc": "Plan 022. anchor: tl|tr|bl|br|ml|mr or {\"x\": int, \"y\": int} (work-area relative); default ml keeps it off the top-right minimap. display: index into the display list, null = auto (primary). scale 0.8-1.6. opacity (panel) 0.5-0.95. Widgets are chosen by context (plan 067).",
     "anchor": "ml",
     "display": null,
     "scale": 1.0,
-    "opacity": 0.85,
-    "widgets": {"grindSession": true, "grindBuff": true, "eventsSoon": true, "leveling": false, "season": false, "marketTicker": false, "worldBoss": false, "dice": false}
+    "opacity": 0.85
   },
   "notify": {
-    "_doc": "Plan 026. Per-rule OS notifications (dashboard toasts follow the same switches). Defaults: marketAlert and buffEnding on, the rest off. bossSoon (plan 032): 15 and 5 min before each world boss spawn not yet looted. loginRisk (plan 075): one toast a UTC day per login-day event at risk, even while the game is closed. maintLoss (plan 074): unacked loss warnings from the maintenance notice on the alert ladder, plus T-24 h and T-1 h toasts even while the game is closed. silent: no notification sound (default true).",
-    "marketAlert": true,
-    "buffEnding": true,
-    "hotTime": false,
-    "resetPassed": false,
-    "newCoupon": false,
-    "gameExit": false,
-    "bossSoon": false,
-    "loginRisk": false,
-    "maintLoss": false,
+    "_doc": "Plan 080: every notification rule is on while logged in; game-closed quiet and the 15/5/1 ladder govern volume. mute_until: blank = auto (not muted) or an ISO UTC time at most 24 h ahead. silent: no notification sound (default true).",
+    "mute_until": "",
     "silent": true
   },
   "ocr": {
-    "_doc": "engine: auto (Tesseract if found, else Windows OCR) | tesseract | windows. tesseract: optional path to tesseract.exe when not on PATH or in the default install dir. auto / auto_commit_min / daily_cap: plan 063 auto-OCR of screenshots taken while logged in.",
-    "engine": "auto",
-    "tesseract": "",
-    "auto": true,
-    "auto_commit_min": 0.9,
-    "daily_cap": 120
+    "_doc": "tesseract: blank = auto (PATH, then the default install dir), else the full path to tesseract.exe.",
+    "tesseract": ""
   },
   "loop": {
     "_doc": "tools/ew_loop.py tick. inbox_dir / outbox_dir default to <root>/moon_sync_inbox and moon_sync_outbox. max_notes_per_day: kit v8 item 14 cap 6 (may lower, never raise; only ORDER/FIX/RULING-class notes are exempt, order-closing ANSWERs count).",
     "max_notes_per_day": 6,
     "max_new_plans_per_day": 2
   },
-  "market_watch": [4901],
   "market": {
-    "_doc": "Plan 027. Net proceeds after the 35 percent market tax. vp: true while a Value Pack is active (+30 percent of the after-tax amount). fame_pct: the Family Fame sale bonus shown in game, 0-1.5 (percent). Restart the server after editing.",
+    "_doc": "Plan 027. Net proceeds after the 35 percent market tax. vp: true while a Value Pack is active (+30 percent of the after-tax amount; an armed Value Pack buff timer wins). fame_pct: the Family Fame sale bonus shown in game, 0-1.5 (percent).",
     "vp": false,
     "fame_pct": 0
   },
   "profile": {
-    "_doc": "Plan 061. base_url: a self-hosted BDO-REST-API instance (man90/bdo-rest-api, loopback default shown). Blank = profile source off. The public instance is robots-disallowed and is never called; a non-loopback base is used only while its robots.txt allows Ebonwake.",
+    "_doc": "Plan 061. base_url: a self-hosted BDO-REST-API instance (man90/bdo-rest-api, e.g. http://127.0.0.1:8001/v1). Blank = off. The public instance is robots-disallowed and is never called; a non-loopback base is used only while its robots.txt allows Ebonwake.",
     "family": "",
-    "base_url": "http://127.0.0.1:8001/v1",
+    "base_url": "",
     "auto_level": true
   }
 }

@@ -58,8 +58,8 @@ test('dice widget: opt-in, default off, query round-trip, settings + example con
   const q = new URLSearchParams(C.widgetsQuery({ dice: true })).toString();
   assert.strictEqual(C.widgetsFromQuery('?' + q).dice, true);
   const ex = JSON.parse(fs.readFileSync(path.join(APP, '..', 'config', 'local.example.json'), 'utf8'));
-  assert.strictEqual(ex.overlay.widgets.dice, false);
-  assert.match(fs.readFileSync(path.join(APP, '..', 'server', 'ew', 'settings.py'), 'utf8'), /"dice": False/);
+  assert.ok(!('widgets' in ex.overlay), 'plan 080: no manual overlay layout in the example');
+  assert.match(fs.readFileSync(path.join(APP, '..', 'server', 'ew', 'settings.py'), 'utf8'), /"dice"/);
 });
 
 test('overlay: dice from GET /api/today, opt-in row, no POST; Today never auto-ticks', () => {

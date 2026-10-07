@@ -71,8 +71,8 @@ test('POST bodies: track (edit login_rule), mark a past day; the IPC guard accep
   assert.strictEqual(C.validEventsBody({ login_mark: { date: 'x', on: true } }), false);
 });
 
-test('loginRisk: default off, one hit per at-risk row per UTC day, allowed while closed', () => {
-  assert.strictEqual(C.notifyPrefs({}).loginRisk, false);
+test('loginRisk: on with zero config (plan 080), one hit per at-risk row per UTC day, allowed while closed', () => {
+  assert.strictEqual(C.notifyPrefs({}).loginRisk, true);
   const next = { events: { login_days: { today: '2026-10-21', rows: [row(), row({ id: 'e2', at_risk: false })] } } };
   const hits = C.notifyRules(null, next, T0, { loginRisk: true });
   assert.deepStrictEqual(hits, [{ key: 'loginRisk:e1:2026-10-21', rule: 'loginRisk',

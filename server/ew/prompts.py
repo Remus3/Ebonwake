@@ -43,7 +43,7 @@ def valid_ladder(v):
 
 
 def parse_ladder(v):
-    """"15,5,1" (the settings form) -> (15, 5, 1); None when invalid."""
+    """"15,5,1" (a config incident switch, plan 080) -> (15, 5, 1); None when invalid."""
     if not isinstance(v, str) or not v or len(v) > 32:
         return None
     parts = v.split(",")
@@ -261,22 +261,32 @@ class PromptRegistry:
 
     # -- view ------------------------------------------------------------------------
 
-    def notify_prefs(self):
-        """(quiet_closed, ladder steps) from settings, defaults on anything odd."""
+    def notify_prefs(self, now=None):
+        """(quiet_closed, ladder steps, muted_until ISO|None) from the effective
+        settings (plan 080: fixed values unless a plan 079 entry holds), defaults
+        on anything odd."""
         try:
             s = self.settings() or {}
         except Exception:  # noqa: BLE001 - an unreadable setting = the default
             s = {}
         quiet = s.get("notify.quiet_closed", True) is not False
         ladder = parse_ladder(s.get("notify.ladder_min")) or tuple(self.cfg["ladder_min"])
-        return quiet, list(ladder)
+        mute = s.get("notify.mute_until")
+        try:
+            t = _dt.datetime.fromisoformat(mute) if isinstance(mute, str) and mute else None
+        except ValueError:
+            t = None
+        now = float(self.clock()) if now is None else now
+        muted = (_iso(t.timestamp()) if t is not None and t.tzinfo is not None
+                 and t.timestamp() > now else None)
+        return quiet, list(ladder), muted
 
     def view(self, game_state=None, timers=None, maint_loss=None):
         """GET /api/prompts: the quiet gate + ladder the notify engine applies,
         the live prompts, `timers` (reset / maintenance) for the ladder and
         plan 074 `maint_loss` [{key, at, title, text}] (unacked loss warnings)."""
         now = float(self.clock())
-        quiet_on, ladder = self.notify_prefs()
+        quiet_on, ladder, muted = self.notify_prefs(now)
         with self._lock:
             d = self._doc()
         live = [{"key": k, "kind": v.get("kind"), "created": _iso(v["created"]),
@@ -287,6 +297,7 @@ class PromptRegistry:
         return {"quiet_closed": quiet_on, "quiet": is_quiet(game_state, self.cfg, quiet_on),
                 "quiet_states": list(self.cfg["quiet"]["states"]),
                 "allow_closed": list(self.cfg["quiet"]["allow"]), "ladder_min": ladder,
+                "muted_until": muted,
                 "ttl_s": dict(self.cfg["ttl_s"]), "session": d["session"],
                 "prompts": live, "timers": [dict(t, at=_iso(t["at"])) for t in (timers or [])],
                 "maint_loss": [dict(t, at=_iso(t["at"])) for t in (maint_loss or [])],

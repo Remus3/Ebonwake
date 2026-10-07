@@ -467,16 +467,15 @@ def test_bench_commit_precision_at_default_threshold():
 
 # -- settings + server wiring -----------------------------------------------------
 
-def test_settings_allowlist_carries_ocr_keys():
-    d = settings.defaults()
+def test_ocr_keys_fixed_not_settable():
+    # Plan 080: fixed values; a config value is read only as an incident switch.
+    d = settings.fixed()
     assert d["ocr.auto"] is True and d["ocr.auto_commit_min"] == 0.9 and d["ocr.daily_cap"] == 120
-    ok = settings.validate({"set": {"ocr.auto": False, "ocr.auto_commit_min": 0.75,
-                                    "ocr.daily_cap": 10}})
-    assert ok["ocr.daily_cap"] == 10
-    for k, v in (("ocr.auto_commit_min", 0.7), ("ocr.auto_commit_min", 1.0),
-                 ("ocr.daily_cap", -1), ("ocr.daily_cap", 1.5), ("ocr.auto", 1)):
-        with pytest.raises(ValueError):
-            settings.validate({"set": {k: v}})
+    for k in ("ocr.auto", "ocr.auto_commit_min", "ocr.daily_cap"):
+        with pytest.raises(ValueError, match="not a settable key"):
+            settings.validate({"set": {k: d[k]}})
+    vals = settings.values_from({"ocr": {"daily_cap": 10, "auto_commit_min": 0.7}}, settings.FIXED)
+    assert vals["ocr.daily_cap"] == 10 and vals["ocr.auto_commit_min"] == 0.9  # 0.7 out of range
 
 
 def _no_network(url, timeout=None):

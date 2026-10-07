@@ -1,5 +1,5 @@
 {
- "_doc": "Plan 070: prompt hygiene. ttl_s per prompt kind: seconds from first seen, null = never expires, \"session\" = until the next logged_in. quiet: while gamewatch is in one of `states` only the `allow` notify rules fire (setting notify.quiet_closed). ladder_min: default minutes-before steps for time-based alerts (setting notify.ladder_min).",
+ "_doc": "Plan 070: prompt hygiene. ttl_s per prompt kind: seconds from first seen, null = never expires, \"session\" = until the next logged_in. quiet: while gamewatch is in one of `states` only the `allow` notify rules fire (plan 080: fixed on; config notify.quiet_closed is a 24 h incident switch only). ladder_min: minutes-before steps for time-based alerts (plan 080: fixed; config notify.ladder_min is a 24 h incident switch only).",
  "ttl_s": {
   "coupon": 604800,
   "event_suggestion": 604800,

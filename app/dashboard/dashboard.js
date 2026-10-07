@@ -362,6 +362,12 @@
 
   const rb = document.getElementById('server-restart');
   if (rb) rb.addEventListener('click', restart);
+  // Plan 080: shell badges - a notification mute, a non-1.0 dashboard scale and
+  // every config incident switch (plan 079 policy card `shell`), on every tab.
+  if (window.EWOverrides) {
+    window.EWOverrides.mount(document.querySelector('.ew-top'), 'shell');
+    setInterval(function () { window.EWOverrides.refresh(false); }, 30000);
+  }
   // Plan 078: the palette (plan 050, Ctrl+K in this window) gets a visible button.
   const pb = document.getElementById('palette-open');
   if (pb) {

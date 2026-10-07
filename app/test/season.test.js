@@ -135,7 +135,7 @@ test('overlay widget season is opt-in (default off); example config lists it off
   assert.strictEqual(C.widgetsFromQuery('').season, false);
   assert.strictEqual(C.widgetsFromQuery('?' + new URLSearchParams(C.widgetsQuery({ season: true })).toString()).season, true);
   const ex = JSON.parse(fs.readFileSync(path.join(APP, '..', 'config', 'local.example.json'), 'utf8'));
-  assert.strictEqual(ex.overlay.widgets.season, false);
+  assert.ok(!('widgets' in ex.overlay), 'plan 080: no manual overlay layout in the example');
 });
 
 test('overlay: season line from GET /api/progress, opt-in row, no POST', () => {

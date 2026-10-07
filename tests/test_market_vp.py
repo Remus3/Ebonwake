@@ -157,7 +157,12 @@ def test_stale_config_value_expires_from_its_file_mtime(env, tmp_path):
 
 def test_maintenance_override_retires_on_a_notice(env):
     s, clock = env
-    _req(s, "POST", "/api/settings", {"set": {"events.maintenance_start_utc": "09:00"}})
+    # Plan 080: not settable any more - a config value is the ledger's source.
+    st, _ = _req(s, "POST", "/api/settings", {"set": {"events.maintenance_start_utc": "09:00"}})
+    assert st == 400
+    s.settings.path.write_text('{"events": {"maintenance_start_utc": "09:00"}}\n',
+                               encoding="ascii")
+    os.utime(s.settings.path, (clock.t, clock.t))
     assert s._maint_start() == "09:00"
     now = dt.datetime.fromtimestamp(clock.t, dt.timezone.utc)
     day = (now + dt.timedelta(days=2)).date().isoformat()

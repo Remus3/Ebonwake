@@ -132,7 +132,7 @@ def test_rules_file_shape():
     assert raw["contexts"]["idle"]["widgets"][0] == "whatNow"
     assert raw["contexts"]["boss_soon"]["widgets"][0] == "worldBoss"
     assert raw["contexts"]["maint_soon"]["widgets"][0] == "maintenance"
-    assert settings.WIDGETS.keys() == set(context.WIDGETS)
+    assert settings.WIDGETS == context.WIDGETS
 
 
 def test_load_rules_drops_junk(tmp_path):
@@ -168,55 +168,56 @@ def test_blocks_never_show_and_the_next_rule_widget_fills():
     assert w == ["grindSession", "whatNow", "leveling", "eventsSoon"]
 
 
-def test_manual_mode_uses_the_plan030_booleans():
-    # Plan 078: a key missing from `manual` takes its widget default (the
-    # renderer's overlayWidgets semantics), so grindSession / grindBuff /
-    # eventsSoon / whatNow show unless set False.
-    prefs = {"auto": False, "manual": {"dice": True, "season": True, "leveling": False,
-                                       "grindBuff": False}}
+def test_no_manual_layout_branch():
+    # Plan 080: overlay.widgets.* booleans are gone; auto off (an incident
+    # switch only) shows the pinned widgets alone, never a stored layout.
+    prefs = context.prefs_from_settings({"overlay.auto": False, "overlay.widgets.dice": True,
+                                         "overlay.mode.season": "pin"})
+    assert "manual" not in prefs
     out = context.derive(sig(boss_at=NOW + MIN), NOW, prefs, RULES)
-    assert out["auto"] is False
-    assert out["widgets"] == ["grindSession", "eventsSoon", "season", "dice", "whatNow"]
+    assert out["auto"] is False and out["widgets"] == ["season"]
     assert out["context"] == "boss_soon" and out["hidden"] is False
-
-
-def test_auto_off_with_no_booleans_keeps_the_default_widgets():
-    # Research 0009 M1: context mode off with no overlay.widgets.* stored used
-    # to read every missing boolean as off and blank the overlay.
-    want = [w for w in context.WIDGETS if settings.WIDGETS[w]]
-    assert want == ["grindSession", "grindBuff", "eventsSoon", "whatNow"]
-    p = context.prefs_from_settings({"overlay.auto": False})
-    assert p["auto"] is False
-    assert [w for w in context.WIDGETS if p["manual"][w]] == want
-    assert context.derive(sig(), NOW, p, RULES)["widgets"] == want
-    assert context.derive(sig(), NOW, {"auto": False}, RULES)["widgets"] == want
-    # A literal False still turns a default-on widget off; True turns opt-in on.
-    p = context.prefs_from_settings({"overlay.auto": False, "overlay.widgets.whatNow": False,
-                                     "overlay.widgets.dice": True})
-    assert context.derive(sig(), NOW, p, RULES)["widgets"] == [
-        "grindSession", "grindBuff", "eventsSoon", "dice"]
-    # Non-bool junk falls back to the default, never to off.
-    p = context.prefs_from_settings({"overlay.auto": False, "overlay.widgets.grindSession": "x"})
-    assert p["manual"]["grindSession"] is True
+    assert context.derive(sig(), NOW, {"auto": False}, RULES)["widgets"] == []
+    assert not hasattr(context, "_manual_on")
 
 
 def test_prefs_from_settings_defaults():
-    p = context.prefs_from_settings(settings.defaults())
+    p = context.prefs_from_settings(dict(settings.defaults(), **settings.fixed()))
     assert p["auto"] is True and p["idle_min"] == 20
     assert set(p["modes"].values()) == {"auto"}
-    assert p["manual"]["grindSession"] is True and p["manual"]["dice"] is False
+    assert set(p) == {"auto", "idle_min", "modes"}
 
 
 def test_settings_keys_validate():
-    ok = settings.validate({"set": {"overlay.auto": False, "overlay.idle_min": 5,
-                                    "overlay.mode.dice": "pin",
+    ok = settings.validate({"set": {"overlay.mode.dice": "pin",
                                     "overlay.mode.worldBoss": "block"}})
     assert ok["overlay.mode.dice"] == "pin"
-    for bad in ({"overlay.auto": 1}, {"overlay.idle_min": 4}, {"overlay.idle_min": 241},
-                {"overlay.idle_min": 20.0}, {"overlay.mode.dice": "always"},
+    for bad in ({"overlay.auto": False}, {"overlay.idle_min": 30}, {"overlay.mode.dice": "always"},
                 {"overlay.mode.maintenance": "pin"}):
         with pytest.raises(ValueError):
             settings.validate({"set": bad})
+
+
+def test_config_overlay_auto_false_is_a_24h_override(tmp_path):
+    """Plan 080: a stored overlay.auto false is a plan 079 entry, gone in 24 h."""
+    t = [1_800_000_000.0]
+    cfg = tmp_path / "local.json"
+    cfg.write_text('{"overlay": {"auto": false}}\n', encoding="utf-8")
+    s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
+                          market_seed=[], profile_cfg={}, config_path=cfg,
+                          market_client=market.ArshaClient(fetch=_no_network,
+                                                           cache_dir=tmp_path / "cache"),
+                          today_clock=lambda: t[0], context_clock=lambda: t[0])
+    try:
+        assert s.context.view(fresh=True)["auto"] is False
+        items = {i["key"]: i for i in s.overrides_view()["items"]}
+        assert items["overlay.auto"]["source"] == "config"
+        assert items["overlay.auto"]["expires_in_s"] == 86400
+        t[0] += 86400
+        assert s.context.view(fresh=True)["auto"] is True
+        assert "overlay.auto" not in {i["key"] for i in s.overrides_view()["items"]}
+    finally:
+        s.server_close()
 
 
 # --- maintenance window -------------------------------------------------------------

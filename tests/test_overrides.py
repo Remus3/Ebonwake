@@ -41,6 +41,54 @@ def test_tracked_policy_is_ascii_and_every_row_valid():
     assert ov.policy_for(pol, "overlay.mode.whatNow")["expiry"] == "days:7"
 
 
+def test_plan080_incident_rows_in_the_tracked_policy():
+    from server.ew import settings
+    pol = ov.load_policy()
+    for key in settings.FIXED:
+        row = pol[key]
+        if key == "events.maintenance_start_utc":
+            assert row["expiry"] == "until:maint_end" and row["first_sight"] is False
+            continue
+        assert row["expiry"] == "days:1" and row["first_sight"] is True, key
+        assert "shell" in row["cards"], key
+    assert pol["notify.mute_until"]["expiry"] == "days:1" and pol["notify.mute_until"]["cards"] == [
+        "shell"]
+    assert pol["ui.scale"]["expiry"] == "none" and "ui.scale" in ov.NONE_OK
+    for key in ("coupons.check", "events.notice_check"):  # read at start: the badge says so
+        assert "restart" in pol[key]["note"], key
+    doc = ov.empty()
+    ov.from_config(doc, {"coupons.check": False}, {"coupons.check": True}, NOW, ["coupons.check"],
+                   pol, now=NOW)
+    assert doc["live"]["coupons.check"]["reason"] == pol["coupons.check"]["note"]
+
+
+def test_config_incident_switch_badged_and_expires_24h_from_first_sight():
+    """Plan 080: an old config value (mtime long ago) is a 24 h entry from when
+    it is first read, then the fixed default applies and it never re-imports."""
+    pol = ov.clean_policy({"keys": {"ocr.auto": {"label": "OCR", "expiry": "days:1",
+                                                 "first_sight": True, "cards": ["shell"]}}})
+    doc = ov.empty()
+    mtime = NOW - 90 * DAY
+    ov.from_config(doc, {"ocr.auto": False}, {"ocr.auto": True}, mtime, ["ocr.auto"], pol, now=NOW)
+    e = doc["live"]["ocr.auto"]
+    assert e["source"] == "config" and e["set_at"] == ov._iso(NOW)
+    assert e["expires_at"] == ov._iso(NOW + DAY) and "incident" in e["reason"]
+    it = ov.item(e, pol, NOW)
+    assert it["cards"] == ["shell"] and it["expires_in_s"] == DAY
+    assert ov.resolve(doc, "ocr.auto", None, True, NOW + DAY - 1, "days:1")["value"] is False
+    out = ov.resolve(doc, "ocr.auto", None, True, NOW + DAY, "days:1")
+    assert out == {"value": True, "from": "default", "entry": None}
+    assert doc["retired"][-1]["retired_by"] == "expired"
+    ov.from_config(doc, {"ocr.auto": False}, {"ocr.auto": True}, mtime, ["ocr.auto"], pol,
+                   now=NOW + 2 * DAY)
+    assert "ocr.auto" not in doc["live"]  # the same file value never re-imports
+    # A non-incident key keeps the plan 079 rule: set_at = the file mtime.
+    pol2 = ov.clean_policy({"keys": {"market.vp": {"expiry": "days:30"}}})
+    d2 = ov.empty()
+    ov.from_config(d2, {"market.vp": True}, {"market.vp": False}, mtime, ["market.vp"], pol2, now=NOW)
+    assert d2["live"]["market.vp"]["set_at"] == ov._iso(mtime)
+
+
 def test_none_outside_allowlist_and_bad_rules_are_dropped():
     pol = ov.clean_policy({"keys": {"market.vp": {"expiry": "none"},
                                     "x.y": {"expiry": "days:0"},

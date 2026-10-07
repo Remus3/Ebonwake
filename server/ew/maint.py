@@ -3,7 +3,8 @@
 Official event notices end "Oct 15, 2026 (Thu) before maintenance" rather than at
 a clock time. The slot lives in tracked `data/maintenance.json` (a UTC time, so
 no DST rule applies) and is unverified until the operator confirms it; the
-plan 030 setting `events.maintenance_start_utc` overrides the start. `resolve`
+plan 079 config entry `events.maintenance_start_utc` (until that maintenance
+ends; an official notice supersedes it) overrides the start. `resolve`
 is pure: "before" = the slot start on that date, "after" = start + duration,
 on whatever weekday the date falls (a holiday maintenance is still that date).
 

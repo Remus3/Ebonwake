@@ -61,17 +61,18 @@ test('maintLine counts down, then says now', () => {
   assert.strictEqual(C.maintLine(null, at), '');
 });
 
-test('settings: auto, idle_min and one pin/block mode per widget; context keys apply live', () => {
-  assert.ok(C.SETTINGS_KEYS.includes('overlay.auto'));
-  assert.ok(C.SETTINGS_KEYS.includes('overlay.idle_min'));
+test('settings: one pin/block mode per widget, no auto / idle_min (plan 080); modes apply live', () => {
+  assert.ok(!C.SETTINGS_KEYS.includes('overlay.auto'));
+  assert.ok(!C.SETTINGS_KEYS.includes('overlay.idle_min'));
   for (const w of C.OVERLAY_WIDGETS.filter((k) => k !== 'maintenance')) {
     assert.ok(C.SETTINGS_KEYS.includes('overlay.mode.' + w), w);
   }
-  assert.ok(C.validSettingsBody({ set: { 'overlay.mode.dice': 'pin', 'overlay.auto': false, 'overlay.idle_min': 30 } }));
+  assert.ok(C.validSettingsBody({ set: { 'overlay.mode.dice': 'pin' } }));
+  assert.ok(!C.validSettingsBody({ set: { 'overlay.mode.dice': 'pin', 'overlay.auto': false } }));
   assert.ok(!C.validSettingsBody({ set: { 'overlay.mode.dice': 'always' } }));
-  assert.ok(!C.validSettingsBody({ set: { 'overlay.idle_min': 4 } }));
+  assert.ok(!C.validSettingsBody({ set: { 'overlay.idle_min': 30 } }));
   assert.ok(!C.validSettingsBody({ set: { 'overlay.mode.maintenance': 'pin' } }));
-  assert.deepStrictEqual(C.settingsEffects(['overlay.mode.dice', 'overlay.auto', 'overlay.idle_min']),
+  assert.deepStrictEqual(C.settingsEffects(['overlay.mode.dice']),
     { overlay: false, shell: false, theme: false });
   assert.strictEqual(C.settingsEffects(['overlay.mode.dice', 'overlay.scale']).overlay, true);
 });

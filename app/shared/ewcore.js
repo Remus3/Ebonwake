@@ -3967,7 +3967,7 @@
   }
 
   // Notify rule bossSoon: one hit per alert-ladder step (plan 070: 15 / 5 / 1
-  // min, setting notify.ladder_min) before each spawn that is not already all
+  // min, from GET /api/prompts ladder_min) before each spawn that is not already all
   // looted. A state rule (fires on a baseline); the key carries the step so
   // the ledger lets each fire once.
   function bossHits(prev, next, now) {
@@ -4968,8 +4968,12 @@
   // Every key is a dotted config/local.json path; secrets and loop never appear.
   const THEMES = ['system', 'dark', 'light'];
   const UI_SCALE = [0.9, 1.3];
-  const NOTIFY_RULES_PREFS = ['marketAlert', 'buffEnding', 'hotTime', 'resetPassed', 'newCoupon', 'gameExit', 'bossSoon',
-    'resetSoon', 'loginRisk', 'maintLoss'];
+  // Plan 080: config keys that are no longer settable but may hold a plan 079
+  // incident switch from config/local.json - the shell badge can clear one.
+  const INCIDENT_KEYS = ['ocr.auto', 'play.auto_session', 'notices.auto_add', 'events.notice_check',
+    'coupons.check', 'checklist.auto', 'overlay.auto', 'ocr.auto_commit_min', 'ocr.daily_cap',
+    'play.grace_s', 'overlay.idle_min', 'notify.ladder_min', 'notify.quiet_closed',
+    'events.maintenance_start_utc'];
   // Plan 078: human names for the overlay widgets, the notification rules and
   // the config keys the onboarding hints cite (as their Settings path).
   const LABELS = {
@@ -4984,24 +4988,28 @@
     'bdo.documents_dir': 'Game folders > BDO Documents folder', 'overlay.anchor': 'Overlay > Anchor'
   };
   const MODE_TEXT = { auto: 'auto', pin: 'always', block: 'never' };
+  // Plan 080: notify.mute_until choices -> hours from now ('' = not muted).
+  const MUTE_CHOICES = [['', 'off'], ['1h', 'mute 1 h'], ['8h', 'mute 8 h'], ['24h', 'mute 24 h']];
+  const MUTE_MAX_MS = 24 * 3600000;
+  // Plan 080: no automation switch, notification checkbox, manual overlay
+  // layout or tunable - those are fixed (config/local.json values are plan 079
+  // incident switches, badged, 24 h). Five groups remain.
   const SETTINGS_GROUPS = [
+    // Plan 065: blank = auto-detected (Steam library / Documents); a path = "use other".
+    { id: 'game', title: 'Game folders', fields: [
+      { key: 'bdo.install_dir', label: 'BDO install folder (blank = auto-detect)', type: 'dir' },
+      { key: 'bdo.documents_dir', label: 'BDO Documents folder (blank = auto-detect)', type: 'dir' }
+    ] },
     // Plan 078: one row per widget - auto (by context) / always / never,
-    // stored as overlay.mode.<w> auto | pin | block. The plan 030 manual
-    // booleans stay allowlisted but are not rendered (`hidden`; plan 080
-    // removes them).
+    // stored as overlay.mode.<w> auto | pin | block (plan 079: 7 d expiry).
     { id: 'overlay', title: 'Overlay', fields: WIDGETS.map(function (w) {
       return { key: 'overlay.mode.' + w, label: LABELS[w], type: 'enum', options: OVERLAY_MODES, text: MODE_TEXT };
     }).concat([
       { key: 'overlay.anchor', label: 'Anchor', type: 'anchor', options: OVERLAY_ANCHORS },
       { key: 'overlay.display', label: 'Display (blank = primary)', type: 'display' },
       { key: 'overlay.scale', label: 'Scale', type: 'number', min: OVERLAY_SCALE[0], max: OVERLAY_SCALE[1], step: 0.05 },
-      { key: 'overlay.opacity', label: 'Opacity', type: 'number', min: OVERLAY_OPACITY[0], max: OVERLAY_OPACITY[1], step: 0.05 },
-      // Plan 067: widgets by context; off shows the default widgets.
-      { key: 'overlay.auto', label: 'Widgets by context (in game, idle, boss / reset / maintenance soon)', type: 'bool' },
-      { key: 'overlay.idle_min', label: 'Idle after, minutes (5-240)', type: 'number', min: 5, max: 240, step: 1, int: true }
-    ]).concat(WIDGETS.map(function (w) {
-      return { key: 'overlay.widgets.' + w, label: 'Show ' + LABELS[w] + ' (context off)', type: 'bool', hidden: true };
-    })) },
+      { key: 'overlay.opacity', label: 'Opacity', type: 'number', min: OVERLAY_OPACITY[0], max: OVERLAY_OPACITY[1], step: 0.05 }
+    ]) },
     { id: 'hotkeys', title: 'Hotkeys', fields: [
       { key: 'hotkeys.toggleOverlay', label: 'Toggle overlay', type: 'hotkey' },
       { key: 'hotkeys.showDashboard', label: 'Show dashboard', type: 'hotkey' }
@@ -5009,49 +5017,16 @@
     { id: 'profile', title: 'Profile', fields: [
       { key: 'profile.family', label: 'Family name (blank = none)', type: 'family' },
       // Plan 061: self-hosted BDO-REST-API base; blank = profile source off.
-      { key: 'profile.base_url', label: 'Self-hosted profile API base (blank = off)', type: 'baseurl' }
-    ] },
-    { id: 'appearance', title: 'Appearance', fields: [
-      { key: 'ui.theme', label: 'Theme', type: 'enum', options: THEMES },
-      { key: 'ui.scale', label: 'Dashboard scale', type: 'number', min: UI_SCALE[0], max: UI_SCALE[1], step: 0.05 }
-    ] },
-    { id: 'notify', title: 'Notifications', fields: NOTIFY_RULES_PREFS.map(function (n) {
-      return { key: 'notify.' + n, label: LABELS[n], type: 'bool' };
-    }).concat([
-      // Plan 070: game-closed quiet + the minutes-before alert ladder.
-      { key: 'notify.quiet_closed', label: 'Quiet while the game is closed (market alerts still notify)', type: 'bool' },
-      { key: 'notify.ladder_min', label: 'Alert minutes before, e.g. 15,5,1', type: 'ladder' },
-      { key: 'coupons.check', label: 'Coupon suggestions', type: 'bool' }]) },
-    // Plan 059: event-notice suggestions + the weekly maintenance start (UTC).
-    { id: 'events', title: 'Events', fields: [
-      { key: 'events.notice_check', label: 'Event notice suggestions', type: 'bool' },
-      { key: 'events.maintenance_start_utc', label: 'Maintenance start, HH:MM UTC (blank = default)', type: 'hhmm' },
-      // Plan 064: full-window notice reads are added (with undo), not suggested.
-      { key: 'notices.auto_add', label: 'Auto-add official notices (undo on the Events tab)', type: 'bool' }
-    ] },
-    { id: 'market', title: 'Market', fields: [
+      { key: 'profile.base_url', label: 'Self-hosted profile API base (blank = off)', type: 'baseurl' },
+      // Plan 027 / 079: sale tax facts (an armed Value Pack timer wins over the box).
       { key: 'market.vp', label: 'Value Pack active', type: 'bool' },
       { key: 'market.fame_pct', label: 'Family fame bonus (0-1.5 %)', type: 'number', min: 0, max: 1.5, step: 0.05 }
     ] },
-    // Plan 062: login opens / exit closes the grind log after the grace.
-    { id: 'play', title: 'Play session', fields: [
-      { key: 'play.auto_session', label: 'Auto grind session (login opens, exit closes)', type: 'bool' },
-      { key: 'play.grace_s', label: 'Exit grace, seconds (60-600)', type: 'number', min: 60, max: 600, step: 1, int: true }
-    ] },
-    // Plan 063: auto-OCR of screenshots taken while logged in.
-    { id: 'ocr', title: 'Screenshots (OCR)', fields: [
-      { key: 'ocr.auto', label: 'Read new screenshots automatically', type: 'bool' },
-      { key: 'ocr.auto_commit_min', label: 'Auto-commit confidence (0.75-0.99)', type: 'number', min: 0.75, max: 0.99, step: 0.01 },
-      { key: 'ocr.daily_cap', label: 'Screenshots read per day (0-1000)', type: 'number', min: 0, max: 1000, step: 1, int: true }
-    ] },
-    // Plan 065: blank = auto-detected (Steam library / Documents); a path = "use other".
-    { id: 'game', title: 'Game folders', fields: [
-      { key: 'bdo.install_dir', label: 'BDO install folder (blank = auto-detect)', type: 'dir' },
-      { key: 'bdo.documents_dir', label: 'BDO Documents folder (blank = auto-detect)', type: 'dir' }
-    ] },
-    // Plan 068: auto-tick inferable Today rows + boss-shot suggestions.
-    { id: 'checklist', title: 'Checklist', fields: [
-      { key: 'checklist.auto', label: 'Auto-tick login / play-time rows, suggest boss loot from shots', type: 'bool' }
+    { id: 'display', title: 'Display', fields: [
+      { key: 'ui.theme', label: 'Theme', type: 'enum', options: THEMES },
+      { key: 'ui.scale', label: 'Dashboard scale', type: 'number', min: UI_SCALE[0], max: UI_SCALE[1], step: 0.05 },
+      // Plan 080: one mute for every alert (badged on the shell while active).
+      { key: 'notify.mute_until', label: 'Mute notifications', type: 'mute' }
     ] }
   ];
   const DIR_MAX = 1024;
@@ -5094,6 +5069,33 @@
     return m[1] === 'https' || loop;
   }
 
+  // Plan 080 mirror of settings.valid_mute: an ISO time with an offset, at
+  // most 24 h after nowMs (a minute of slack for the round trip).
+  function validMute(v, nowMs) {
+    if (typeof v !== 'string' || v.length > 40 || !/(Z|[+-]\d\d:\d\d)$/.test(v)) return false;
+    const t = Date.parse(v);
+    return isNum(t) && t <= nowMs + MUTE_MAX_MS + 60000;
+  }
+
+  // The mute select's value -> the stored value: '' / '1h' / '8h' / '24h'
+  // (hours from nowMs, ISO UTC) or an already-stored ISO time (kept as is).
+  function muteValue(raw, nowMs) {
+    if (raw === '') return '';
+    const m = typeof raw === 'string' ? /^(1|8|24)h$/.exec(raw) : null;
+    if (m) return new Date(nowMs + Number(m[1]) * 3600000).toISOString().replace(/\.\d{3}Z$/, '+00:00');
+    return raw;
+  }
+
+  // The mute select's options for stored value `v`: an active mute first
+  // (kept on save), then the choices.
+  function muteOptions(v, nowMs) {
+    const out = [];
+    const t = typeof v === 'string' && v ? Date.parse(v) : NaN;
+    if (isNum(t) && t > nowMs) out.push({ value: v, text: 'muted until ' + new Date(t).toLocaleTimeString() });
+    MUTE_CHOICES.forEach(function (c) { out.push({ value: c[0], text: c[1] }); });
+    return out;
+  }
+
   function settingValueOk(f, v) {
     switch (f.type) {
       case 'bool': return typeof v === 'boolean';
@@ -5104,7 +5106,7 @@
       case 'family': return v === '' || (typeof v === 'string' && FAMILY_RE.test(v));
       case 'enum': return typeof v === 'string' && f.options.indexOf(v) >= 0;
       case 'hhmm': return v === '' || (typeof v === 'string' && /^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(v));
-      case 'ladder': return parseLadder(v) !== null;
+      case 'mute': return v === '' || validMute(v, Date.now());
       // Shape only (the server checks the folder exists): '' or an absolute path.
       case 'dir': return v === '' || (typeof v === 'string' && v.length <= DIR_MAX && v === v.trim() &&
         !/[\u0000-\u001f\u007f]/.test(v) && /^([A-Za-z]:[\\/]|[\\/])/.test(v));
@@ -5114,10 +5116,11 @@
   }
 
   // Bridge check for POST /api/settings: {set: {key: value}} over the allowlist,
-  // or plan 079 {clear: key} (an allowlisted key; the server checks the ledger).
+  // or plan 079 {clear: key} (an allowlisted or plan 080 incident key; the
+  // server checks the ledger).
   function validSettingsBody(body) {
     if (plainObject(body) && Object.keys(body).length === 1 && typeof body.clear === 'string') {
-      return Object.prototype.hasOwnProperty.call(SETTINGS_FIELDS, body.clear);
+      return Object.prototype.hasOwnProperty.call(SETTINGS_FIELDS, body.clear) || INCIDENT_KEYS.indexOf(body.clear) >= 0;
     }
     if (!plainObject(body) || Object.keys(body).length !== 1 || !plainObject(body.set)) return false;
     const keys = Object.keys(body.set);
@@ -5127,13 +5130,16 @@
   }
 
   // One raw form input -> {value} or {error}. Checkboxes pass a boolean;
-  // anchors pass a named anchor or 'x,y'; everything else passes a string.
-  function parseSettingInput(key, raw) {
+  // anchors pass a named anchor or 'x,y'; the mute select passes '' / '1h' /
+  // '8h' / '24h' / the stored time (nowMs: the clock, default Date.now());
+  // everything else passes a string.
+  function parseSettingInput(key, raw, nowMs) {
     const f = SETTINGS_FIELDS[key];
     if (!f) return { error: key + ': unknown setting' };
     let v = raw;
     const s = typeof raw === 'string' ? raw.trim() : raw;
     if (f.type === 'number') v = typeof s === 'string' && /^-?\d+(\.\d+)?$/.test(s) ? Number(s) : NaN;
+    else if (f.type === 'mute') v = muteValue(s, isNum(nowMs) ? nowMs : Date.now());
     else if (f.type === 'display') v = s === '' ? null : (typeof s === 'string' && /^\d+$/.test(s) ? Number(s) : NaN);
     else if (f.type === 'anchor' && typeof s === 'string' && s.indexOf(',') >= 0) {
       const m = /^(-?\d+)\s*,\s*(-?\d+)$/.exec(s);
@@ -5149,7 +5155,7 @@
       else if (f.type === 'hhmm') hint = 'blank or HH:MM (UTC), e.g. 07:00';
       else if (f.type === 'dir') hint = 'blank (auto-detect) or a full folder path';
       else if (f.type === 'baseurl') hint = 'blank, https://..., or http://127.0.0.1:8001/v1';
-      else if (f.type === 'ladder') hint = '1-6 minutes, 1-120, largest first, e.g. 15,5,1';
+      else if (f.type === 'mute') hint = 'off, 1h, 8h or 24h';
       return { error: f.label + ': ' + hint };
     }
     return { value: v };
@@ -5205,16 +5211,16 @@
   function settingsEffects(changed) {
     const ks = Array.isArray(changed) ? changed : [];
     // Plan 067: context keys reach the overlay live over SSE (no recreate).
-    const live = function (k) { return k === 'overlay.auto' || k === 'overlay.idle_min' || k.indexOf('overlay.mode.') === 0; };
+    const live = function (k) { return k.indexOf('overlay.mode.') === 0; };
     const has = function (p) { return ks.some(function (k) { return typeof k === 'string' && k.indexOf(p) === 0 && !live(k); }); };
     return { overlay: has('overlay.'), shell: has('hotkeys.') || has('ui.scale'), theme: has('ui.theme') };
   }
 
-  // data-theme for ui.theme; 'system' follows prefers-color-scheme.
+  // data-theme for ui.theme; 'system' (plan 080: the default, so anything
+  // else too) follows prefers-color-scheme, which Electron feeds from nativeTheme.
   function themeAttr(theme, prefersDark) {
     if (theme === 'light' || theme === 'dark') return theme;
-    if (theme === 'system') return prefersDark ? 'dark' : 'light';
-    return 'dark';
+    return prefersDark ? 'dark' : 'light';
   }
 
   // Dashboard zoom factor from config ui.scale (main process).
@@ -6205,9 +6211,15 @@
   // mark passed while closed) and goes to drop, which the caller feeds to the
   // ledger so it never fires late; any other held hit waits for a later round
   // (its rule re-fires at login if still current).
-  function promptGate(hits, game, p) {
+  // Plan 080: while p.muted_until (GET /api/prompts) is after nowMs every hit
+  // is dropped (consumed, so nothing fires late when the mute ends).
+  function promptGate(hits, game, p, nowMs) {
     const list = Array.isArray(hits) ? hits : [];
     const q = plainObject(p) ? p : {};
+    const mute = typeof q.muted_until === 'string' ? Date.parse(q.muted_until) : NaN;
+    if (isNum(mute) && mute > (isNum(nowMs) ? nowMs : Date.now())) {
+      return { fire: [], drop: list.filter(function (h) { return plainObject(h); }) };
+    }
     const g = normalizeGame(game);
     const states = Array.isArray(q.quiet_states) ? q.quiet_states : QUIET_STATES;
     if (q.quiet_closed === false || !g || states.indexOf(g.state) < 0) return { fire: list.slice(), drop: [] };
@@ -6451,28 +6463,28 @@
     });
   }
 
-  // The rule table. Names are stable (config notify.<name>); later plans push
+  // The rule table. Names are stable; later plans push
   // {name, defaultOn, fire(prev, next, nowMs) -> [{key, title, body}]}.
+  // Plan 080: every rule is on (no per-rule switch); game-closed quiet, the
+  // ladder and notify.mute_until (promptGate) govern volume.
   const NOTIFY_RULES = [
     { name: 'marketAlert', defaultOn: true, fire: marketHits },
     { name: 'buffEnding', defaultOn: true, fire: buffHits },
-    { name: 'hotTime', defaultOn: false, fire: hotHits },
-    { name: 'resetPassed', defaultOn: false, fire: resetHits },
-    { name: 'newCoupon', defaultOn: false, fire: couponHits },
-    { name: 'gameExit', defaultOn: false, fire: gameHits },
-    { name: 'bossSoon', defaultOn: false, fire: bossHits },
-    { name: 'resetSoon', defaultOn: false, fire: resetSoonHits },
-    { name: 'loginRisk', defaultOn: false, fire: loginRiskHits },
-    { name: 'maintLoss', defaultOn: false, fire: maintLossHits }
+    { name: 'hotTime', defaultOn: true, fire: hotHits },
+    { name: 'resetPassed', defaultOn: true, fire: resetHits },
+    { name: 'newCoupon', defaultOn: true, fire: couponHits },
+    { name: 'gameExit', defaultOn: true, fire: gameHits },
+    { name: 'bossSoon', defaultOn: true, fire: bossHits },
+    { name: 'resetSoon', defaultOn: true, fire: resetSoonHits },
+    { name: 'loginRisk', defaultOn: true, fire: loginRiskHits },
+    { name: 'maintLoss', defaultOn: true, fire: maintLossHits }
   ];
 
-  // config/local.json `notify` block -> {rule: bool}; non-booleans keep the default.
+  // {rule: bool} from each rule's defaultOn. Plan 080: a config/local.json
+  // `notify.<rule>` boolean is ignored - a forgotten switch never silences a rule.
   function notifyPrefs(cfg) {
-    const n = plainObject(cfg) && plainObject(cfg.notify) ? cfg.notify : {};
     const out = {};
-    NOTIFY_RULES.forEach(function (r) {
-      out[r.name] = typeof n[r.name] === 'boolean' ? n[r.name] : !!r.defaultOn;
-    });
+    NOTIFY_RULES.forEach(function (r) { out[r.name] = !!r.defaultOn; });
     return out;
   }
 
@@ -6965,6 +6977,10 @@
     enumOptions: enumOptions,
     settingLocalNote: settingLocalNote,
     SETTINGS_KEYS: SETTINGS_KEYS,
+    INCIDENT_KEYS: INCIDENT_KEYS,
+    validMute: validMute,
+    muteValue: muteValue,
+    muteOptions: muteOptions,
     validSettingsBody: validSettingsBody,
     parseSettingInput: parseSettingInput,
     settingInputText: settingInputText,

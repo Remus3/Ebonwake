@@ -29,7 +29,9 @@ from pathlib import Path
 
 POLICY_FILE = Path(__file__).resolve().parent / "data" / "override_policy.json"
 RULE_RE = re.compile(r"^(days:[1-9][0-9]{0,3}|until:maint_end|until:path_missing|none)$")
-NONE_OK = ("market.fame_pct", "profile.family", "bdo.install_dir", "bdo.documents_dir")
+NONE_OK = ("market.fame_pct", "profile.family", "bdo.install_dir", "bdo.documents_dir",
+           "ui.scale")
+INCIDENT_REASON = "incident switch in config/local.json; the fixed value returns when it expires"
 SOURCES = ("typed", "config")
 MAX_RETIRED = 50
 # until:maint_end with no computable window: the slot repeats weekly, so a week.
@@ -68,7 +70,9 @@ def clean_policy(doc):
         cards = row.get("cards")
         cards = [c for c in cards if isinstance(c, str)] if isinstance(cards, list) else []
         label = row.get("label") if isinstance(row.get("label"), str) else key
-        out[key] = {"label": label, "expiry": rule, "cards": cards}
+        out[key] = {"label": label, "expiry": rule, "cards": cards,
+                    "first_sight": row.get("first_sight") is True,
+                    "note": row["note"][:MAX_REASON] if isinstance(row.get("note"), str) else None}
     return out
 
 
@@ -227,8 +231,12 @@ def from_config(doc, values, defaults, mtime, keys, policy, maint_end=None, now=
         e = doc["live"].get(key)
         if e is not None and e["value"] == v:
             continue
-        put(doc, key, v, "config", now, row["expiry"], reason="config/local.json",
-            maint_end=maint_end, set_at=min(mtime, now))
+        # Plan 080: an incident switch (`first_sight`) runs from when EW first
+        # reads it, so a months-old config value still gets its full 24 h.
+        incident = row.get("first_sight") is True
+        put(doc, key, v, "config", now, row["expiry"],
+            reason=(row.get("note") or INCIDENT_REASON) if incident else "config/local.json",
+            maint_end=maint_end, set_at=now if incident else min(mtime, now))
         doc["seen"][key] = copy.deepcopy(v)
 
 
