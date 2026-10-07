@@ -24,6 +24,11 @@ remembered by groupContentNo, so undo / dismiss sticks; partial parses stay
 suggestions. When the official host has failed for STEAM_AFTER_S, the Steam
 store news RSS (robots-gated on its own host) gives titles only, as a
 "check official notices" hint - never a window.
+
+Plan 074: a maintenance notice's Detail read also keeps its loss-warning
+sentences (`maintdigest.loss_lines`, `loss` + `parse_v` in the Detail
+cache); a maintenance entry with an older `parse_v` is re-read once, inside
+the same MAX_DETAILS budget.
 """
 
 import datetime as _dt
@@ -35,7 +40,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import __version__, logindays, maint
+from . import __version__, logindays, maint, maintdigest
 from .coupons import HOST, MAX_BYTES, ROBOTS, TIMEOUT_S, UA_TOKEN, robots_verdict
 from .coupons import _TOKEN_RE, _clean_title, copy_codes, is_code, is_word_code, parse_date
 from .httpcache import CachedClient, UpstreamError, freshness, read_json
@@ -208,12 +213,15 @@ _BLOCK = {"p", "div", "li", "ul", "ol", "br", "tr", "td", "table", "section", "a
 
 
 class _TextParser(html.parser.HTMLParser):
-    """Visible text, one line per block element; head/script/style dropped."""
+    """Visible text, one line per block element; head/script/style dropped.
+    `unwrap` (plan 074): a source line break inside a block is a space, so a
+    sentence wrapped in the markup stays one line."""
 
-    def __init__(self):
+    def __init__(self, unwrap=False):
         super().__init__(convert_charrefs=True)
         self.parts = []
         self._skip = 0
+        self._unwrap = unwrap
 
     def handle_starttag(self, tag, attrs):
         if tag in ("script", "style", "head", "title"):
@@ -229,7 +237,7 @@ class _TextParser(html.parser.HTMLParser):
 
     def handle_data(self, data):
         if not self._skip:
-            self.parts.append(data)
+            self.parts.append(data.replace("\n", " ") if self._unwrap else data)
 
 
 def _point(p):
@@ -327,9 +335,9 @@ def parse_window(line, ref_year, ref_month=None):
     return None
 
 
-def _lines(page):
+def _lines(page, unwrap=False):
     """Visible text of a page, one stripped non-empty line per block."""
-    p = _TextParser()
+    p = _TextParser(unwrap)
     try:
         p.feed(page if isinstance(page, str) else _decode(page))
         p.close()
@@ -564,16 +572,20 @@ def parse_codes(page, lines):
 
 
 def parse_notice(page, title, ref_year, ref_month=None):
-    """Everything plan 059 + 064 read from one Detail page: {window, maint,
-    hot, codes} + plan 075 `login` (a suggested login rule, or None)."""
+    """Everything plan 059 + 064 + 074 read from one Detail page: {window,
+    maint, hot, codes, loss, parse_v}; `loss` only on a maintenance notice;
+    + plan 075 `login` (a suggested login rule, or None)."""
     text = page if isinstance(page, str) else _decode(page)
     lines = _lines(text)
     window = next((w for w in (parse_window(ln, ref_year, ref_month) for ln in lines)
                    if w is not None), None)
-    return {"window": window, "maint": parse_maint(text, title, ref_year, ref_month),
+    m = parse_maint(text, title, ref_year, ref_month)
+    return {"window": window, "maint": m,
             "hot": parse_hot(lines, title, ref_year, ref_month),
             "codes": parse_codes(text, lines),
-            "login": logindays.suggest_rule([title] + lines if isinstance(title, str) else lines)}
+            "login": logindays.suggest_rule([title] + lines if isinstance(title, str) else lines),
+            "loss": maintdigest.loss_lines(_lines(text, unwrap=True)) if m is not None else [],
+            "parse_v": maintdigest.PARSE_V}
 
 
 def parse_rss_titles(text):
@@ -677,8 +689,9 @@ def _clean_codes(raw):
 
 
 def _clean_detail(entry):
-    """{stamp, fetched_at, window, maint, hot, codes} or None (a pre-064 entry
-    has no maint / hot / codes: None, None, [])."""
+    """{stamp, fetched_at, window, maint, hot, codes, login, loss, parse_v} or None (a
+    pre-064 entry has no maint / hot / codes: None, None, []; a pre-074 one no
+    loss / parse_v: [], 1)."""
     if not isinstance(entry, dict):
         return None
     at = entry.get("fetched_at")
@@ -696,9 +709,13 @@ def _clean_detail(entry):
     ch = _clean_hot(h) if h is not None else None
     if (m is not None and cm is None) or (h is not None and ch is None):
         return None
+    pv = entry.get("parse_v")
+    pv = pv if isinstance(pv, int) and not isinstance(pv, bool) and pv > 0 else 1
     return {"stamp": stamp, "fetched_at": at, "window": cw, "maint": cm, "hot": ch,
             "codes": _clean_codes(entry.get("codes")),
-            "login": logindays.clean_suggestion(entry.get("login"))}  # plan 075; pre-075 None
+            "login": logindays.clean_suggestion(entry.get("login")),  # plan 075; pre-075 None
+            "loss": maintdigest.clean_loss(entry.get("loss")) if cm is not None else [],
+            "parse_v": pv}
 
 
 def _clean_notice(n):
@@ -800,6 +817,8 @@ class NoticeClient(CachedClient):
     def _stale(self, notice, cached, now):
         if cached is None:
             return True
+        if cached["parse_v"] < maintdigest.PARSE_V and _MAINT_TITLE_RE.match(notice["title"]):
+            return True  # plan 074: a maintenance notice read before loss parsing, once
         if notice["stamp"] is not None:
             return notice["stamp"] != cached["stamp"]
         return now - cached["fetched_at"] >= DETAIL_MAX_AGE_S
@@ -1001,6 +1020,16 @@ class NoticeService:
     def maint_notices(self):
         """{date: {start_utc, end_utc, source}} of imported maintenance notices."""
         return maint.clean_notices(self.store.get(MAINT_DOMAIN))
+
+    def loss_rows(self):
+        """Plan 074: [{notice_no, url, due_utc, loss}] of cached maintenance
+        notices with loss sentences (cache only, never fetches)."""
+        if self.client is None:
+            return []
+        return [{"notice_no": no, "url": detail_url(no), "due_utc": d["maint"]["start_utc"],
+                 "loss": list(d["loss"])}
+                for no, d in sorted(self.client.details().items())
+                if d["maint"] is not None and d["loss"]]
 
     def _notices(self, res):
         raw = res["data"].get("notices") if isinstance(res["data"], dict) else None

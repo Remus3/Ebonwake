@@ -22,7 +22,7 @@
     "widgets": {"grindSession": true, "grindBuff": true, "eventsSoon": true, "leveling": false, "season": false, "marketTicker": false, "worldBoss": false, "dice": false}
   },
   "notify": {
-    "_doc": "Plan 026. Per-rule OS notifications (dashboard toasts follow the same switches). Defaults: marketAlert and buffEnding on, the rest off. bossSoon (plan 032): 15 and 5 min before each world boss spawn not yet looted. loginRisk (plan 075): one toast a UTC day per login-day event at risk, even while the game is closed. silent: no notification sound (default true).",
+    "_doc": "Plan 026. Per-rule OS notifications (dashboard toasts follow the same switches). Defaults: marketAlert and buffEnding on, the rest off. bossSoon (plan 032): 15 and 5 min before each world boss spawn not yet looted. loginRisk (plan 075): one toast a UTC day per login-day event at risk, even while the game is closed. maintLoss (plan 074): unacked loss warnings from the maintenance notice on the alert ladder, plus T-24 h and T-1 h toasts even while the game is closed. silent: no notification sound (default true).",
     "marketAlert": true,
     "buffEnding": true,
     "hotTime": false,
@@ -31,6 +31,7 @@
     "gameExit": false,
     "bossSoon": false,
     "loginRisk": false,
+    "maintLoss": false,
     "silent": true
   },
   "ocr": {

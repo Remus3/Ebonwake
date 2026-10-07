@@ -16,11 +16,11 @@ block), /api/settings (plan 030), /api/pets
 /api/whatnow (plan 069; SSE `whatnow` carries the full view on change),
 /api/signals (plan 073, GET only), /api/prompts (plan 070: quiet gate, alert ladder,
 live prompts; stale suggestions / review rows / pending stops are left out of their own
-payloads), and POST
+payloads), /api/maint/digest (plan 074: before-maintenance digest), and POST
 /api/market/watch + /api/today + /api/progress + /api/grind + /api/events + /api/deadeye +
 /api/ocr (plan 009) + /api/leveling + /api/bosses + /api/settings + /api/pets +
-/api/inventory + /api/mounts + /api/onboarding + /api/crafting + /api/imperial behind one
-shared guard.
+/api/inventory + /api/mounts + /api/onboarding + /api/crafting + /api/imperial +
+/api/maint/digest behind one shared guard.
 """
 
 import datetime as _dt
@@ -40,7 +40,7 @@ from urllib.parse import parse_qs
 
 from . import (__version__, autotick, autowatch, bossdrift, bosses, context, coupons, crafting, deadeye,
                detect, enhance, eventnotices, events, gamewatch, grind, imperial, inventory, itemnames,
-               leveling, logindays, maint, market, mounts, ocr, ocrauto, onboarding, pets,
+               leveling, logindays, maint, maintdigest, market, mounts, ocr, ocrauto, onboarding, pets,
                ports,
                playsession, progress, prompts, settings, shopping, signals, single, spots, summary,
                today, weekly, whatnow, xpbooks)
@@ -243,6 +243,14 @@ class EWServer(ThreadingHTTPServer):
             maint_start=lambda: self.settings.view()["settings"]["events.maintenance_start_utc"],
             leveling=self.leveling,
             auto_add=lambda: self.settings.view()["settings"]["notices.auto_add"])
+        # Plan 074: before-maintenance digest - loss sentences from the cached
+        # maintenance notices + what ends at the next maintenance; never fetches.
+        self.maintdigest = maintdigest.DigestService(
+            self.store, loss_rows=self.notices.loss_rows,
+            items=lambda: self.events.view()["items"],
+            hot=lambda: self.leveling.view()["hot_auto"],
+            weekly=lambda: self.leveling.view()["hot_windows"],
+            maint_inputs=self._maint_inputs, clock=today_clock or time.time)
         # Plan 031: NA world boss table + operator loot ticks.
         self.bosses = bosses.BossService(self.store, clock=bosses_clock or time.time)
         # Plan 072: daily robots-gated diff against a public NA table; off
@@ -371,7 +379,8 @@ class EWServer(ThreadingHTTPServer):
         self.whatnow = whatnow.WhatNowService({
             "bosses": self.bosses.view, "today": self.today_view, "grind": self.grind.view,
             "leveling": self.leveling.view, "maint": self._maint_inputs,
-            "events": self.events.view, "market": self._market_alerts,
+            "events": self.events.view, "maint_digest": self.maintdigest.view,
+            "market": self._market_alerts,
             "ocr": lambda: self.ocr_auto_out(self.ocr_auto.view()),  # plan 070 gate
             "logins": lambda: self.login_days(self.events.view()["items"])},  # plan 075
             clock=today_clock or time.time)
@@ -498,10 +507,21 @@ class EWServer(ThreadingHTTPServer):
             out.append({"key": f"resetSoon:maint:{int(at)}", "at": at, "title": "Maintenance"})
         return out
 
+    def maint_loss_timers(self):
+        """Plan 074: unacked loss warnings for the maintLoss notify rule (ladder
+        + the T-24 h / T-1 h toasts); acked ones never notify."""
+        try:
+            warns = self.maintdigest.unacked()
+        except Exception:  # noqa: BLE001 - a bad digest source never breaks the view
+            return []
+        return [{"key": f"maintLoss:{w['key']}", "at": _dt.datetime.fromisoformat(w["due_utc"]).timestamp(),
+                 "title": "Before maintenance", "text": w["text"]} for w in warns]
+
     def prompts_view(self):
         now = float(self.prompts.clock())
         return self.prompts.view(game_state=self.game.view().get("state"),
-                                 timers=self.prompt_timers(now))
+                                 timers=self.prompt_timers(now),
+                                 maint_loss=self.maint_loss_timers())
 
     def today_view(self, body=None):
         """GET /api/today: plan 003 checklist + plan 033 `weekly_plan` + plan 056 `dice`
@@ -679,6 +699,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.imperial.view())
         if path == "/api/whatnow":
             return self._send(200, self.server.whatnow.view())
+        if path == "/api/maint/digest":
+            self.server.notices.view(refresh=False)  # plan 064: import cached maintenance reads
+            return self._send(200, self.server.maintdigest.view())
         if path == "/api/signals":
             return self._send(200, self.server.signals.view())
         if path == "/events":
@@ -861,6 +884,12 @@ class Handler(BaseHTTPRequestHandler):
         (op, arg), = body.items()
         return getattr(self.server.imperial, ops[op])(arg)
 
+    def _post_maint_digest(self, body):
+        if set(body) != {"ack"}:
+            raise ValueError("body must be {\"ack\": \"<warning key>\"}")
+        self.server.notices.view(refresh=False)  # plan 064: import cached maintenance reads
+        return self.server.maintdigest.ack(body["ack"])
+
     POST_ROUTES = {"/api/market/watch": _post_market_watch, "/api/today": _post_today,
                    "/api/progress": _post_progress, "/api/grind": _post_grind,
                    "/api/events": _post_events, "/api/deadeye": _post_deadeye,
@@ -868,7 +897,8 @@ class Handler(BaseHTTPRequestHandler):
                    "/api/bosses": _post_bosses, "/api/settings": _post_settings,
                    "/api/pets": _post_pets, "/api/inventory": _post_inventory,
                    "/api/mounts": _post_mounts, "/api/onboarding": _post_onboarding,
-                   "/api/crafting": _post_crafting, "/api/imperial": _post_imperial}
+                   "/api/crafting": _post_crafting, "/api/imperial": _post_imperial,
+                   "/api/maint/digest": _post_maint_digest}
 
     def do_POST(self):  # noqa: N802
         """Shared guard for every POST route: loopback Host + application/json +
