@@ -136,8 +136,8 @@
       if (n.children.length || n.textContent.toLowerCase().indexOf(want) < 0) continue;
       const row = n.closest('.ew-row, li, tr, label, .ew-mrow') || n;
       row.scrollIntoView({ block: 'center' });
-      row.classList.add('ew-hit');
-      setTimeout(function () { row.classList.remove('ew-hit'); }, 2000);
+      row.classList.add('ew-jump');
+      setTimeout(function () { row.classList.remove('ew-jump'); }, 2000);
       return;
     }
   }

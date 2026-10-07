@@ -125,6 +125,99 @@ test('shell: settings IPC is payload-free, sender-checked, globalShortcut only',
   assert.doesNotMatch(m, /uiohook|iohook|robotjs|nut-js|SetWindowsHookEx|sendInputEvent/);
 });
 
+// ---- Plan 078 ----
+
+const CAMEL = /[a-z][A-Z]/;
+const DOTTED = /\b[a-z]+\.[a-z_]{2,}/; // a config key, not 'e.g.'
+
+test('plan 078: no Settings label or option text is a code identifier', () => {
+  for (const g of C.SETTINGS_GROUPS) {
+    for (const f of g.fields) {
+      assert.doesNotMatch(f.label, CAMEL, f.key + ': ' + f.label);
+      assert.doesNotMatch(f.label, DOTTED, f.key + ': ' + f.label);
+      if (f.type === 'enum') {
+        for (const o of C.enumOptions(f)) assert.doesNotMatch(o.text, CAMEL, f.key);
+      }
+    }
+  }
+  for (const k of Object.keys(C.LABELS)) {
+    assert.doesNotMatch(C.LABELS[k], CAMEL, k);
+    assert.doesNotMatch(C.LABELS[k], DOTTED, k);
+  }
+  assert.strictEqual(C.LABELS.whatNow, 'What now');
+  assert.strictEqual(C.LABELS['bdo.documents_dir'], 'Game folders > BDO Documents folder');
+  assert.strictEqual(C.SETTINGS_FIELDS['notify.marketAlert'].label, C.LABELS.marketAlert);
+});
+
+test('plan 078: Overlay group renders one row per widget plus the six overlay settings', () => {
+  const g = C.SETTINGS_GROUPS.find((x) => x.id === 'overlay');
+  const rows = C.settingsRows(g);
+  const modes = rows.filter((f) => f.key.indexOf('overlay.mode.') === 0);
+  assert.strictEqual(modes.length, 9);
+  assert.deepStrictEqual(modes.map((f) => f.key.slice(13)), C.WIDGETS);
+  assert.deepStrictEqual(modes.map((f) => f.label), C.WIDGETS.map((w) => C.LABELS[w]));
+  assert.deepStrictEqual(rows.filter((f) => f.key.indexOf('overlay.mode.') !== 0).map((f) => f.key),
+    ['overlay.anchor', 'overlay.display', 'overlay.scale', 'overlay.opacity', 'overlay.auto', 'overlay.idle_min']);
+  assert.strictEqual(rows.length, 15);
+  assert.ok(rows.every((f) => f.key.indexOf('overlay.widgets.') !== 0), 'manual booleans not rendered');
+  // Still allowlisted (the server keeps the keys until plan 080 removes them).
+  assert.strictEqual(C.validSettingsBody({ set: { 'overlay.widgets.dice': true } }), true);
+  // Every other group renders every field.
+  for (const x of C.SETTINGS_GROUPS.filter((y) => y.id !== 'overlay')) {
+    assert.strictEqual(C.settingsRows(x).length, x.fields.length, x.id);
+  }
+  assert.deepStrictEqual(C.settingsRows(null), []);
+});
+
+test('plan 078: widget mode select shows auto / always / never, stores auto | pin | block', () => {
+  const f = C.SETTINGS_FIELDS['overlay.mode.dice'];
+  assert.deepStrictEqual(C.enumOptions(f), [{ value: 'auto', text: 'auto' }, { value: 'pin', text: 'always' },
+    { value: 'block', text: 'never' }]);
+  for (const v of ['auto', 'pin', 'block']) {
+    assert.deepStrictEqual(C.parseSettingInput('overlay.mode.dice', C.settingInputText('overlay.mode.dice', v)), { value: v });
+  }
+  assert.ok(C.parseSettingInput('overlay.mode.dice', 'always').error, 'display text is not a stored value');
+  assert.deepStrictEqual(C.enumOptions(C.SETTINGS_FIELDS['ui.theme']).map((o) => o.value), ['system', 'dark', 'light']);
+  assert.deepStrictEqual(C.enumOptions(null), []);
+  const src = read('dashboard/settings.js');
+  assert.match(src, /C\.settingsRows\(g\)/);
+  assert.match(src, /C\.enumOptions\(f\)/);
+});
+
+test('plan 078: onboarding hints name the Settings field, not the config key', () => {
+  assert.strictEqual(C.labelHint('Not found under Documents: Settings > bdo.documents_dir (its ScreenShot folder)'),
+    'Not found under Documents: Settings > Game folders > BDO Documents folder (its ScreenShot folder)');
+  assert.strictEqual(C.labelHint('Settings > profile.family turns on the profile card'),
+    'Settings > Profile > Family name turns on the profile card');
+  assert.strictEqual(C.labelHint('Settings > overlay.anchor picks'), 'Settings > Overlay > Anchor picks');
+  assert.strictEqual(C.labelHint('Settings > bdo.install_dir'), 'Settings > Game folders > BDO install folder');
+  assert.strictEqual(C.labelHint('Market > add items'), 'Market > add items');
+  assert.strictEqual(C.labelHint(null), '');
+  const rows = C.onboardingRows({ steps: [{ id: 'log', title: 'Point EW', hint: 'Settings > bdo.install_dir',
+    link: { tab: 'settings', field: 'bdo.install_dir' }, done: false }] });
+  assert.strictEqual(rows[0].note, 'Settings > Game folders > BDO install folder');
+  assert.deepStrictEqual(rows[0].go, { tab: 'settings', field: 'bdo.install_dir' });
+});
+
+test('plan 078: a stored HH:MM UTC setting shows its local time beside it, UTC on hover', () => {
+  const now = Date.parse('2026-10-06T12:00:00Z'); // PDT = UTC-7
+  assert.deepStrictEqual(C.settingLocalNote('events.maintenance_start_utc', '07:00', { zone: 'pt', now: now }),
+    { text: '= 00:00 local', title: 'UTC 07:00' });
+  assert.deepStrictEqual(C.settingLocalNote('events.maintenance_start_utc', '02:30', { zone: 'pt', now: now }),
+    { text: '= 19:30 local (day before)', title: 'UTC 02:30' });
+  assert.strictEqual(C.settingLocalNote('events.maintenance_start_utc', '', { zone: 'pt', now: now }), null);
+  assert.strictEqual(C.settingLocalNote('ui.theme', 'dark'), null);
+  assert.match(read('dashboard/settings.js'), /C\.settingLocalNote\(f\.key, v\)/);
+});
+
+test('plan 078: zeroPill is blank at zero', () => {
+  assert.strictEqual(C.zeroPill(0, 'session', 'sessions'), '');
+  assert.strictEqual(C.zeroPill(1, 'session', 'sessions'), '1 session');
+  assert.strictEqual(C.zeroPill(3, 'session', 'sessions'), '3 sessions');
+  assert.strictEqual(C.zeroPill(2, 'open'), '2 open');
+  for (const bad of [null, undefined, NaN, -1, '3']) assert.strictEqual(C.zeroPill(bad, 'x'), '');
+});
+
 test('dashboard: settings tab mounted, script loaded, min text 12px', () => {
   assert.match(read('dashboard/index.html'), /<script src="settings\.js"><\/script>/);
   assert.match(read('dashboard/dashboard.js'), /t\.id === 'settings' && window\.EWSettings/);

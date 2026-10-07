@@ -32,7 +32,7 @@ test('onboardingRows: open steps only, in server order, with their links', () =>
   assert.deepStrictEqual(rows[0].go, { tab: 'system' });
   assert.strictEqual(rows[0].label, 'Point EW at the BDO install folder');
   assert.strictEqual(rows[0].value, 'to do');
-  assert.strictEqual(rows[0].note, 'bdo.install_dir');
+  assert.strictEqual(rows[0].note, 'Game folders > BDO install folder'); // plan 078: C.labelHint
   assert.strictEqual(rows[0].tick, null);
 });
 

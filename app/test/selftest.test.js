@@ -39,14 +39,21 @@ function fakes(log, opts) {
           log.push('notify-selftest');
           return { hits: 1, toasts: 1, notify: { ok: true } };
         }
+        if (src.indexOf('pillRight') >= 0) {
+          log.push('topbar');
+          return opts.topBar || { pillLeft: 600, pillRight: 700, pillW: 100, viewW: 738, barScroll: false };
+        }
         const m = /data-tab="([a-z]+)"/.exec(src);
         if (m && src.indexOf('.click()') >= 0) { active = m[1]; log.push('click:' + active); return null; }
         return { scrollH: 700, clientH: 761, scrollW: 1200, clientW: 1264, active: active,
           activeH: 500, cardsScroll: opts.cardsScroll || 0, wnClip: active === 'home' ? opts.wnClip || 0 : 0,
           tabs: TABS, pill: 'server ok' };
       },
-      capturePage: async () => { log.push('capture:' + active); return fakeImage(false); }
-    }
+      capturePage: async () => { log.push('capture:' + active); return fakeImage(false); },
+      getZoomFactor: () => 1,
+      setZoomFactor: (z) => log.push('zoom:' + z)
+    },
+    setContentSize: (w, h) => log.push('size:' + w + 'x' + h)
   };
   let ovVisible = false;
   const ov = {
@@ -156,6 +163,25 @@ test('plan 047: a scrolling card fails a fresh-store self-test, is reported othe
   assert.strictEqual(lived.res.freshStore, false);
   assert.match(fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8'),
     /freshStore: process\.env\.EW_SELFTEST_FRESH === '1'/);
+});
+
+// Plan 078: at the 960 px minimum window and ui.scale 1.3 the server pill is
+// fully visible; size and zoom are restored after the check.
+test('plan 078: top bar fits 960 px at scale 1.3, then size and zoom are restored', async () => {
+  const { log, res } = await runFake();
+  assert.deepStrictEqual(res.topBar, { pillLeft: 600, pillRight: 700, pillW: 100, viewW: 738, barScroll: false,
+    width: 960, zoom: 1.3, fits: true });
+  const t = log.indexOf('topbar');
+  assert.ok(log.indexOf('size:960x761') < t && log.indexOf('zoom:1.3') < t && t > 0);
+  assert.ok(log.indexOf('size:1264x761') > t && log.indexOf('zoom:1') > t, 'restored');
+  assert.ok(res.ok, JSON.stringify(res));
+  for (const bad of [{ pillLeft: 700, pillRight: 800, pillW: 100, viewW: 738, barScroll: false },
+    { pillLeft: 600, pillRight: 700, pillW: 0, viewW: 738, barScroll: false },
+    { pillLeft: 600, pillRight: 700, pillW: 100, viewW: 738, barScroll: true }]) {
+    const r = await runFake({ topBar: bad });
+    assert.strictEqual(r.res.topBar.fits, false, JSON.stringify(bad));
+    assert.strictEqual(r.res.ok, false);
+  }
 });
 
 // Plan 076: the What now card never clips its text (any store).

@@ -63,6 +63,26 @@ test('fmtResetRule and fmtResetCountdown', () => {
   assert.strictEqual(C.fmtResetCountdown(null, 0), '');
 });
 
+// Plan 078: stored UTC clocks display in local time (UTC on hover). 'pt' in
+// October is PDT, a UTC-7 zone, so the test does not depend on the host zone.
+test('resetRuleView / resetCountdownView: UTC rule shown as local HH:MM in a UTC-7 zone', () => {
+  const now = T('2026-10-01T20:00:00Z'); // Thu
+  const pt = { zone: 'pt' };
+  assert.deepStrictEqual(C.resetRuleView(SUNDAY, now, pt), { text: 'Sat 17:00', title: 'UTC Sun 00:00' });
+  assert.deepStrictEqual(C.resetRuleView(FIVE_AM, now, pt), { text: '22:00', title: 'UTC 05:00' });
+  assert.deepStrictEqual(C.resetRuleView({ every: 'day', at: '18:30' }, now, pt), { text: '11:30', title: 'UTC 18:30' });
+  assert.deepStrictEqual(C.resetRuleView(SUNDAY, now, { zone: 'utc' }), { text: 'Sun 00:00', title: 'UTC Sun 00:00' });
+  const c = C.resetCountdownView(SUNDAY, now, pt);
+  assert.deepStrictEqual(c, { text: 'resets Sat 17:00 in 2d 4h', title: 'UTC Sun 00:00' });
+  assert.strictEqual(C.resetCountdownView(FIVE_AM, T('2026-10-04T04:30:00Z'), pt).text, 'resets 22:00 in 30m 00s');
+  assert.strictEqual(C.resetRuleView({ every: 'nope' }, now, pt), null);
+  assert.strictEqual(C.resetCountdownView(null, now, pt), null);
+  // Default zone is the host's local time.
+  assert.ok(/^(\w{3} )?\d{2}:\d{2}$/.test(C.resetRuleView(SUNDAY, now).text));
+  const src = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'today.js'), 'utf8');
+  assert.match(src, /C\.resetCountdownView\(/);
+});
+
 test('isDone / groupItems honour an item rule; legacy items unchanged', () => {
   const items = [
     { id: 'shrine', kind: 'weekly', reset: SUNDAY, ticked_at: '2026-10-03T12:00:00Z' },

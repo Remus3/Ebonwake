@@ -146,7 +146,12 @@
       input.checked = v === true;
     } else if (f.type === 'enum') {
       input = el('select');
-      f.options.forEach(function (o) { input.appendChild(el('option', null, o)); });
+      // Plan 078: display text may differ from the stored value (pin = always).
+      C.enumOptions(f).forEach(function (o) {
+        const opt = el('option', null, o.text);
+        opt.value = o.value;
+        input.appendChild(opt);
+      });
       input.value = v;
     } else {
       input = el('input', 'ew-sinput');
@@ -163,8 +168,13 @@
     if (S.restartKeys.indexOf(f.key) >= 0) row.title = 'applies after a server restart';
     S.inputs[f.key] = input;
     row.appendChild(input);
+    const loc = C.settingLocalNote(f.key, v);
     if (f.type === 'dir') {
       row.appendChild(el('span', 'ew-muted ew-sdef', C.settingDetectedNote(f.key, v, S.detected)));
+    } else if (loc) { // plan 078: stored UTC clock, local time beside it
+      const n = el('span', 'ew-muted ew-sdef', loc.text);
+      n.title = loc.title;
+      row.appendChild(n);
     } else if (S.defaults && f.key in S.defaults && f.type !== 'bool') {
       row.appendChild(el('span', 'ew-muted ew-sdef', 'default ' + (C.settingInputText(f.key, S.defaults[f.key]) || 'blank')));
     }
@@ -191,7 +201,7 @@
       const sec = el('section', 'ew-card ew-sgroup');
       sec.dataset.group = g.id;
       sec.appendChild(el('h2', null, g.title));
-      g.fields.forEach(function (f) { sec.appendChild(field(f)); });
+      C.settingsRows(g).forEach(function (f) { sec.appendChild(field(f)); });
       p.appendChild(sec);
     });
     const bar = el('div', 'ew-sbar');

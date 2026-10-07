@@ -169,10 +169,35 @@ def test_blocks_never_show_and_the_next_rule_widget_fills():
 
 
 def test_manual_mode_uses_the_plan030_booleans():
-    prefs = {"auto": False, "manual": {"dice": True, "season": True, "leveling": False}}
+    # Plan 078: a key missing from `manual` takes its widget default (the
+    # renderer's overlayWidgets semantics), so grindSession / grindBuff /
+    # eventsSoon / whatNow show unless set False.
+    prefs = {"auto": False, "manual": {"dice": True, "season": True, "leveling": False,
+                                       "grindBuff": False}}
     out = context.derive(sig(boss_at=NOW + MIN), NOW, prefs, RULES)
-    assert out["auto"] is False and out["widgets"] == ["season", "dice"]
+    assert out["auto"] is False
+    assert out["widgets"] == ["grindSession", "eventsSoon", "season", "dice", "whatNow"]
     assert out["context"] == "boss_soon" and out["hidden"] is False
+
+
+def test_auto_off_with_no_booleans_keeps_the_default_widgets():
+    # Research 0009 M1: context mode off with no overlay.widgets.* stored used
+    # to read every missing boolean as off and blank the overlay.
+    want = [w for w in context.WIDGETS if settings.WIDGETS[w]]
+    assert want == ["grindSession", "grindBuff", "eventsSoon", "whatNow"]
+    p = context.prefs_from_settings({"overlay.auto": False})
+    assert p["auto"] is False
+    assert [w for w in context.WIDGETS if p["manual"][w]] == want
+    assert context.derive(sig(), NOW, p, RULES)["widgets"] == want
+    assert context.derive(sig(), NOW, {"auto": False}, RULES)["widgets"] == want
+    # A literal False still turns a default-on widget off; True turns opt-in on.
+    p = context.prefs_from_settings({"overlay.auto": False, "overlay.widgets.whatNow": False,
+                                     "overlay.widgets.dice": True})
+    assert context.derive(sig(), NOW, p, RULES)["widgets"] == [
+        "grindSession", "grindBuff", "eventsSoon", "dice"]
+    # Non-bool junk falls back to the default, never to off.
+    p = context.prefs_from_settings({"overlay.auto": False, "overlay.widgets.grindSession": "x"})
+    assert p["manual"]["grindSession"] is True
 
 
 def test_prefs_from_settings_defaults():

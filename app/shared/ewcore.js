@@ -148,16 +148,19 @@
   }
 
   // Server card rows from /api/version + /api/health (either may be null).
-  function serverRows(version, health, appCommit, nowMs) {
+  // Plan 078: `started` in opts.zone (default local) with the UTC as a third
+  // element (the row's hover title); an unreadable stamp stays as sent.
+  function serverRows(version, health, appCommit, nowMs, opts) {
     const v = version && typeof version === 'object' ? version : {};
     const started = parseWhen(v.started);
+    const loc = fmtLocal(v.started, opts);
     const short = function (c) { return knownCommit(c) ? c.trim().slice(0, 7) : 'unknown'; };
     return [
       ['status', health && health.ok === true ? 'ok' : 'no answer'],
       ['server commit', short(v.commit)],
       ['app commit', short(appCommit)],
       ['outdated', commitsDiffer(v.commit, appCommit) ? 'yes - restart (' + RESTART_HINT + ')' : 'no'],
-      ['started', typeof v.started === 'string' ? v.started : '-'],
+      loc ? ['started', loc.text, loc.title] : ['started', typeof v.started === 'string' ? v.started : '-'],
       ['uptime', started === null ? '-' : fmtDuration(nowMs - started)],
       ['pid', isNum(v.pid) ? String(v.pid) : '-']
     ];
@@ -897,6 +900,28 @@
     const rule = validResetRule(r);
     if (!rule) return '';
     return 'resets ' + fmtResetRule(rule) + ' in ' + fmtDuration(nextResetOf(rule, now) - now);
+  }
+
+  // Plan 078: an item rule's next reset in opts.zone (default local) ->
+  // {text: 'Sat 17:00' | '22:00', title: 'UTC Sun 00:00'}, or null. The
+  // stored rule stays UTC; the weekday is the zone's day of that reset.
+  function resetRuleView(r, now, opts) {
+    const rule = validResetRule(r);
+    if (!rule) return null;
+    const at = nextResetOf(rule, now);
+    const off = zoneOffsetMin(zoneOf(opts), at);
+    if (off === null) return null;
+    const d = new Date(at + off * 60000);
+    const day = rule.every === 'week' ? WEEKDAYS[(d.getUTCDay() + 6) % 7] + ' ' : '';
+    return { text: day + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()),
+      title: 'UTC ' + fmtResetRule(rule).replace(/ UTC$/, '') };
+  }
+
+  // {text: 'resets Sat 17:00 in 2d 4h', title: 'UTC Sun 00:00'}, or null.
+  function resetCountdownView(r, now, opts) {
+    const v = resetRuleView(r, now, opts);
+    if (!v) return null;
+    return { text: 'resets ' + v.text + ' in ' + fmtDuration(nextResetOf(validResetRule(r), now) - now), title: v.title };
   }
 
   // Plan 033: one gate -> 'needs Lv +2, +10 AP (+5 AP crosses a bracket: +8 bonus
@@ -4264,7 +4289,7 @@
       return plainObject(s) && s.done === false && typeof s.id === 'string' && ONBOARD_ID.test(s.id) &&
         validTitle(s.title);
     }).map(function (s) {
-      const r = nowRow(s.title, 'to do', typeof s.hint === 'string' ? s.hint.slice(0, 160) : '', 'warn');
+      const r = nowRow(s.title, 'to do', typeof s.hint === 'string' ? labelHint(s.hint.slice(0, 160)) : '', 'warn');
       r.step = s.id;
       r.go = onboardGo(s.link);
       return r;
@@ -4516,6 +4541,13 @@
   function countText(done, total, suffix) {
     if (!isNum(done) || !isNum(total) || total <= 0) return '';
     return done + '/' + total + (suffix ? ' ' + suffix : '');
+  }
+
+  // Plan 078: a count pill ('3 sessions', '2 open') that is '' at zero, like
+  // countText's zero state; `many` defaults to `one`.
+  function zeroPill(n, one, many) {
+    if (!isNum(n) || n <= 0) return '';
+    return n + ' ' + (n === 1 ? one : (many || one));
   }
 
   // Tab badges from the Home snapshots already polled: dailies left on Today,
@@ -4866,20 +4898,37 @@
   const UI_SCALE = [0.9, 1.3];
   const NOTIFY_RULES_PREFS = ['marketAlert', 'buffEnding', 'hotTime', 'resetPassed', 'newCoupon', 'gameExit', 'bossSoon',
     'resetSoon', 'loginRisk', 'maintLoss'];
+  // Plan 078: human names for the overlay widgets, the notification rules and
+  // the config keys the onboarding hints cite (as their Settings path).
+  const LABELS = {
+    grindSession: 'Grind session', grindBuff: 'Grind buffs', eventsSoon: 'Events ending soon',
+    leveling: 'Leveling ETA', season: 'Season pass', marketTicker: 'Market ticker',
+    worldBoss: 'World boss', dice: 'Adventure dice', whatNow: 'What now',
+    marketAlert: 'Market price alerts', buffEnding: 'Buff ending', hotTime: 'Hot Time',
+    resetPassed: 'Reset passed', newCoupon: 'New coupon', gameExit: 'Game closed',
+    bossSoon: 'World boss soon', resetSoon: 'Reset soon', loginRisk: 'Login day at risk',
+    maintLoss: 'Maintenance loss warning',
+    'profile.family': 'Profile > Family name', 'bdo.install_dir': 'Game folders > BDO install folder',
+    'bdo.documents_dir': 'Game folders > BDO Documents folder', 'overlay.anchor': 'Overlay > Anchor'
+  };
+  const MODE_TEXT = { auto: 'auto', pin: 'always', block: 'never' };
   const SETTINGS_GROUPS = [
+    // Plan 078: one row per widget - auto (by context) / always / never,
+    // stored as overlay.mode.<w> auto | pin | block. The plan 030 manual
+    // booleans stay allowlisted but are not rendered (`hidden`; plan 080
+    // removes them).
     { id: 'overlay', title: 'Overlay', fields: WIDGETS.map(function (w) {
-      return { key: 'overlay.widgets.' + w, label: 'Widget: ' + w, type: 'bool' };
+      return { key: 'overlay.mode.' + w, label: LABELS[w], type: 'enum', options: OVERLAY_MODES, text: MODE_TEXT };
     }).concat([
       { key: 'overlay.anchor', label: 'Anchor', type: 'anchor', options: OVERLAY_ANCHORS },
       { key: 'overlay.display', label: 'Display (blank = primary)', type: 'display' },
       { key: 'overlay.scale', label: 'Scale', type: 'number', min: OVERLAY_SCALE[0], max: OVERLAY_SCALE[1], step: 0.05 },
       { key: 'overlay.opacity', label: 'Opacity', type: 'number', min: OVERLAY_OPACITY[0], max: OVERLAY_OPACITY[1], step: 0.05 },
-      // Plan 067: widgets by context (the booleans above apply when auto is off);
-      // per widget pin (always shown) or block (never shown) on top.
+      // Plan 067: widgets by context; off shows the default widgets.
       { key: 'overlay.auto', label: 'Widgets by context (in game, idle, boss / reset / maintenance soon)', type: 'bool' },
       { key: 'overlay.idle_min', label: 'Idle after, minutes (5-240)', type: 'number', min: 5, max: 240, step: 1, int: true }
     ]).concat(WIDGETS.map(function (w) {
-      return { key: 'overlay.mode.' + w, label: 'Context mode: ' + w, type: 'enum', options: OVERLAY_MODES };
+      return { key: 'overlay.widgets.' + w, label: 'Show ' + LABELS[w] + ' (context off)', type: 'bool', hidden: true };
     })) },
     { id: 'hotkeys', title: 'Hotkeys', fields: [
       { key: 'hotkeys.toggleOverlay', label: 'Toggle overlay', type: 'hotkey' },
@@ -4895,7 +4944,7 @@
       { key: 'ui.scale', label: 'Dashboard scale', type: 'number', min: UI_SCALE[0], max: UI_SCALE[1], step: 0.05 }
     ] },
     { id: 'notify', title: 'Notifications', fields: NOTIFY_RULES_PREFS.map(function (n) {
-      return { key: 'notify.' + n, label: n, type: 'bool' };
+      return { key: 'notify.' + n, label: LABELS[n], type: 'bool' };
     }).concat([
       // Plan 070: game-closed quiet + the minutes-before alert ladder.
       { key: 'notify.quiet_closed', label: 'Quiet while the game is closed (market alerts still notify)', type: 'bool' },
@@ -4937,6 +4986,27 @@
   const SETTINGS_FIELDS = {};
   SETTINGS_GROUPS.forEach(function (g) { g.fields.forEach(function (f) { SETTINGS_FIELDS[f.key] = f; }); });
   const SETTINGS_KEYS = Object.keys(SETTINGS_FIELDS);
+
+  // Plan 078: the fields a group renders (hidden ones stay allowlisted).
+  function settingsRows(g) {
+    return plainObject(g) && Array.isArray(g.fields) ? g.fields.filter(function (f) { return !f.hidden; }) : [];
+  }
+
+  // An enum field's <option>s: stored value + display text.
+  function enumOptions(f) {
+    if (!plainObject(f) || !Array.isArray(f.options)) return [];
+    return f.options.map(function (o) {
+      return { value: o, text: plainObject(f.text) && typeof f.text[o] === 'string' ? f.text[o] : o };
+    });
+  }
+
+  // A hint naming config keys -> the same hint naming Settings fields.
+  function labelHint(s) {
+    if (typeof s !== 'string') return '';
+    return s.replace(/\b[a-z]+\.[a-z_]+\b/g, function (k) {
+      return Object.prototype.hasOwnProperty.call(LABELS, k) ? LABELS[k] : k;
+    });
+  }
   const FAMILY_RE = /^[A-Za-z0-9_]{2,16}$/;
 
   // Plan 061 mirror of progress.base_ok: https on any host, http on loopback
@@ -5027,6 +5097,17 @@
     const own = typeof saved === 'string' && saved !== '';
     if (!own) return d ? 'auto-detected: ' + d : 'not detected - type the folder path';
     return d && d !== saved ? 'using this folder (auto-detected: ' + d + ')' : 'using this folder';
+  }
+
+  // Plan 078: a stored 'hhmm' (UTC) setting's local equivalent in opts.zone
+  // (default local, offset at opts.now) -> {text, title: 'UTC HH:MM'}, or null.
+  function settingLocalNote(key, v, opts) {
+    const f = SETTINGS_FIELDS[key];
+    if (!f || f.type !== 'hhmm') return null;
+    const c = utcClockIn(v, opts);
+    if (!c) return null;
+    const day = c.shift < 0 ? ' (day before)' : (c.shift > 0 ? ' (day after)' : '');
+    return { text: '= ' + c.hhmm + ' local' + day, title: 'UTC ' + v };
   }
 
   function sameSetting(a, b) {
@@ -5710,6 +5791,12 @@
   const PALETTE_ROUTES = PALETTE_COMMANDS.map(function (c) { return c.route; })
     .filter(function (r, i, a) { return r !== null && a.indexOf(r) === i; });
   const PALETTE_MAX = 200;
+
+  // Plan 078: hover title of the top-bar palette button.
+  function paletteTitle() {
+    return 'Command palette (Ctrl+K): ' + PALETTE_COMMANDS.map(function (c) { return c.verb; }).join(', ') +
+      ', / to search';
+  }
 
   function squash(s) { return String(s).toLowerCase().replace(/\s+/g, ' ').trim(); }
 
@@ -6540,6 +6627,8 @@
     nextResetOf: nextResetOf,
     fmtResetRule: fmtResetRule,
     fmtResetCountdown: fmtResetCountdown,
+    resetRuleView: resetRuleView,
+    resetCountdownView: resetCountdownView,
     fmtWeeklyGate: fmtWeeklyGate,
     weeklyPlan: weeklyPlan,
     resetKey: resetKey,
@@ -6706,10 +6795,12 @@
     nowOnboarding: nowOnboarding,
     eventsThisWeek: eventsThisWeek,
     countText: countText,
+    zeroPill: zeroPill,
     tabBadges: tabBadges,
     tabKey: tabKey,
     orderTabs: orderTabs,
     overlayWidgets: overlayWidgets,
+    WIDGETS: WIDGETS,
     widgetsQuery: widgetsQuery,
     widgetsFromQuery: widgetsFromQuery,
     OVERLAY_MODES: OVERLAY_MODES,
@@ -6778,6 +6869,7 @@
     paletteIndex: paletteIndex,
     paletteSearch: paletteSearch,
     paletteKey: paletteKey,
+    paletteTitle: paletteTitle,
     MOUNT_KINDS: MOUNT_KINDS,
     validMountsBody: validMountsBody,
     mountLabel: mountLabel,
@@ -6788,6 +6880,12 @@
     parseFernRate: parseFernRate,
     THEMES: THEMES,
     SETTINGS_GROUPS: SETTINGS_GROUPS,
+    SETTINGS_FIELDS: SETTINGS_FIELDS,
+    LABELS: LABELS,
+    labelHint: labelHint,
+    settingsRows: settingsRows,
+    enumOptions: enumOptions,
+    settingLocalNote: settingLocalNote,
     SETTINGS_KEYS: SETTINGS_KEYS,
     validSettingsBody: validSettingsBody,
     parseSettingInput: parseSettingInput,
