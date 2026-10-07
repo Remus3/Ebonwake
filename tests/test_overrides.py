@@ -41,6 +41,17 @@ def test_tracked_policy_is_ascii_and_every_row_valid():
     assert ov.policy_for(pol, "overlay.mode.whatNow")["expiry"] == "days:7"
 
 
+def test_portrait_pick_allowlisted_none():
+    # Plan 083: a gallery pick is cosmetic (changes no number): rule none, no expiry.
+    pol = ov.load_policy()
+    assert "portrait.*" in ov.NONE_OK
+    row = ov.policy_for(pol, "portrait.Deadeye")
+    assert row["expiry"] == "none" and row["cards"] == ["portraits"]
+    assert ov.expiry_at(row["expiry"], NOW) is None
+    pol2 = ov.clean_policy({"keys": {"portrait.*": {"expiry": "none"}}})
+    assert pol2["portrait.*"]["expiry"] == "none"
+
+
 def test_none_outside_allowlist_and_bad_rules_are_dropped():
     pol = ov.clean_policy({"keys": {"market.vp": {"expiry": "none"},
                                     "x.y": {"expiry": "days:0"},

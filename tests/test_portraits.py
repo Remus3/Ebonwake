@@ -227,7 +227,8 @@ def test_a1_binds_single_char_and_current(env):
     assert cur["char_no"] == CHAR_A and cur["id"] == f"{CHAR_A}-{int(T0 - 10)}"
     v = svc.view()
     assert v["classes"]["Deadeye"]["current"] == {"id": cur["id"], "at": cur["at"],
-                                                  "char_no": CHAR_A, "from": "auto"}
+                                                  "char_no": CHAR_A, "from": "auto",
+                                                  "kind": "portrait"}  # plan 083: + kind
     assert v["unknown"] == 0
 
 

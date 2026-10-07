@@ -98,3 +98,44 @@ def test_image_rejects_bad_size(srv):
     s.game.poll()
     pid = s.portraits.current("Deadeye")["id"]
     assert _req(s, f"/api/portraits/img/{pid}?size=../x")[0] == 404
+
+
+def _post(s, path, body):
+    c = http.client.HTTPConnection("127.0.0.1", s.server_address[1], timeout=5)
+    data = json.dumps(body).encode("utf-8")
+    c.request("POST", path, body=data, headers={"Content-Type": "application/json",
+                                                "Content-Length": str(len(data))})
+    r = c.getresponse()
+    out = r.read()
+    c.close()
+    return r.status, json.loads(out)
+
+
+def test_gallery_routes_bind_pick_clear_and_shot_image(srv):
+    # Plan 083: ?cls= gallery, a screenshot served by index id, POST bind / pick,
+    # {"clear": "portrait.<cls>"} through /api/settings = Use newest.
+    s, inst, docs = srv
+    _log(inst)
+    p = docs / "FaceTexture" / f"{CHAR}.bmp"
+    p.write_bytes(bmp(4, 4))
+    os.utime(p, (time.time() - 60,) * 2)
+    (docs / "ScreenShot" / "shot_1.jpg").write_bytes(b"\xff\xd8shot")
+    s.game.poll()
+    v = json.loads(_req(s, "/api/portraits?cls=Deadeye")[2])
+    assert v["cls"] == "Deadeye" and len(v["history"]) == 1 and v["shots"] == []
+    item = [i for i in v["unknown_items"] if i["kind"] == "shot"][0]  # no window: unknown
+    st, hdr, data = _req(s, f"/api/portraits/img/{item['id']}?size=s")
+    assert st == 200 and data == b"\xff\xd8shot" and hdr["Content-Type"] == "image/jpeg"
+    assert _post(s, "/api/portraits", {"pick": {"cls": "Deadeye", "id": item["id"]}})[0] == 400
+    st, v = _post(s, "/api/portraits", {"bind": {"id": item["id"], "cls": "Deadeye"}})
+    assert st == 200 and [x["id"] for x in v["shots"]] == [item["id"]]
+    st, v = _post(s, "/api/portraits", {"pick": {"cls": "Deadeye", "id": item["id"]}})
+    cur = v["classes"]["Deadeye"]["current"]
+    assert st == 200 and cur["id"] == item["id"] and cur["from"] == "override"
+    keys = [i["key"] for i in json.loads(_req(s, "/api/overrides")[2])["items"]]
+    assert "portrait.Deadeye" in keys
+    st, out = _post(s, "/api/settings", {"clear": "portrait.Deadeye"})
+    assert st == 200 and out["cleared"] == "portrait.Deadeye"
+    cur = json.loads(_req(s, "/api/portraits")[2])["classes"]["Deadeye"]["current"]
+    assert cur["from"] == "auto" and cur["kind"] == "portrait"
+    assert _post(s, "/api/portraits", {"nope": 1})[0] == 400

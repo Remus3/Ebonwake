@@ -7,7 +7,11 @@
    tag subset, no links / images / raw HTML). Unsaved drafts live per section
    and survive polls. Plan 057: each draft also autosaves (debounced 2 s) to
    localStorage; a stored draft that differs from the saved text is offered
-   back (Restore / Discard), and unload is held while a note is unsaved. */
+   back (Restore / Discard), and unload is held while a note is unsaved.
+   Plan 083: the first card, Portraits, shows the current class image (newest
+   in-game portrait, or a gallery pick = plan 079 override with "Use newest"),
+   a strip of archived portraits + Deadeye screenshots, and a collapsed
+   unknown-character group with an optional class select. */
 (function () {
   'use strict';
   const C = window.EWCore;
@@ -21,7 +25,9 @@
     // Plan 035 EV panel: open step id, rate table (GET once), per-step inputs and replies.
     ev: null, table: null, evIn: {}, evOut: {},
     // Plan 037 shopping list: GET body (cached prices only) and its error.
-    shop: null, shopErr: null
+    shop: null, shopErr: null,
+    // Plan 083 Portraits card: GET /api/portraits?cls=Deadeye body and its error.
+    gallery: null, galleryErr: null, galleryBus: false
   };
 
   function el(tag, cls, text) {
@@ -919,9 +925,136 @@
     return { card: c.card, form: f };
   }
 
+  // ---- plan 083: Portraits card (current image, history + screenshots strip,
+  // optional pick = plan 079 override, "Use newest", unknown-character group) ----
+
+  const GALLERY_CLS = 'Deadeye';
+
+  function loadGallery() {
+    getJSON('/api/portraits?cls=' + encodeURIComponent(GALLERY_CLS)).then(function (v) {
+      S.gallery = v;
+      S.galleryErr = null;
+    }, function (e) { S.galleryErr = e.message; }).then(drawGallery);
+  }
+
+  function sendPortraits(body) {
+    const b = bridge();
+    const g = S.ui && S.ui.gallery;
+    if (!b) { if (g) g.msg.textContent = 'picking needs the Ebonwake app window'; return; }
+    window.EWToast.via(b).post('/api/portraits', body).then(function (res) {
+      if (res && res.ok && res.data && res.data.classes) { S.gallery = res.data; drawGallery(); }
+      else if (g) g.msg.textContent = 'failed: ' + ((res && res.error) || 'unknown error');
+    }, function (e) { if (g) g.msg.textContent = 'failed: ' + (e && e.message || e); });
+  }
+
+  function thumb(item) {
+    const img = el('img', 'ew-gthumb');
+    img.src = item.src;
+    img.alt = item.alt;
+    img.loading = 'lazy';
+    img.width = 48;
+    img.height = 62;
+    return img;
+  }
+
+  function drawGallery() {
+    const g = S.ui && S.ui.gallery;
+    if (!g) return;
+    const m = C.portraitGallery(S.gallery, GALLERY_CLS);
+    g.err.textContent = S.galleryErr || '';
+    g.body.textContent = '';
+    g.msg.textContent = '';
+    if (m.empty) {
+      g.body.appendChild(el('div', 'ew-muted', m.emptyText));
+    } else {
+      const top = el('div', 'ew-gtop');
+      if (m.current) {
+        const img = el('img', 'ew-gcur');
+        img.src = m.current.src;
+        img.alt = m.current.alt;
+        img.width = 156;
+        img.height = 201;
+        top.appendChild(img);
+      }
+      const src = el('div', 'ew-gsrc');
+      if (m.current && m.current.pinned) {
+        if (m.current.badge) {
+          const p = el('span', 'ew-pill warn ' + m.current.badge.cls, m.current.badge.text);
+          p.title = m.current.badge.title;
+          src.appendChild(p);
+        }
+        src.appendChild(el('span', 'ew-muted', ' ' + m.current.source + ' '));
+        const key = m.current.key;
+        src.appendChild(button('ew-btn ew-bbtn', 'Use newest', 'back to the newest in-game portrait',
+          function () { sendPortraits({ clear: key }); }));
+      } else if (m.current) {
+        src.appendChild(el('span', 'ew-muted', m.current.source));
+      }
+      top.appendChild(src);
+      g.body.appendChild(top);
+      const strip = el('div', 'ew-gstrip');
+      strip.setAttribute('role', 'group');
+      strip.setAttribute('aria-label', GALLERY_CLS + ' portraits and screenshots');
+      const btns = m.items.map(function (it) {
+        const b = button('ew-gitem', '', it.alt, function () {
+          sendPortraits({ pick: { cls: GALLERY_CLS, id: it.id } });
+        });
+        b.setAttribute('aria-pressed', it.pressed ? 'true' : 'false');
+        b.tabIndex = it.tabindex;
+        b.appendChild(thumb(it));
+        strip.appendChild(b);
+        return b;
+      });
+      strip.addEventListener('keydown', function (ev) {
+        const i = btns.indexOf(document.activeElement);
+        const next = C.galleryMove(i, ev.key, btns.length);
+        if (next === null || i < 0) return;
+        ev.preventDefault();
+        btns.forEach(function (b, k) { b.tabIndex = k === next ? 0 : -1; });
+        btns[next].focus();
+      });
+      g.body.appendChild(strip);
+    }
+    if (m.unknown.length) {
+      const det = el('details', 'ew-gunknown');
+      det.appendChild(el('summary', null, 'Unknown character (' + m.unknown.length + ')'));
+      const names = Object.keys(S.gallery && S.gallery.classes ? S.gallery.classes : {});
+      if (names.indexOf(GALLERY_CLS) < 0) names.unshift(GALLERY_CLS);
+      m.unknown.forEach(function (it) {
+        const row = el('div', 'ew-gurow');
+        row.appendChild(thumb(it));
+        const sel = el('select');
+        sel.title = 'optional: whose ' + (it.kind === 'shot' ? 'screenshot' : 'portrait') + ' is this?';
+        sel.setAttribute('aria-label', 'class for ' + it.alt);
+        sel.appendChild(el('option', null, 'class (optional)')).value = '';
+        names.forEach(function (n) { sel.appendChild(el('option', null, n)).value = n; });
+        sel.addEventListener('change', function () {
+          if (sel.value) sendPortraits({ bind: { id: it.id, cls: sel.value } });
+        });
+        row.appendChild(sel);
+        det.appendChild(row);
+      });
+      g.body.appendChild(det);
+    }
+  }
+
+  function galleryCard() {
+    const c = card('Portraits', 'ew-dgallery');
+    c.pill.hidden = true;
+    const err = el('div', 'ew-err', '');
+    const body = el('div', 'ew-gbody');
+    const m = el('div', 'ew-muted ew-msg', '');
+    c.card.appendChild(err);
+    c.card.appendChild(body);
+    c.card.appendChild(m);
+    return { card: c.card, err: err, body: body, msg: m };
+  }
+
   function mount(panel) {
     S.panel = panel;
     panel.classList.add('ew-deadeye');
+    const gal = galleryCard();
+    panel.appendChild(gal.card);
     const n = notesCard();
     const p = planCard();
     const k = stacksCard();
@@ -935,14 +1068,19 @@
     S.ui = Object.assign(n, {
       planBody: p.body, planPill: p.pill, form: p.form, msg: p.msg,
       stBody: k.body, st: k.st, stMsg: k.msg,
-      shopBody: sh.body, shopPill: sh.pill, shopForm: sh.form, calc: ca.form
+      shopBody: sh.body, shopPill: sh.pill, shopForm: sh.form, calc: ca.form, gallery: gal
     });
     if (!S.table) loadTable(); // plan 036: families for the Agris picker
+    loadGallery();
+    if (window.EWBus && !S.galleryBus) { // a new archive / binding / pick re-reads the gallery
+      S.galleryBus = true;
+      window.EWBus.on('portraits', loadGallery);
+    }
     if (!S.timer) poll(false);
     else draw();
   }
 
-  function show() { poll(false); }
+  function show() { poll(false); loadGallery(); }
 
   // Plan 057: store every pending draft now; hold the unload while a note is
   // unsaved (main asks Leave / Stay - the draft survives either way).

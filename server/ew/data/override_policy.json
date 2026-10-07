@@ -13,6 +13,7 @@
   "bdo.install_dir": {"label": "BDO install folder", "expiry": "until:path_missing",
                       "cards": ["system"]},
   "bdo.documents_dir": {"label": "BDO Documents folder", "expiry": "until:path_missing",
-                        "cards": ["system"]}
+                        "cards": ["system"]},
+  "portrait.*": {"label": "Portrait pick", "expiry": "none", "cards": ["portraits"]}
  }
 }
