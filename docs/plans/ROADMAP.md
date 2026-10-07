@@ -89,6 +89,17 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 082 | Class portrait: FaceTexture archive, characterNo -> class binding from the session log, top-left class chip with empty state | [x] done 2026-10-06 (loop; refute 0/3 PASS) |
 | 083 | Deadeye portrait gallery: portrait history + class-attributed screenshots, optional pick as a plan 079 override (depends on 079, 082) | [x] done 2026-10-07 (loop; refute 1/3 PASS) |
 | 084 | Larger class portrait card: left-rail character card (156 x 201, 96 x 124 compact) with Lv, class, energy / CP over the image, End Game card style (depends on 082) | [x] done 2026-10-07 (loop; refute 0/3 PASS) |
+| 085 | Patch-notes data verifier: hinted unverified data rows checked against official patch notes, runtime verdicts, digest row (depends on 064, 073) | [ ] open |
+| 086 | Reward claim windows: claim-by deadlines that outlive the event, Events row, Timers, What now (depends on 064, 069) | [ ] open |
+
+Deep dive 2026-10-07 (research 0013): two plans. Ranking: 085 first -
+the 2026-10-08 patch notes confirm or contradict the level-cap epoch, the
+XP-buff presets and the cap bands, and 60 data rows sit `verified: false`
+with no reader. 086 second - Combat Special claims close 2026-10-15 and
+coupon mail 2026-10-29, later than the events' own ends, from pages plan
+064 already reads. Data items (no plan): XP buff presets 100 / 30 / 50 %
+(018), loot keyed by spot id (039 / 040). Dropped: kill-milestone tracker
+(no kill signal), arsha WebSocket (F22 again), Black Desert+ (authenticated).
 
 Deep dive 2026-10-06b (research 0008): two plans. 074 first (priority) -
 the official 2026-10-08 maintenance notice says unclaimed Tag Characters
