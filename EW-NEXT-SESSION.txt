@@ -1,14 +1,13 @@
 EW NEXT SESSION
 ---------------
-SESSION: 12
+SESSION: 13
 
-Next action: watch the loop. Hea62ec (portrait NOTE, docs-only edits to
-research 0001/0011) was state `committed` at session 11 /done - confirm it
-merged; if it sits in merge-conflict use the b8fbef8 pattern. Read the
-inbox, progress/loop.json and loop_items/*.json; adjudicate anything in
-adjudicate / merge-conflict / gave-up / failed-dirty. Plan 018 at the
-2026-10-08 maintenance (cap 75): LEVEL_MAX=75 already in
-server/ew/levels.py; confirm the Leveling card after maintenance.
+Next action: plan 018 at the 2026-10-08 maintenance (cap 75):
+LEVEL_MAX=75 already in server/ew/levels.py; after maintenance confirm
+the Leveling card and add/flip the ROADMAP row so the loop ships 018.
+Then watch the loop: read the inbox, progress/loop.json and
+loop_items/*.json; adjudicate anything in adjudicate / merge-conflict /
+gave-up / failed-dirty.
 
 Carried forward (not acted on yet):
 - NOTE (operator order 2026-10-06): ZERO-TOUCH. EW self-adjusts from
@@ -155,16 +154,18 @@ item merged, delete keep ref, push). Restart: stop the server pid from
 Acceptance: loop keeps merging with ci green, nothing in adjudicate /
 merge-conflict / gave-up / failed-dirty; no NOTE bullet dispatched as work.
 
-Do NOT redo: session 11 (2026-10-07): loop NOTE-classifier fix 73553e9
-(`NOTE (` now info, test added); dependabot PR 2 merged (read back
-MERGED); server restarted onto 8d5b483 (version read back). Session 10
-items as before: research 0010-0012, plans 079-086, c3df83e, b8fbef8,
-run counter reset 2026-10-06.
+Do NOT redo: session 12 (2026-10-07): Hea62ec confirmed merged
+(d31831e, read back); loop items read back 87 merged / 12 no-change, none
+stuck; checklist listing skipped NOTE/OPERATOR rows is by design
+(tests/test_ew_loop.py:513), not a defect. Session 11: loop
+NOTE-classifier fix 73553e9; dependabot PR 2 merged; server on 8d5b483.
+Session 10 items as before: research 0010-0012, plans 079-086, c3df83e,
+b8fbef8, run counter reset 2026-10-06.
 
-In flight: Hea62ec (loop lane data, committed, awaiting loop merge).
+In flight: none (loop idle, deep-dive done 2026-10-07, runs 43/120).
 
-Status: main 8d5b483 pushed, in sync with origin. Gates: ruff clean,
-pytest exit 0, node 693/693, leak sweep ARMED (19). CI on 8d5b483: ci 37633732314 + codeql 37633732239 success.
-Server health ok, version 8d5b483. Session jsonl ~0.7 MB.
+Status: main d31831e pushed, in sync with origin. Gates: pytest exit 0,
+node 693/693, leak sweep ARMED (19). CI on d31831e: ci 37635672135 +
+codeql 37635672201 success. Session jsonl ~1 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
