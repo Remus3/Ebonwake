@@ -366,6 +366,8 @@ class AutoOcr:
                 key = self._key(shot)
                 if key in seen:
                     continue
+                if not _ok_int(shot.get("size"), 1, 10 ** 12):
+                    continue  # QA 009: still being written; listed again when done
                 ts = _ts(shot.get("mtime"))
                 seen.add(key)
                 if ts is None or not self.eligible(ts):
@@ -396,6 +398,8 @@ class AutoOcr:
 
     def _process(self, key, shot):
         enabled, mn, _ = self._cfg()
+        if self._growing(shot):
+            return  # QA 009: not counted, not seen; the final size is a new key
         with self._lock:
             d = self._auto()
             if key in d["seen"]:
@@ -449,6 +453,16 @@ class AutoOcr:
             touched = True
         if touched:
             self._changed()
+
+    def _growing(self, shot):
+        """The file on disk no longer has the listed size (BDO still writing it)."""
+        d = getattr(self.game, "shot_dir", None)
+        if d is None:
+            return False
+        try:
+            return (d / shot["name"]).stat().st_size != shot.get("size")
+        except OSError:
+            return False  # gone / unreadable: the reader reports it as before
 
     def _size(self, name):
         if getattr(self.game, "shot_dir", None) is None:

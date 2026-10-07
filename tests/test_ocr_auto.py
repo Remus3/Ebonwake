@@ -129,6 +129,37 @@ def test_auto_off_reads_nothing(env):
     assert env.auto.scan() == 0 and env.auto.drain() == 0 and env.calls == []
 
 
+def test_shot_listed_while_still_being_written_is_read_once_when_complete(env):
+    """QA 009 (2026-10-07): BDO creates the PNG at 0 bytes and writes ~19 MB;
+    the watcher listed it mid-write, the partial file was OCR'd (junk) and the
+    finished one again (two reads, two cap slots). A 0-byte listing is not
+    queued nor marked seen; the finished listing is read once."""
+    _login(env, T0 - 100)
+    env.game.add("w.png", T0 - 10, size=0)
+    env.docs["w.png"] = CLEAN
+    assert env.auto.scan() == 0 and env.auto.drain() == 0 and env.calls == []
+    env.game.shots.clear()
+    env.game.add("w.png", T0 - 9, size=50)
+    assert env.auto.scan() == 1 and env.auto.drain() == 1
+    assert env.calls == ["w.png"]
+    assert env.store.get("ocr_auto")["count"] == 1
+
+
+def test_shot_still_growing_at_read_time_is_not_read_or_counted(env):
+    """Listed at a partial size, larger on disk when the worker reaches it: no
+    OCR of the partial image, no cap slot; the re-listed final size is read."""
+    _login(env, T0 - 100)
+    env.game.add("g.png", T0 - 10, size=20)
+    env.docs["g.png"] = CLEAN
+    (env.game.shot_dir / "g.png").write_bytes(b"x" * 80)  # still being written
+    assert env.auto.scan() == 1 and env.auto.drain() == 1
+    assert env.calls == [] and env.store.get("ocr_auto").get("count", 0) == 0
+    env.game.shots.clear()
+    env.game.add("g.png", T0 - 9, size=80)
+    assert env.auto.scan() == 1 and env.auto.drain() == 1
+    assert env.calls == ["g.png"] and env.store.get("ocr_auto")["count"] == 1
+
+
 def test_daily_cap_respected(env):
     env.cfg["ocr.daily_cap"] = 2
     _login(env, T0 - 1000)
