@@ -115,6 +115,26 @@ def test_last_used_spot_is_reused(rig):
     assert rig.gs.view()["active"]["spot"] == "hystria"
 
 
+def test_closed_sessions_are_kept_for_hours_per_day(rig):
+    """Plan 081: every closed play session lands in the history (oldest first)."""
+    assert rig.ps.sessions() == []
+    rig.go("logged_in", T10)
+    rig.go("not_running", T10 + 60 * MIN)
+    rig.tick(T10 + 63 * MIN)
+    rig.go("logged_in", T10 + 120 * MIN)
+    rig.go("not_running", T10 + 150 * MIN)
+    rig.tick(T10 + 153 * MIN)
+    h = rig.ps.sessions()
+    assert [(s["start"], s["end"]) for s in h] == [
+        (iso(T10), iso(T10 + 60 * MIN)),
+        (iso(T10 + 120 * MIN), iso(T10 + 150 * MIN))]
+    assert h[0]["id"] != h[1]["id"]
+    # a corrupt row is dropped, the rest kept
+    doc = rig.store.get("playsession")
+    rig.store.put("playsession", dict(doc, history=[{"id": "p9"}, "x"] + doc["history"]))
+    assert len(rig.ps.sessions()) == 2
+
+
 # --- grace ------------------------------------------------------------------------
 
 def test_disconnect_inside_grace_continues(rig):

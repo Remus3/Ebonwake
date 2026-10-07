@@ -160,7 +160,8 @@ def test_view_cp_from_profile_wins_over_typed(tmp_path):
     s = svc(tmp_path, cp=lambda: 301)
     s.set_cp(100)
     v = s.view()
-    assert v["cp"] == {"value": 301, "source": "profile", "typed": 100}
+    assert v["cp"] == {"value": 301, "source": "profile", "typed": 100, "at": None,
+                       "age_s": None, "stale": False}
     assert [t["cap"] for t in v["types"]] == [150, 150]
 
 
@@ -170,9 +171,46 @@ def test_view_cp_typed_when_profile_hides_it(tmp_path, profile):
     s = svc(tmp_path, cp=profile)
     assert s.view()["cp"]["value"] is None and s.view()["types"][0]["left"] is None
     v = s.set_cp(80)
-    assert v["cp"] == {"value": 80, "source": "operator", "typed": 80}
+    assert v["cp"] == {"value": 80, "source": "operator", "typed": 80,
+                       "at": "2026-10-05T22:30:00+00:00", "age_s": 0, "stale": False}
     assert v["types"][1] == {"type": "alchemy", "cap": 40, "delivered": 0, "left": 40,
                              "done": False, "mastery_pct": 0}
+
+
+# --- plan 081: CP from the CP readout screenshot ----------------------------------------
+
+def _iso(ts):
+    return dt.datetime.fromtimestamp(ts, dt.timezone.utc).replace(microsecond=0).isoformat()
+
+
+def test_committed_cp_read_supersedes_typed_and_clears_the_badge(tmp_path):
+    clock = Clock()
+    reads = {}
+    s = imperial.ImperialService(Store(tmp_path / "store"), clock=clock,
+                                 data_path=_data(tmp_path), reads=lambda k: reads.get(k))
+    s.set_cp(80)
+    assert [r["key"] for r in s.typed_overrides()] == ["imperial.cp"]
+    clock.t = T0 + 600
+    reads["cp"] = {"value": 312, "at": _iso(T0 + 300), "source": "ocr:cp.jpg"}
+    v = s.view()
+    assert v["cp"]["value"] == 312 and v["cp"]["source"] == "ocr" and v["cp"]["typed"] == 80
+    assert v["cp"]["age_s"] == 300 and v["cp"]["stale"] is False
+    assert [t["cap"] for t in v["types"]] == [156, 156]
+    assert s.typed_overrides() == []
+    # typing after the read corrects it until the next read
+    s.set_cp(300)
+    assert s.view()["cp"]["source"] == "operator" and s.view()["cp"]["value"] == 300
+    reads["cp"] = {"value": 320, "at": _iso(T0 + 900), "source": "ocr:cp2.jpg"}
+    clock.t = T0 + 8 * 86400
+    v = s.view()
+    assert v["cp"]["value"] == 320 and v["cp"]["stale"] is True  # > 7 d old: muted, not silent
+
+
+def test_profile_cp_still_wins_over_an_ocr_read(tmp_path):
+    s = imperial.ImperialService(Store(tmp_path / "store"), clock=Clock(), cp=lambda: 301,
+                                 data_path=_data(tmp_path),
+                                 reads=lambda k: {"value": 312, "at": _iso(T0), "source": "x"})
+    assert s.view()["cp"]["source"] == "profile"
 
 
 def test_reset_countdown_and_day(tmp_path):

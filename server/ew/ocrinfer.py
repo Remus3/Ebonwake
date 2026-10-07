@@ -233,6 +233,188 @@ def gear_fields(doc, size=None, regions=None):
     return [f for f in (_best(cands[k]) for k in GS_KEYS) if f is not None]
 
 
+# -- planner reads (plan 081): weight, slots, CP, fame -----------------------------
+
+def _num_reads(tok):
+    """[(value, conf, why)] readings of one OCR number token ("1,560",
+    "812.350", "1.234,5"); a lone 3-digit group after one separator reads
+    either as thousands or as 3 decimals, the game's own format first."""
+    seps = [ch for ch in tok if ch in ",."]
+    digits = re.split(r"[,.]", tok)
+    if not seps:
+        return [(int(tok), 0.95, "whole number")]
+    if len(set(seps)) == 2:
+        last = seps[-1]
+        head, frac = tok.rsplit(last, 1)
+        groups = re.split(r"[,.]", head)
+        if seps.count(last) != 1 or any(len(g) != 3 for g in groups[1:]) or len(frac) > 3:
+            return []
+        v = int("".join(groups)) + int(frac) / 10 ** len(frac)
+        return [(v, 0.97 if last == "." else 0.85,
+                 "grouped with decimals" if last == "." else "decimal comma")]
+    sep = seps[0]
+    if len(seps) > 1:
+        if any(len(g) != 3 for g in digits[1:]):
+            return []
+        return [(int("".join(digits)), 0.95 if sep == "," else 0.9, "grouped")]
+    head, frac = digits
+    dec = int(head) + int(frac) / 10 ** len(frac) if len(frac) <= 3 else None
+    out = []
+    if len(frac) == 3:
+        grouped = int(head + frac)
+        if sep == ",":
+            out = [(grouped, 0.95, "comma grouped"), (dec, 0.8, "decimal comma")]
+        else:
+            out = [(dec, 0.95, "3 decimals"), (grouped, 0.8, "dot grouped")]
+    elif dec is not None:
+        out = [(dec, 0.95 if sep == "." else 0.85,
+                "decimals" if sep == "." else "decimal comma")]
+    return out
+
+
+NUM_TOK = r"\d[\d.,]*\d|\d"
+WEIGHT_RE = re.compile(rf"(?<![\d.,])({NUM_TOK})\s*/\s*({NUM_TOK})\s*LT\b", re.IGNORECASE)
+SLOTS_RE = re.compile(r"(?<![\d.,/])(\d{1,3})\s*/\s*(\d{1,3})(?![\d.,/%])")
+SLOTS_LABEL = re.compile(r"slot|inventory", re.IGNORECASE)
+CP_PAIR_RE = re.compile(r"(?<![A-Za-z])(?:contribution\s*points?|c\.?p\.?)\s*:?\s*(\d{1,5})\s*/\s*"
+                        r"(\d{1,5})(?!\d)", re.IGNORECASE)
+CP_ONE_RE = re.compile(r"(?<![A-Za-z])contribution\s*points?\s*:?\s*(\d{1,5})(?![\d/]|\s*/)",
+                       re.IGNORECASE)
+FAME_RE = re.compile(r"fame[^%\d]{0,40}?\+?\s*(\d{1,2})(?:([.,])(\d{1,3}))?\s*%", re.IGNORECASE)
+MAX_LT_READ = 20000
+SLOTS_RANGE = (8, 400)
+CP_MAX_READ = 10000
+FAME_MAX_READ = 1.5
+CONF_SLOTS_LABEL = 0.95
+CONF_SLOTS_BESIDE = 0.92  # a bare a / b beside the weight line
+CONF_SLOTS_REGION = 0.9
+CONF_CP_PAIR = 0.95
+CONF_CP_ONE = 0.85        # one number: maybe the points left, not the total
+CONF_FAME_DOT = 0.95
+CONF_FAME_WHOLE = 0.92
+CONF_FAME_COMMA = 0.85
+
+
+def _lines_of(doc):
+    return ocr._lines(doc.get("lines") if isinstance(doc, dict) else None)
+
+
+def weight_field(doc, size=None, regions=None):
+    """{kind: weight, name: weight, value: {used, max} (LT), conf, why} from the
+    inventory "x / y LT" line, or None. Each number is read every plausible
+    way; the best reading with 1 <= max <= MAX_LT_READ and used <= 2 x max wins."""
+    box = _box(regions, "weight")
+    cands = []
+    for ln in _lines_of(doc):
+        for m in WEIGHT_RE.finditer(ln["text"]):
+            best = None
+            for u, cu, wu in _num_reads(m.group(1)):
+                for x, cx, wx in _num_reads(m.group(2)):
+                    if not (1 <= x <= MAX_LT_READ and 0 <= u <= 2 * x):
+                        continue
+                    conf = min(cu, cx)
+                    if best is None or conf > best[0]:
+                        best = (conf, u, x, wu if cu <= cx else wx)
+            if best is None:
+                continue
+            conf, u, x, why = best
+            inside = _inside(ln, size, box)
+            cands.append((inside, conf, len(cands),
+                          {"kind": "weight", "name": "weight",
+                           "value": {"used": round(u, 3), "max": round(x, 3)},
+                           "conf": round(conf, 3),
+                           "why": f"x / y LT ({why})" + ("; in the weight region" if inside
+                                                          else "")}))
+    return _best(cands)
+
+
+def slots_field(doc, size=None, regions=None):
+    """{kind: slots, name: slots, value: {used, total}, conf, why} or None. A
+    bare "a / b" is only read with a slot / inventory label on its line, beside
+    the weight line, or inside the slots region - never anywhere on screen."""
+    lines = _lines_of(doc)
+    box = _box(regions, "slots")
+    weight_rows = [i for i, ln in enumerate(lines) if WEIGHT_RE.search(ln["text"])]
+    cands = []
+    for i, ln in enumerate(lines):
+        text = ln["text"]
+        if WEIGHT_RE.search(text) or CP_PAIR_RE.search(text) or "%" in text:
+            continue
+        for m in SLOTS_RE.finditer(text):
+            used, total = int(m.group(1)), int(m.group(2))
+            if not (SLOTS_RANGE[0] <= total <= SLOTS_RANGE[1] and used <= total):
+                continue
+            inside = _inside(ln, size, box)
+            if SLOTS_LABEL.search(text):
+                conf, why = CONF_SLOTS_LABEL, "slot label on the line"
+            elif any(ln is b for w in weight_rows for b in ocr._neighbours(lines, w)) \
+                    or any(lines[w] is b for w in weight_rows for b in ocr._neighbours(lines, i)):
+                conf, why = CONF_SLOTS_BESIDE, "beside the weight line"
+            elif inside:
+                conf, why = CONF_SLOTS_REGION, "in the slots region"
+            else:
+                continue
+            cands.append((inside, conf, len(cands),
+                          {"kind": "slots", "name": "slots",
+                           "value": {"used": used, "total": total}, "conf": conf, "why": why}))
+    return _best(cands)
+
+
+def cp_field(doc, size=None, regions=None):
+    """{kind: cp, name: cp, value: total CP, conf, why} from the "Contribution
+    Points 120 / 312" readout (the total after the slash), or None."""
+    box = _box(regions, "cp")
+    cands = []
+    for ln in _lines_of(doc):
+        for m in CP_PAIR_RE.finditer(ln["text"]):
+            left, total = int(m.group(1)), int(m.group(2))
+            if left <= total <= CP_MAX_READ:
+                cands.append((_inside(ln, size, box), CONF_CP_PAIR, len(cands),
+                              {"kind": "cp", "name": "cp", "value": total,
+                               "conf": CONF_CP_PAIR, "why": "points left / total"}))
+        for m in CP_ONE_RE.finditer(ln["text"]):
+            v = int(m.group(1))
+            if v <= CP_MAX_READ:
+                cands.append((_inside(ln, size, box), CONF_CP_ONE, len(cands),
+                              {"kind": "cp", "name": "cp", "value": v, "conf": CONF_CP_ONE,
+                               "why": "one number (left or total?)"}))
+    return _best(cands)
+
+
+def fame_field(doc, size=None, regions=None):
+    """{kind: fame, name: fame, value: pct, conf, why} from the market sell
+    dialog's family fame bonus line ("Family Fame bonus +1.250%"), or None."""
+    box = _box(regions, "fame")
+    cands = []
+    for ln in _lines_of(doc):
+        for m in FAME_RE.finditer(ln["text"]):
+            whole, sep, frac = m.group(1), m.group(2), m.group(3)
+            v = int(whole) + (int(frac) / 10 ** len(frac) if frac else 0)
+            if v > FAME_MAX_READ:
+                continue
+            if sep is None:
+                conf, why = CONF_FAME_WHOLE, "fame % without decimals"
+            elif sep == ",":
+                conf, why = CONF_FAME_COMMA, "decimal comma"
+            else:
+                conf, why = CONF_FAME_DOT, "fame % with decimals"
+            v = round(v, 3)
+            cands.append((_inside(ln, size, box), conf, len(cands),
+                          {"kind": "fame", "name": "fame", "value": int(v) if v == int(v) else v,
+                           "conf": conf, "why": why}))
+    return _best(cands)
+
+
+def planner_fields(doc, size=None, regions=None):
+    """Every plan 081 planner read in one doc (weight, slots, cp, fame)."""
+    out = []
+    for fn in (weight_field, slots_field, cp_field, fame_field):
+        f = fn(doc, size=size, regions=regions)
+        if f is not None:
+            out.append(f)
+    return out
+
+
 # -- sanity over history (S7) ------------------------------------------------------
 
 def _parse(ts):

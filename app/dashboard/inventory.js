@@ -169,7 +169,9 @@
     const sum = C.invSummaryLines(d);
     ui.pill.className = 'ew-pill ' + (d && d.vp ? (d.vp.active === true ? 'ok' : 'warn') : 'unknown');
     ui.pill.textContent = d && d.vp ? (d.vp.active === true ? 'VP on' : 'VP off') : '-';
-    lines(ui.summary, sum.map(function (l) { return el('div', 'ew-pill ' + l.cls, l.text); }), d ? '' : 'loading...');
+    // Plan 081: each derived input with its source + age (stale ones muted).
+    const src = C.invDerivedLines(d).map(function (l) { return el('div', 'ew-muted' + (l.stale ? ' ew-stale' : ''), l.text); });
+    lines(ui.summary, sum.map(function (l) { return el('div', 'ew-pill ' + l.cls, l.text); }).concat(src), d ? '' : 'loading...');
     lines(ui.sources, C.invSourceRows(d).map(sourceRow), d ? 'No weight sources (data file missing).' : '');
     ui.sources.className = 'ew-list' + (S.err ? ' ew-stale' : '');
     lines(ui.next, C.invNextLines(d).map(function (t) { return el('div', 'ew-muted', t); }),

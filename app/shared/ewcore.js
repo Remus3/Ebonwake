@@ -407,6 +407,26 @@
     return Math.floor(v / 86400) + 'd';
   }
 
+  // Plan 081: source + age of one derived planner input (server derived.pick
+  // row {source, age_s, stale, sessions?}) -> {text, stale}. A stale value
+  // (> 7 d) says so in words; the caller adds the plan 077 muted class.
+  function derivedText(row) {
+    if (!plainObject(row) || typeof row.source !== 'string') return { text: '', stale: false };
+    const s = row.source;
+    let text;
+    if (s === 'typed' || s === 'operator') text = 'typed';
+    else if (s === 'default') text = 'default';
+    else if (s === 'profile') text = 'from profile';
+    else if (/^sessions:/.test(s)) {
+      const n = isInt(row.sessions, 0) ? row.sessions : Number(s.slice(9));
+      text = 'from ' + n + ' play session' + (n === 1 ? '' : 's');
+    } else if (s === 'ocr' || /^ocr:/.test(s)) text = 'from screenshot';
+    else text = 'from ' + s;
+    if (text !== 'typed' && text !== 'default' && isNum(row.age_s)) text += ', ' + fmtAge(row.age_s) + ' ago';
+    const stale = row.stale === true;
+    return { text: stale ? text + ' - stale' : text, stale: stale };
+  }
+
   // Freshness pill from slice A's {fetched_at, age_s, ttl_s, stale, error}.
   // Stale data is never shown as ok.
   // /api/market/item nests freshness per source {sub, history, orders}; flatten
@@ -698,6 +718,39 @@
     if (!a || !b) return '';
     const bonus = typeof w.bonus === 'string' ? w.bonus : (isNum(w.pct) ? '+' + w.pct + '%' : '');
     return (a.text.slice(5) + ' - ' + b.text.slice(5) + ' ' + bonus).trim();
+  }
+
+  // Plan 081: /api/grind/loot `prefill` {source: 'ocr', at, items: [{name,
+  // count, low}]} -> {counts: {name: 'n'}, low: [name], text} for the count
+  // boxes the operator has not typed in (`typed`: {name: true}).
+  function lootPrefill(p, counts, typed, now) {
+    const out = { counts: {}, low: [], text: '' };
+    if (!plainObject(p) || !Array.isArray(p.items)) return out;
+    const t = plainObject(typed) ? typed : {};
+    let n = 0;
+    p.items.forEach(function (it) {
+      if (!plainObject(it) || typeof it.name !== 'string' || !isInt(it.count, 1) || t[it.name] === true) return;
+      out.counts[it.name] = String(it.count);
+      if (it.low === true) out.low.push(it.name);
+      n += 1;
+    });
+    if (n) {
+      const ms = utcMsOf(p.at);
+      const age = ms === null ? '' : ', ' + fmtAge(((isNum(now) ? now : Date.now()) - ms) / 1000) + ' ago';
+      out.text = n + ' count' + (n === 1 ? '' : 's') + ' from screenshots this session' + age + ' - type to correct';
+    }
+    return out;
+  }
+
+  // Plan 081: a typed recurring window's end -> {text, ended}. A pre-081 row
+  // without one says so (it never ends by itself).
+  function hotUntilText(w, opts) {
+    if (!plainObject(w)) return { text: '', ended: false };
+    if (w.until === null || w.until === undefined) return { text: 'no end set', ended: false };
+    const u = fmtLocal(w.until, opts);
+    if (!u) return { text: '', ended: false };
+    if (w.ended === true) return { text: 'ended ' + u.text.slice(5), ended: true };
+    return { text: 'until ' + u.text.slice(5), ended: false };
   }
 
   // Entry zones for time inputs: [value, label]. 'pt' is the "paste PT" helper
@@ -5471,6 +5524,30 @@
     return { ok: true, body: { sale: { price: p, vp: f.vp === true } } };
   }
 
+  // Plan 081: [{text, stale}] - where base LT, slots, slots used, the weight
+  // now and the fame bonus come from (screenshot / typed) and how old they are.
+  function invDerivedLines(view) {
+    if (!plainObject(view)) return [];
+    const out = [];
+    const inp = plainObject(view.inputs) ? view.inputs : {};
+    [['base_lt', 'base LT', view.base_lt], ['slots', 'slots', plainObject(view.slots) ? view.slots.base : null],
+      ['slots_used', 'slots used', plainObject(view.slots) ? view.slots.used : null]].forEach(function (r) {
+      const src = derivedText(inp[r[0]]);
+      if (src.text && src.text !== 'default' && isNum(r[2])) out.push({ text: r[1] + ' ' + r[2] + ' (' + src.text + ')', stale: src.stale });
+    });
+    const w = view.weight_now;
+    if (plainObject(w) && isNum(w.used) && isNum(w.max)) {
+      const src = derivedText(w);
+      out.push({ text: 'weight ' + w.used + ' / ' + w.max + ' LT (' + src.text + ')', stale: src.stale });
+    }
+    const f = view.fame;
+    if (plainObject(f) && isNum(f.value) && f.source !== 'default') {
+      const src = derivedText(f);
+      out.push({ text: 'fame bonus ' + f.value + '% (' + src.text + ')', stale: src.stale });
+    }
+    return out;
+  }
+
   // Summary -> [{text, cls}]: weight, slots, warehouse, VP, ledger.
   function invSummaryLines(view) {
     if (!plainObject(view) || !Array.isArray(view.sources)) return [];
@@ -5778,6 +5855,7 @@
   function imperialCpText(view) {
     const c = plainObject(view) && plainObject(view.cp) ? view.cp : null;
     if (!c || !isNum(c.value)) return 'CP ?';
+    if (c.source === 'ocr') return 'CP ' + c.value + ' (' + derivedText(c).text + ')';  // plan 081
     return 'CP ' + c.value + (c.source === 'operator' ? ' (typed)' : '');
   }
 
@@ -6924,6 +7002,7 @@
     parseInvTownForm: parseInvTownForm,
     parseInvSale: parseInvSale,
     invSummaryLines: invSummaryLines,
+    invDerivedLines: invDerivedLines,
     invSourceRows: invSourceRows,
     invNextLines: invNextLines,
     invTownRows: invTownRows,
@@ -6988,6 +7067,7 @@
     bandStrip: bandStrip,
     depthBars: depthBars,
     fmtAge: fmtAge,
+    derivedText: derivedText,
     marketPill: marketPill,
     itemFreshness: itemFreshness,
     validWatchBody: validWatchBody,
@@ -7006,6 +7086,8 @@
     parseLocalDateTime: parseLocalDateTime,
     fmtLocal: fmtLocal,
     hotWindowView: hotWindowView,
+    hotUntilText: hotUntilText,
+    lootPrefill: lootPrefill,
     buffRowView: buffRowView,
     ZONES: ZONES,
     pairProfit: pairProfit,

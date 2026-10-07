@@ -151,7 +151,8 @@
     if (S.msg) body.appendChild(el('div', 'ew-err', S.msg));
     if (!S.data) { if (!S.err) body.appendChild(el('div', 'ew-muted', 'loading...')); return; }
     if (S.data.data_error) body.appendChild(el('div', 'ew-err', 'rules file: ' + S.data.data_error));
-    body.appendChild(el('div', 'ew-muted', C.imperialCpText(S.data) + ' - boxes per type = CP / 2, paid 250% untaxed'));
+    const cpStale = !!(S.data.cp && S.data.cp.stale === true);  // plan 081: muted, never silent
+    body.appendChild(el('div', 'ew-muted' + (cpStale ? ' ew-stale' : ''), C.imperialCpText(S.data) + ' - boxes per type = CP / 2, paid 250% untaxed'));
     const list = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
     C.imperialRows(S.data).forEach(function (r) { list.appendChild(typeRow(r)); });
     body.appendChild(list);

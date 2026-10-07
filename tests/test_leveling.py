@@ -268,8 +268,10 @@ def test_hot_add_view_and_delete(svc, clock):
     doc = svc.hot_add({"days": [0, 2], "start": "11:00", "end": "13:00", "label": "Hot Time",
                        "pct": 50})
     w = doc["hot_windows"][0]
+    # plan 081: no maintenance source -> it ends after the 8-day fallback
     assert w == {"id": "h1", "days": [0, 2], "start": "11:00", "end": "13:00",
-                 "label": "Hot Time", "pct": 50}
+                 "label": "Hot Time", "pct": 50, "until": "2026-10-13T12:00:00+00:00",
+                 "ended": False}
     assert doc["hot"]["active"][0]["ends_in_s"] == 3600 and doc["xp_stack_pct"] == 50
     doc = svc.hot_add({"days": [6, 5], "start": "22:00", "end": "02:00", "label": "Late",
                        "pct": 100})
@@ -281,6 +283,71 @@ def test_hot_add_view_and_delete(svc, clock):
     # ids are never reused
     doc = svc.hot_add({"days": [1], "start": "00:00", "end": "23:59", "label": "x", "pct": 0})
     assert doc["hot_windows"][-1]["id"] == "h3"
+
+
+def test_typed_hot_window_without_end_gets_the_next_maintenance_end(store, clock):
+    """Plan 081: a typed recurring window carries an end; omitted, it is the
+    next maintenance end, and no occurrence starts at / after it."""
+    maint = T0 + dt.timedelta(days=2, hours=-1)  # Wed 11:00 UTC
+    svc = leveling.LevelingService(store, clock=clock, maint_end=lambda now: maint)
+    doc = svc.hot_add({"days": [0, 2], "start": "11:00", "end": "13:00", "label": "Hot",
+                       "pct": 50})
+    assert doc["hot_windows"][0]["until"] == maint.isoformat()
+    assert doc["hot"]["active"][0]["id"] == "h1"          # Monday's run is on
+    clock.advance(86400 * 2 - 3600)                        # Wed 11:00: the window has ended
+    doc = svc.view()
+    assert doc["hot"]["active"] == [] and doc["hot"]["next"] is None
+    assert doc["hot_windows"][0]["ended"] is True
+    # an explicit until wins; a past one is refused
+    doc = svc.hot_add({"days": [3], "start": "10:00", "end": "11:00", "label": "Thu",
+                       "pct": 20, "until": "2026-10-30T00:00:00+00:00"})
+    assert doc["hot_windows"][1]["until"] == "2026-10-30T00:00:00+00:00"
+    with pytest.raises(ValueError):
+        svc.hot_add({"days": [3], "start": "10:00", "end": "11:00", "label": "x", "pct": 1,
+                     "until": "2026-10-01T00:00:00+00:00"})
+    # a broken maintenance source falls back to 8 days
+    bad = leveling.LevelingService(store, clock=clock,
+                                   maint_end=lambda now: (_ for _ in ()).throw(RuntimeError()))
+    doc = bad.hot_add({"days": [4], "start": "10:00", "end": "11:00", "label": "y", "pct": 1})
+    assert doc["hot_windows"][-1]["until"] == (maint + dt.timedelta(days=8)).isoformat()
+
+
+def _notice_row(start, end, gno=7):
+    return {"start": start.isoformat(), "end": end.isoformat(), "label": "Hot Time",
+            "bonus": "Combat EXP +50%", "pct": 50,
+            "source": "https://www.naeu.playblackdesert.com/en-US/News/Detail?groupContentNo=7",
+            "group_no": gno}
+
+
+def test_overlapping_notice_window_retires_the_typed_one(svc, clock):
+    svc.hot_add({"days": [0, 2], "start": "11:00", "end": "13:00", "label": "typed", "pct": 50})
+    svc.hot_add({"days": [4], "start": "20:00", "end": "21:00", "label": "Fri", "pct": 10})
+    # the notice window covers Wednesday noon: the Mon / Wed typed window retires
+    wid = svc.hot_auto_add(_notice_row(T0 + dt.timedelta(days=2), T0 + dt.timedelta(days=2,
+                                                                                    hours=3)))
+    doc = svc.view()
+    assert [w["id"] for w in doc["hot_windows"]] == ["h2"]
+    r = doc["hot_retired"][0]
+    assert r["id"] == "h1" and r["retired_by"] == "notice" and r["notice_id"] == wid
+    # undoing the notice import brings it back
+    assert svc.hot_auto_del([wid]) == 1
+    doc = svc.view()
+    assert sorted(w["id"] for w in doc["hot_windows"]) == ["h1", "h2"]
+    assert doc["hot_retired"] == []
+
+
+def test_non_overlapping_notice_keeps_the_typed_window(svc):
+    svc.hot_add({"days": [0], "start": "11:00", "end": "13:00", "label": "typed", "pct": 50})
+    svc.hot_auto_add(_notice_row(T0 + dt.timedelta(days=1), T0 + dt.timedelta(days=1, hours=2)))
+    assert [w["id"] for w in svc.view()["hot_windows"]] == ["h1"]
+
+
+def test_pre_081_window_without_until_still_loads(store, clock):
+    store.put("leveling", {"samples": [], "milestones": [60], "next_id": 2,
+                           "hot_windows": [{"id": "h1", "days": [0], "start": "11:00",
+                                            "end": "13:00", "label": "old", "pct": 5}]})
+    doc = leveling.LevelingService(store, clock=clock).view()
+    assert doc["hot_windows"][0]["until"] is None and doc["hot"]["active"][0]["id"] == "h1"
 
 
 @pytest.mark.parametrize("arg", [

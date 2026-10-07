@@ -42,8 +42,13 @@ MAX_WINDOWS = 50
 VIEW_COMMITS = 20
 POLL_S = 2.0
 LOGGED_IN = "logged_in"
-KINDS = ("silver", "buff", "level", "gear", "book_use")
-FIX_KINDS = ("silver", "buff", "level", "gear")  # a book suggestion is accept / discard only
+MAX_READS = 50
+MAX_LOOT_ROWS = 60
+# Plan 081: planner reads (inventory weight / slots, CP, market fame bonus).
+PLANNER_KINDS = ("weight", "slots", "cp", "fame")
+KINDS = ("silver", "buff", "level", "gear", "book_use") + PLANNER_KINDS
+# a book suggestion is accept / discard only
+FIX_KINDS = ("silver", "buff", "level", "gear") + PLANNER_KINDS
 
 # Silver confidence (separators between the digit groups of the read amount).
 CONF_GROUPED = 0.97      # 1,234,567 - the game's own format
@@ -203,6 +208,10 @@ def _ok_int(v, lo, hi):
     return isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi
 
 
+def _ok_num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
 def _ok_conf(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1
 
@@ -229,8 +238,26 @@ def _check_value(kind, v):
                 and v["size"] in SIZES and _ok_pct(v["pct_before"]) and _ok_pct(v["pct_after"]):
             return dict(v)
         raise ValueError("book_use value must be {size, pct_before, pct_after}")
+    if kind == "weight":
+        if isinstance(v, dict) and set(v) == {"used", "max"} \
+                and all(_ok_num(v[k]) for k in v) \
+                and 1 <= v["max"] <= ocrinfer.MAX_LT_READ and 0 <= v["used"] <= 2 * v["max"]:
+            return {"used": v["used"], "max": v["max"]}
+        raise ValueError(f"weight value must be {{used, max}} LT, max 1..{ocrinfer.MAX_LT_READ}")
+    if kind == "slots":
+        lo, hi = ocrinfer.SLOTS_RANGE
+        if isinstance(v, dict) and set(v) == {"used", "total"} and _ok_int(v["total"], lo, hi) \
+                and _ok_int(v["used"], 0, v["total"]):
+            return {"used": v["used"], "total": v["total"]}
+        raise ValueError(f"slots value must be {{used, total}}, total {lo}..{hi}")
+    if kind == "cp" and _ok_int(v, 0, ocrinfer.CP_MAX_READ):
+        return v
+    if kind == "fame":
+        if _ok_num(v) and 0 <= v <= ocrinfer.FAME_MAX_READ:
+            return v
+        raise ValueError(f"fame value must be a number 0..{ocrinfer.FAME_MAX_READ}")
     ranges = {"silver": f"0..{MAX_SILVER}", "buff": f"1..{MAX_BUFF_MINUTES}",
-              "gear": f"{GS_RANGE[0]}..{GS_RANGE[1]}"}
+              "gear": f"{GS_RANGE[0]}..{GS_RANGE[1]}", "cp": f"0..{ocrinfer.CP_MAX_READ}"}
     raise ValueError(f"{kind} value must be an int {ranges.get(kind, '')}".rstrip())
 
 
@@ -241,7 +268,8 @@ class AutoOcr:
     `silver` {samples: [{id, at, value, source}]} (oldest first)."""
 
     def __init__(self, store, game, reader, grind, settings=None, clock=time.time,
-                 on_change=None, leveling=None, progress=None, play=None, regions=None):
+                 on_change=None, leveling=None, progress=None, play=None, regions=None,
+                 loot_target=None):
         self.store = store
         self.game = game
         self.reader = reader              # OcrService (plan 009): .doc(name) -> {text, lines}
@@ -250,6 +278,9 @@ class AutoOcr:
         self.leveling = leveling          # LevelingService: level / XP samples, books
         self.progress = progress          # ProgressService: gs stats
         self.play = play                  # fn() -> PlaySession.view() (silver/h window)
+        # Plan 081: fn() -> {spot, started, names} of the running grind session, or
+        # None; its loot counts read from each shot prefill the loot form.
+        self.loot_target = loot_target
         self.regions = regions if regions is not None else ocrinfer.load_regions()
         self.settings = settings or (lambda: {})
         self.clock = clock
@@ -387,9 +418,11 @@ class AutoOcr:
         if s is not None:
             fields.append(s)
         fields += buff_fields(doc)
-        fields += self._progress_fields(shot["name"], doc)
+        size = self._size(shot["name"])
+        fields += self._progress_fields(shot["name"], doc, size)
+        fields += ocrinfer.planner_fields(doc, size=size, regions=self.regions)
         shot_at = _ts(shot.get("mtime")) or self.clock()
-        touched = False
+        touched = self._loot_read(shot["name"], doc, shot_at, mn)
         for f in fields:
             if f["kind"] == "buff" and f["value"] - math.floor(
                     max(0.0, self.clock() - shot_at) / 60) < 1:
@@ -417,13 +450,15 @@ class AutoOcr:
         if touched:
             self._changed()
 
-    def _progress_fields(self, name, doc):
+    def _size(self, name):
+        if getattr(self.game, "shot_dir", None) is None:
+            return None
+        return ocrinfer.image_size(self.game.shot_dir / name)
+
+    def _progress_fields(self, name, doc, size=None):
         """Plan 066 fields for the services this worker was given."""
         if self.leveling is None and self.progress is None:
             return []
-        size = None
-        if getattr(self.game, "shot_dir", None) is not None:
-            size = ocrinfer.image_size(self.game.shot_dir / name)
         out = []
         if self.leveling is not None:
             lv = ocrinfer.level_field(doc, size=size, regions=self.regions)
@@ -458,6 +493,102 @@ class AutoOcr:
             if isinstance(s, dict) and _ok_int(s.get("value"), 0, MAX_SILVER):
                 return s["value"]
         return None
+
+    def _reads(self):
+        """Store domain `ocr_reads` {kind: [{id, at, value, source}]}, cleaned."""
+        doc = self.store.get("ocr_reads")
+        out = {}
+        for kind in PLANNER_KINDS:
+            rows = doc.get(kind) if isinstance(doc.get(kind), list) else []
+            keep = []
+            for r in rows:
+                if not (isinstance(r, dict) and _ts(r.get("at")) is not None):
+                    continue
+                try:
+                    _check_value(kind, r.get("value"))
+                except ValueError:
+                    continue
+                keep.append(r)
+            out[kind] = keep
+        return out
+
+    def latest(self, kind):
+        """Plan 081: {value, at, source} of the newest committed `kind` read (by
+        shot time; silver from the plan 063 samples), or None."""
+        if kind == "silver":
+            samples = self.store.get("silver").get("samples")
+            rows = [s for s in samples if isinstance(s, dict)
+                    and _ok_int(s.get("value"), 0, MAX_SILVER)
+                    and _ts(s.get("at")) is not None] if isinstance(samples, list) else []
+        elif kind in PLANNER_KINDS:
+            with self._lock:
+                rows = self._reads()[kind]
+        else:
+            raise ValueError(f"unknown read kind: {kind}")
+        if not rows:
+            return None
+        r = max(enumerate(rows), key=lambda p: (_ts(p[1]["at"]), p[0]))[1]
+        return {"value": r["value"], "at": r["at"],
+                "source": r["source"] if isinstance(r.get("source"), str) else "ocr"}
+
+    # -- plan 081: loot counts of the running grind session ------------------------
+
+    def _target(self):
+        if self.loot_target is None:
+            return None
+        try:
+            t = self.loot_target()
+        except Exception:  # noqa: BLE001 - no grind session read = no loot prefill
+            return None
+        if not (isinstance(t, dict) and isinstance(t.get("spot"), str)
+                and _ts(t.get("started")) is not None and t.get("names")):
+            return None
+        return t
+
+    def _loot_read(self, file, doc, shot_at, mn):
+        """Loot counts read from a shot taken during the running grind session
+        land in store domain `ocr_loot` {spot, started, items: {name: {count,
+        conf, low, at, file}}}; a newer read of one item replaces the older one
+        (the loot window shows running totals). True when something changed."""
+        t = self._target()
+        if t is None or shot_at < _ts(t["started"]):
+            return False
+        rows = [r for r in ocr.extract_loot(doc.get("lines") or [], t["names"])["rows"]
+                if _ok_int(r.get("count"), 1, 10 ** 9)]
+        if not rows:
+            return False
+        with self._lock:
+            cur = self.store.get("ocr_loot")
+            same = cur.get("spot") == t["spot"] and cur.get("started") == t["started"]
+            items = dict(cur.get("items")) if same and isinstance(cur.get("items"), dict) else {}
+            for r in rows:
+                old = items.get(r["name"])
+                if isinstance(old, dict) and (_ts(old.get("at")) or 0) > shot_at:
+                    continue
+                conf = r.get("confidence") if _ok_conf(r.get("confidence")) else 0
+                items[r["name"]] = {"count": r["count"], "conf": conf, "low": conf < mn,
+                                    "at": _iso(shot_at), "file": _str(file, 255)}
+            if len(items) > MAX_LOOT_ROWS:
+                items = dict(sorted(items.items(), key=lambda kv: kv[1]["at"])[-MAX_LOOT_ROWS:])
+            self.store.put("ocr_loot", {"spot": t["spot"], "started": t["started"],
+                                        "items": items})
+        return True
+
+    def loot_prefill(self, spot, started):
+        """{source: "ocr", spot, started, at, items: [{name, count, conf, low,
+        at, file}]} read during the grind session that started at `started` on
+        `spot`, or None."""
+        cur = self.store.get("ocr_loot")
+        if cur.get("spot") != spot or cur.get("started") != started \
+                or not isinstance(cur.get("items"), dict):
+            return None
+        items = [dict(v, name=k) for k, v in sorted(cur["items"].items())
+                 if isinstance(v, dict) and _ok_int(v.get("count"), 1, 10 ** 9)
+                 and _ts(v.get("at")) is not None]
+        if not items:
+            return None
+        return {"source": "ocr", "spot": spot, "started": started,
+                "at": max(i["at"] for i in items), "items": items}
 
     def _buff_state(self, name):
         """Stored {ends, armed} of a grind buff (by name), or None."""
@@ -498,6 +629,12 @@ class AutoOcr:
                     raise ValueError("gear score is not available")
                 entry["prev"] = self.progress.gs_ocr(name, value, _iso(shot_at),
                                                      force=via != "auto")
+            elif kind in PLANNER_KINDS:
+                reads = self._reads()
+                reads[kind] = (reads.get(kind, []) + [{
+                    "id": uid, "at": _iso(shot_at), "value": value,
+                    "source": f"ocr:{_str(file, 255)}"}])[-MAX_READS:]
+                self.store.put("ocr_reads", reads)
             else:
                 # `value` is minutes left at the shot; a fix is typed as minutes left now.
                 left = value - math.floor(max(0.0, now - shot_at) / 60) if at_shot else value
@@ -552,6 +689,10 @@ class AutoOcr:
             elif c.get("kind") == "gear":
                 self._need(self.progress).gs_restore(c.get("name"), c.get("value"),
                                                      c.get("prev"))
+            elif c.get("kind") in PLANNER_KINDS:
+                reads = self._reads()
+                reads[c["kind"]] = [r for r in reads.get(c["kind"], []) if r.get("id") != uid]
+                self.store.put("ocr_reads", reads)
             else:
                 # Only while the timer is still the one this commit wrote: a later
                 # commit or a manual re-arm / clear is never overwritten.

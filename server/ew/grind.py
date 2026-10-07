@@ -492,6 +492,9 @@ class GrindService:
         self.tax = tax
         # Plan 062: `play() -> {state, id, start, spot}|None`, set by the app.
         self.play = None
+        # Plan 081: ocr_loot(spot, started) -> the loot counts auto-OCR read during
+        # that session ({source: "ocr", items, at}) or None; set by the app.
+        self.ocr_loot = None
         # `epoch` returns the newest started XP epoch or None (plan 018): until
         # one has started the presets offer the pre-patch value and no hint shows.
         self.epoch = epoch
@@ -820,7 +823,35 @@ class GrindService:
         entry = self.loot_tables.get(key) if key else None
         return {"spot": spot, "table": key, "source": entry["source"] if entry else None,
                 "verified": entry["verified"] if entry else None, "items": items,
-                "tax": t, "error": self.loot_error}
+                "tax": t, "error": self.loot_error, "prefill": self._prefill(doc, spot, items)}
+
+    def _prefill(self, doc, spot, items):
+        """Plan 081: the running session's OCR loot counts for this spot (names
+        on its list only), or None. Typing in the form only corrects them."""
+        act = doc["active"]
+        if self.ocr_loot is None or act is None or act["spot"] != spot:
+            return None
+        try:
+            p = self.ocr_loot(spot, act["started"])
+        except Exception:  # noqa: BLE001 - the prefill is an extra, never fatal
+            return None
+        if not isinstance(p, dict) or not isinstance(p.get("items"), list):
+            return None
+        names = {it["name"].lower(): it["name"] for it in items}
+        rows = [dict(r, name=names[r["name"].lower()]) for r in p["items"]
+                if isinstance(r, dict) and isinstance(r.get("name"), str)
+                and r["name"].lower() in names]
+        return dict(p, items=rows) if rows else None
+
+    def loot_target(self):
+        """Plan 081: {spot, started, names} of the running session (the auto-OCR
+        reads its loot counts from each shot), or None."""
+        doc = self._load()
+        act = doc["active"]
+        if act is None:
+            return None
+        names = [it["name"] for it in self._items(doc, act["spot"])]
+        return {"spot": act["spot"], "started": act["started"], "names": names} if names else None
 
     def loot_candidates(self):
         """Plan 071: marketable loot ids of the active spot, else the newest

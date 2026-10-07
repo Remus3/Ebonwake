@@ -513,6 +513,13 @@
     }
     body.appendChild(el('div', 'ew-gnum', 'total ' + s.total));
     body.appendChild(el('div', 'ew-muted ew-gnum', s.afford));
+    // Plan 081: where silver on hand and h/day come from, and how old they are.
+    const inp = d.inputs || {};
+    [['silver on hand ' + C.fmtSilver(st.silver_on_hand), inp.silver_on_hand],
+      ['h/day ' + st.hours_per_day, inp.hours_per_day]].forEach(function (p) {
+      const src = C.derivedText(p[1]);
+      if (src.text) body.appendChild(el('div', 'ew-muted ew-gnum' + (src.stale ? ' ew-stale' : ''), p[0] + ' (' + src.text + ')'));
+    });
     if (!d.lines.length) {
       body.appendChild(el('div', 'ew-muted', 'Nothing to buy: no open step has priced materials ' +
         '(turn crons on with EV -> Use in list).'));

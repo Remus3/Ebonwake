@@ -19,7 +19,7 @@ import time
 from fractions import Fraction
 from pathlib import Path
 
-from . import today
+from . import derived, today
 from .today import slug
 
 DATA_PATH = Path(__file__).resolve().parent / "data" / "imperial_boxes.json"
@@ -203,10 +203,11 @@ class ImperialService:
     them as zero. Every write returns the GET body."""
 
     def __init__(self, store, clock=time.time, cp=None, prices=None, name=None,
-                 data_path=None):
+                 data_path=None, reads=None):
         self.store = store
         self.clock = clock
         self.cp_source = cp or (lambda: None)
+        self.reads = reads or (lambda kind: None)  # plan 081: newest OCR read of a kind
         self.prices = prices or (lambda iid: None)
         self.name = name or (lambda iid: None)
         self._lock = threading.Lock()
@@ -237,6 +238,7 @@ class ImperialService:
                      for t in TYPES}
         cp = doc.get("cp")
         cp = cp if _is_int(cp) and 0 <= cp <= CP_MAX else None
+        cp_at = doc.get("cp_at") if cp is not None and isinstance(doc.get("cp_at"), str) else None
         m = doc.get("mastery") if isinstance(doc.get("mastery"), dict) else {}
         mastery = {t: m[t] if _is_num(m.get(t)) and 0 <= m[t] <= MASTERY_MAX else 0
                    for t in TYPES}
@@ -253,7 +255,7 @@ class ImperialService:
                 seen.add(b["id"])
                 boxes.append({"id": b["id"], "type": b["type"], "name": b["name"].strip(),
                               "items": items})
-        return {"day": day, "delivered": delivered, "cp": cp, "mastery": mastery,
+        return {"day": day, "delivered": delivered, "cp": cp, "cp_at": cp_at, "mastery": mastery,
                 "boxes": boxes[:MAX_BOXES]}
 
     def _write(self, fn):
@@ -265,15 +267,31 @@ class ImperialService:
         return self.view()
 
     def _cp(self, doc):
+        return self._cp_row(doc)[:2]
+
+    def _cp_row(self, doc):
+        """(cp, source, at, age_s, stale): the plan 042 profile CP wins; else
+        (plan 081) the newer of the typed value and the newest committed OCR CP
+        read (source "ocr")."""
         try:
             v = self.cp_source()
         except Exception:  # noqa: BLE001 - a broken profile never breaks the card
             v = None
         if _is_num(v) and 0 <= v <= CP_MAX:
-            return int(v), "profile"
-        if doc["cp"] is not None:
-            return doc["cp"], "operator"
-        return None, None
+            return int(v), "profile", None, None, False
+        try:
+            r = self.reads("cp")
+        except Exception:  # noqa: BLE001 - a broken OCR feed falls back to typed
+            r = None
+        live = None
+        if isinstance(r, dict) and _is_int(r.get("value")) and 0 <= r["value"] <= CP_MAX:
+            live = {"value": r["value"], "at": r.get("at"), "source": "ocr"}
+        typed = {"value": doc["cp"], "at": doc["cp_at"]} if doc["cp"] is not None else None
+        p = derived.pick(typed, live, self.clock())
+        if p["value"] is None:
+            return None, None, None, None, False
+        src = "operator" if p["source"] == "typed" else p["source"]
+        return p["value"], src, p["at"], p["age_s"], p["stale"]
 
     def _cap(self, doc):
         return daily_cap(self._cp(doc)[0], self.divisor)
@@ -306,7 +324,20 @@ class ImperialService:
         """Operator-typed contribution points (used while the profile hides CP)."""
         if cp is not None and (not _is_int(cp) or not 0 <= cp <= CP_MAX):
             raise ValueError(f"cp must be null or an int in 0..{CP_MAX}")
-        return self._write(lambda doc: doc.update(cp=cp))
+        at = _iso(self._now()) if cp is not None else None
+        return self._write(lambda doc: doc.update(cp=cp, cp_at=at))
+
+    def typed_overrides(self):
+        """Plan 081: the typed CP while it is the value in force, as an
+        /api/overrides row (a profile or newer OCR read supersedes it)."""
+        with self._lock:
+            doc = self._load(self._day(self._now()))
+        cp, src, at, _, _ = self._cp_row(doc)
+        if src != "operator":
+            return []
+        return [{"key": "imperial.cp", "label": "Contribution points (typed)", "value": cp,
+                 "set_at": at, "reason": "the next CP screenshot supersedes it",
+                 "cards": ["imperial"]}]
 
     def set_mastery(self, arg):
         """{type, pct}: the operator's mastery bonus on imperial payouts."""
@@ -371,7 +402,7 @@ class ImperialService:
         now = self._now()
         with self._lock:
             doc = self._load(self._day(now))
-        cp, cp_src = self._cp(doc)
+        cp, cp_src, cp_at, cp_age, cp_stale = self._cp_row(doc)
         cap = daily_cap(cp, self.divisor)
         nxt = today.next_reset(self.rule, now)
         types = []
@@ -389,7 +420,8 @@ class ImperialService:
         rules = self.data["rules"] if self.data else None
         return {"now": _iso(now), "day": doc["day"],
                 "reset": {"next_utc": _iso(nxt), "left_s": int((nxt - now).total_seconds())},
-                "cp": {"value": cp, "source": cp_src, "typed": doc["cp"]},
+                "cp": {"value": cp, "source": cp_src, "typed": doc["cp"], "at": cp_at,
+                       "age_s": cp_age, "stale": cp_stale},
                 "types": types, "boxes": rows,
                 "best": {t: best_boxes([r for r in rows if r["type"] == t]) for t in TYPES},
                 "rules": None if rules is None else {
