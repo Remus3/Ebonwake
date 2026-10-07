@@ -121,7 +121,7 @@ NEED_RX = re.compile(r"^\d{3}$")
 SKIP_TAGS = (("operator", re.compile(r"^(OPERATOR\b|.*\(physical\))|\bphysical\b|"
                                      r"\bpasswords?\b|\boauth\b|\bper-host\b", re.I)),
              ("other-tree", re.compile(r"^MAIN\b")),
-             ("info", re.compile(r"^(NOTE|INFO)\s*:", re.I)))
+             ("info", re.compile(r"^(NOTE|INFO)\s*[:(]", re.I)))
 STOP = {"the", "and", "for", "from", "with", "per", "via", "tab", "new", "plan", "into",
         "by", "of", "a", "an", "to", "in", "on", "vs"}
 VERIFY_EXTRA = ("--allowedTools",

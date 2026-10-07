@@ -33,6 +33,7 @@ Carried forward (not acted on yet):
 - OPERATOR: set profile.family in config.
 - MAIN to record EW's port block in the registry.
 - NOTE: OCR residual accepted.
+- NOTE (new, operator 2026-10-06): one character, no alts.
 - Fix the OCR cache key so a same-second rewrite is
   re-read.
 
@@ -105,7 +106,7 @@ def test_roadmap_rows_and_flip():
 
 def test_handoff_items_tags():
     items = ew_loop.handoff_items(HANDOFF)
-    assert [i["skip"] for i in items] == ["operator", "operator", "other-tree", "info", None]
+    assert [i["skip"] for i in items] == ["operator", "operator", "other-tree", "info", "info", None]
     assert items[-1]["text"].endswith("rewrite is re-read.")
     assert re.fullmatch(r"H[0-9a-f]{6}", items[-1]["id"])
     # the id is stable across whitespace re-wraps
