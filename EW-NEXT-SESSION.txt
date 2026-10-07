@@ -1,37 +1,37 @@
 EW NEXT SESSION
 ---------------
-SESSION: 11
+SESSION: 12
 
-Next action: watch the loop (ROADMAP 074-086 all merged; deep-dive 0013
-done). Read the inbox, progress/loop.json and loop_items/*.json;
-adjudicate anything in adjudicate / merge-conflict / gave-up /
-failed-dirty (session 10: 080 sat in merge-conflict, fixed by a session
-agent b8fbef8 - check for that pattern every session). Plan 018 at the
+Next action: watch the loop. Hea62ec (portrait NOTE, docs-only edits to
+research 0001/0011) was state `committed` at session 11 /done - confirm it
+merged; if it sits in merge-conflict use the b8fbef8 pattern. Read the
+inbox, progress/loop.json and loop_items/*.json; adjudicate anything in
+adjudicate / merge-conflict / gave-up / failed-dirty. Plan 018 at the
 2026-10-08 maintenance (cap 75): LEVEL_MAX=75 already in
 server/ew/levels.py; confirm the Leveling card after maintenance.
 
 Carried forward (not acted on yet):
-- NOTE (new, operator order 2026-10-06): ZERO-TOUCH. EW self-adjusts from
+- NOTE (operator order 2026-10-06): ZERO-TOUCH. EW self-adjusts from
   the live game; no required toggles or typed entry (a changed setting
   gets forgotten and skews output). Every new plan follows research 0010
   and the plan 079 override ledger (visible badge, auto-expiry, live
   signal supersedes). Settings left after 080: market.vp,
   profile.multi_character.
-- NOTE (new): operator likes the character portrait (082/083/084, research
+- NOTE: operator likes the character portrait (082/083/084, research
   0011); End Game window = optional OCR source for level + class binding
   (084 follow-up, not planned). Operator has no PrtSc key; screenshots via
   a rebound BDO Screenshot key; 24 UI-hidden scenery shots exist for the
   gallery.
-- NOTE (new, operator 2026-10-06): one account, ONE character (the
+- NOTE (operator 2026-10-06): one account, ONE character (the
   Deadeye), no alts, no tag partner. Tag EXP / alt-only warnings do not
   apply; 074's loss warnings should be suppressed for features the
   operator cannot have (no tagged character).
-- NOTE (new): research 0008 data items, no plan: Lv 70+ monster AP / DR and
+- NOTE: research 0008 data items, no plan: Lv 70+ monster AP / DR and
   level-gap DR rows (018 / 023 / 012), HYPERBOOST track seed for 034 once an
   official stage list is read, My Info (P) EXP OCR region for 066.
-- NOTE (new): research 0009 not planned: shared snapshot store (M9),
+- NOTE: research 0009 not planned: shared snapshot store (M9),
   overlay base rows by context (L3); 21 findings, 076-078 cover the H/M ones.
-- NOTE (new): background agents share one scratchpad - give each agent's
+- NOTE: background agents share one scratchpad - give each agent's
   helper scripts a unique name (session 9: one agent's prog.py clobbered
   the other's and wrote the wrong progress file).
 - Scorecard BEFORE/AFTER (MAIN order 0300 section 4): needs the OpenSSF
@@ -86,10 +86,10 @@ Carried forward (not acted on yet):
   self-curating market watch (071), boss schedule drift banner (072),
   signal health digest (073) - play a normal session and note anything that
   still needs a click.
-- NOTE (new): ew/salvage-031 deleted session 7 with git branch -D; 32e8ed5
+- NOTE: ew/salvage-031 deleted session 7 with git branch -D; 32e8ed5
   was NOT an ancestor of main (031 landed as a different commit a808a8c);
   recoverable from the reflog for ~90 days if ever needed.
-- NOTE (new): research 0007 lists Black Desert Foundry / Grumpy Green
+- NOTE: research 0007 lists Black Desert Foundry / Grumpy Green
   wp-json feeds and Steam RSS (app 582660) as clean backup sources;
   bdoplanner robots forbids; garmoth likely bot-challenged - link only.
 - MAIN to record EW's port block 8940-8959 in the machine-wide registry and
@@ -99,7 +99,7 @@ Carried forward (not acted on yet):
 - NOTE: npm install on this box does NOT fetch the Electron binary; after any
   Electron bump run `node node_modules/electron/install.js` in app/ (and in
   lane worktrees).
-- NOTE: GitHub dependabot is configured (npm app/, pip /ci, github-actions);
+- NOTE: GitHub dependabot is configured (PR 2 github-actions bump merged session 11 after update-branch turned its stale ruff red green) (npm app/, pip /ci, github-actions);
   its PRs merge by this tree once ci is green, never auto-merged. Re-check
   the Security tab alert count.
 - NOTE: non-blocking verifier notes: OCR cache key mtime is whole seconds;
@@ -138,35 +138,33 @@ Carried forward (not acted on yet):
 - NOTE: known limit of the 56be70f salvage path: a real leak that
   main's hook refuses lands in merge-conflict and burns up to 2 resolve
   runs before stopping.
+- NOTE: hand-off bullets: write records as `NOTE:`; since 73553e9 the loop
+  also skips `NOTE (...)`, but before it Hdcc881 / H0f5f0d / Hbd9479 /
+  Hea62ec ran NOTE bullets as lane work (Hbd9479 extended 080 settings
+  purge in server/ew/app.py + progress.py, verifier PASS, kept).
+- NOTE: a plain `git pull` merge message carries the repo URL, which the
+  pre-push leak sweep refuses; merge origin/main with an explicit -m.
 
-Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew, HALT absent at
-/done (session 10 set HALT briefly during a manual main merge, cleared).
+Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew, HALT absent.
 State: ops/loop/control/loop_items/*.json, progress/loop.json,
 progress/lane-<i>.json, inbox_status.json. Merge-stuck items are fixed by
 a session agent (merge refs/ew/keep/<id> onto main, keep both sides, mark
-item merged, delete keep ref, push). EW server restarted at /done onto
-0531237 (version read back = HEAD). Restart: stop the server pid from
+item merged, delete keep ref, push). Restart: stop the server pid from
 /api/version, then `python tools/launch.py --server-only`.
 
-Acceptance: loop keeps merging new deep-dive plans with ci green, nothing
-in adjudicate / merge-conflict / gave-up / failed-dirty; 084 card visible
-in the dashboard at default window size.
+Acceptance: loop keeps merging with ci green, nothing in adjudicate /
+merge-conflict / gave-up / failed-dirty; no NOTE bullet dispatched as work.
 
-Do NOT redo: session 10 (2026-10-06/07): research 0010 zero-touch audit
-(plans 079-081), research 0011 portrait UX (082-083), plan 084 larger
-portrait card, research 0012 OCR QA (25 UI-hidden shots, auto-OCR
-partial-file fix c3df83e), 080 merge-conflict fix b8fbef8, headless run
-counter reset 2026-10-06 ~21:00 on operator order (backup in
-ops/runtime/headless_budget.pre-reset-*.json, read back starts=[]). Loop
-merged 074-086 (085/086 from deep-dive 0013). Tag EXP item retracted
-(single character).
+Do NOT redo: session 11 (2026-10-07): loop NOTE-classifier fix 73553e9
+(`NOTE (` now info, test added); dependabot PR 2 merged (read back
+MERGED); server restarted onto 8d5b483 (version read back). Session 10
+items as before: research 0010-0012, plans 079-086, c3df83e, b8fbef8,
+run counter reset 2026-10-06.
 
-In flight: none started by this session. Loop lanes per
-progress/lane-<i>.json.
+In flight: Hea62ec (loop lane data, committed, awaiting loop merge).
 
-Status: main 0531237 pushed, in sync with origin. Gates this /done: pytest
-exit 0, node 693/693, leak sweep ARMED (19). CI: ci 37605042510 + codeql
-37605042515 on 0531237 success. Server health ok, version 0531237. Runs
-39/120 in window. Session jsonl ~1.9 MB.
+Status: main 8d5b483 pushed, in sync with origin. Gates: ruff clean,
+pytest exit 0, node 693/693, leak sweep ARMED (19). CI on 8d5b483: CIRESULT.
+Server health ok, version 8d5b483. Session jsonl ~0.7 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
