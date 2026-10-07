@@ -43,7 +43,7 @@ _DEFAULT = {
                    "notices": {"stale_s": 172800, "bad_s": 172800},
                    "market": {"stale_s": 21600}},
     "hints": {"session_log.silent": "logged in but the session log is silent - "
-                                    "check Settings > paths, then restart the server"},
+                                    "check Settings > Game folders, then restart the server"},
 }
 
 
@@ -92,6 +92,8 @@ def _session_log(s, now, th):
     t = th["session_log"]
     if not s.get("configured"):
         return "warn", "unconfigured", None, "no install folder"
+    if s.get("install_ok") is False:  # plan 077: a set folder that is gone = not set
+        return "warn", "unconfigured", None, "install folder not found"
     if s.get("log_dir_ok") is False:
         return "bad", "log_dir_missing", None, "Log folder not found"
     polled = _age(now, s.get("polled_at"))
@@ -116,6 +118,8 @@ def _session_log(s, now, th):
 def _screenshots(s, now, th):
     if not s.get("configured"):
         return "warn", "unconfigured", None, "no Documents folder"
+    if s.get("documents_ok") is False:  # plan 077: a set folder that is gone = not set
+        return "warn", "unconfigured", None, "Documents folder not found"
     age = _age(now, s.get("last_at"))
     if s.get("dir_ok") is False:
         return "warn", "folder_missing", age, "ScreenShot folder not found"
@@ -190,7 +194,7 @@ def _profile(s, now, th):
 
 def _boss_drift(s, now, th):
     if not s:
-        return "off", "not_built", None, "plan 072 not built"
+        return "off", "not_built", None, "no drift check yet"
     age = _age(now, s.get("checked_at"))
     status = s.get("status")
     if status == "error":

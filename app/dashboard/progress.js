@@ -19,7 +19,7 @@
   const KIND_LABEL = { quest: 'quest', season: 'season', gear: 'gear' };
   const SVGNS = 'http://www.w3.org/2000/svg';
   const S = { data: null, err: null, last: null, timer: null, ui: null, pending: {}, dirty: false, editing: null, hist: null,
-    mounts: null, mountsErr: null };
+    mounts: null, mountsErr: null, signals: null };
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -80,6 +80,10 @@
     getJSON('/api/progress').then(accept, function (e) { S.err = e.message; }).then(function () { draw(); });
     // Plan 041: profile trend sparklines; a failure just leaves them empty.
     getJSON(C.PROFILE_HISTORY_PATH).then(function (h) { S.hist = h; }, function () { S.hist = null; })
+      .then(function () { draw(); });
+    // Plan 077: the signal digest is the one status truth for the profile cards;
+    // a failure falls back to /api/progress alone.
+    getJSON('/api/signals').then(function (s) { S.signals = s; }, function () { S.signals = null; })
       .then(function () { draw(); });
     getJSON('/api/mounts').then(acceptMounts, function (e) { S.mountsErr = e.message; }).then(drawMounts);
   }
@@ -255,9 +259,10 @@
   function drawProfile() {
     const ui = S.ui.profile;
     const prof = S.data ? S.data.profile : undefined;
-    const p = C.profilePill(prof);
+    const p = C.profilePill(prof, S.signals);
     ui.pill.className = 'ew-pill ' + p.cls;
     ui.pill.textContent = p.label;
+    ui.pill.title = p.text || '';
     const body = ui.body;
     body.textContent = '';
     if (!S.data) {
@@ -265,11 +270,11 @@
       return;
     }
     if (p.none) {
-      body.appendChild(el('div', 'ew-muted', 'No family configured. Set profile.family in config/local.json.'));
+      body.appendChild(el('div', 'ew-muted', 'No family configured. Set Settings > Profile > Family name.'));
       return;
     }
-    if (p.off) {  // plan 061: one muted line
-      body.appendChild(el('div', 'ew-muted', C.PROFILE_OFF_TEXT));
+    if (p.off) {  // plan 061: one muted line; plan 077: the signal's hint
+      body.appendChild(el('div', 'ew-muted', p.text || C.PROFILE_OFF_TEXT));
       return;
     }
     if (p.pending) {
@@ -304,12 +309,13 @@
     }
     const v = C.lifeskillView(S.data.lifeskill);
     ui.sub.textContent = v.character || '';
-    if (C.profilePill(S.data.profile).off) {  // plan 061: one muted line
-      body.appendChild(el('div', 'ew-muted', C.PROFILE_OFF_TEXT));
+    const pill = C.profilePill(S.data.profile, S.signals);
+    if (pill.off) {  // plan 061: one muted line; plan 077: same line as the profile card
+      body.appendChild(el('div', 'ew-muted', pill.text || C.PROFILE_OFF_TEXT));
       return;
     }
     if (v.state !== 'ok') {
-      body.appendChild(el('div', 'ew-muted', 'No profile snapshot yet (needs profile.family and one refresh).'));
+      body.appendChild(el('div', 'ew-muted', 'No profile snapshot yet (needs Settings > Profile > Family name and one refresh).'));
       return;
     }
     const dl = el('div', 'ew-kv');

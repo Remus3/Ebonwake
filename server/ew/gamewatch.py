@@ -374,6 +374,9 @@ class GameWatch:
                                         if t is not None), default=None)}
         out["log_dir_ok"] = log_dir is not None and log_dir.is_dir()
         out["shots_dir_ok"] = shot_dir is not None and shot_dir.is_dir()
+        # Plan 077: the parent folders too, so "set but gone" reads as not set.
+        out["install_ok"] = log_dir is not None and log_dir.parent.is_dir()
+        out["documents_ok"] = shot_dir is not None and shot_dir.parent.is_dir()
         return out
 
     def source(self):

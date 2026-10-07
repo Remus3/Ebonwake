@@ -1480,9 +1480,31 @@
     return { ok: true, body: { add_track: { title: title, kind: f.kind, steps: steps } } };
   }
 
+  // Plan 077: one /api/signals row by id (signalRows shape), or null.
+  function signalRow(doc, id) {
+    return signalRows(doc).filter(function (r) { return r.id === id; })[0] || null;
+  }
+
+  // Plan 077: the profile signal row when /api/signals says it is off by design
+  // (no family / no base / robots) - the one status truth for the profile and
+  // Life & CP cards. Label = the hint's lead clause; text = the full hint.
+  function profileSignalOff(signals) {
+    const r = signalRow(signals, 'profile');
+    if (!r || r.level !== 'off') return null;
+    const text = (r.hint || r.detail || 'profile source off').slice(0, 160);
+    return { label: text.split(' - ')[0].slice(0, 48), text: text };
+  }
+
   // /api/progress `profile`: null or status "none" = no family configured;
   // "pending" = upstream is fetching and nothing is cached yet (not an error).
-  function profilePill(profile) {
+  // Plan 077: `signals` (the /api/signals body, optional) wins when its profile
+  // row is off - muted, never a red age pill for an expected-off source.
+  function profilePill(profile, signals) {
+    const sig = profileSignalOff(signals);
+    if (sig) {
+      return { cls: 'unknown', label: sig.label, text: sig.text, stale: true, error: null,
+        none: false, pending: false, off: true, reason: null };
+    }
     if (!plainObject(profile) || profile.status === 'none') {
       return { cls: 'unknown', label: 'no profile', stale: true, error: null, none: true, pending: false };
     }
@@ -6622,6 +6644,8 @@
     parseCharacterForm: parseCharacterForm,
     parseTrackForm: parseTrackForm,
     profilePill: profilePill,
+    profileSignalOff: profileSignalOff,
+    signalRow: signalRow,
     PROFILE_OFF_TEXT: 'Profile source off - set a self-hosted base in Settings',
     validProfileBase: validProfileBase,
     profileRows: profileRows,

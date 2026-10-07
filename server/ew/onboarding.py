@@ -11,35 +11,41 @@ Plan 065: steps tick themselves from detection and data - the auto-detected
 BDO folders (server/ew/detect.py; explicit config still wins), an overlay
 corner left at its default, a plan 071 auto-seeded watch item - and the card
 hides once every step left is optional.
+
+Plan 077: the `log` and `screenshots` steps read the plan 073 signal digest
+(`signals.py`) - the live `/api/signals` rows when wired, else the same
+classifier over the resolved folders - so Get started, Settings and Signal
+health tell one story. A found parent folder whose Log / ScreenShot subfolder
+does not exist yet is an in-game act with no link (nothing to set).
 """
 
 import datetime as _dt
 import json
-import os
 import threading
 import time
 from pathlib import Path
 
-from . import detect, leveling, settings
+from . import detect, leveling, settings, signals
 
 MIN_WATCH = 3
 
 # id, title, hint, link {tab, field?}, optional; list order is the display order.
 # Optional steps happen through normal use; they never keep the card up alone.
+# Hints name Settings labels (group > field), never config keys (plan 077).
 STEPS = (
     ("family", "Set your family name",
-     "Settings > profile.family turns on the profile card (BDO-REST-API).",
+     "Settings > Profile > Family name turns on the profile card (BDO-REST-API).",
      {"tab": "settings", "field": "profile.family"}, False),
     ("log", "Point EW at the BDO install folder",
-     "Not found in a Steam library: Settings > bdo.install_dir (its Log folder "
-     "tells EW the game is running).",
+     "Not found in a Steam library: Settings > Game folders > BDO install folder "
+     "(its Log folder tells EW the game is running).",
      {"tab": "settings", "field": "bdo.install_dir"}, False),
     ("screenshots", "Point EW at the BDO Documents folder",
-     "Not found under Documents: Settings > bdo.documents_dir (its ScreenShot folder "
-     "feeds OCR).",
+     "Not found under Documents: Settings > Game folders > BDO Documents folder "
+     "(its ScreenShot folder feeds OCR).",
      {"tab": "settings", "field": "bdo.documents_dir"}, False),
     ("overlay", "Choose an overlay corner",
-     "Settings > overlay.anchor picks where the overlay sits.",
+     "Settings > Overlay > Anchor picks where the overlay sits.",
      {"tab": "settings", "field": "overlay.anchor"}, False),
     ("watch", f"Watch {MIN_WATCH} market items",
      "Market > add items to price-watch.",
@@ -51,6 +57,19 @@ STEPS = (
      "Progress > type your level and percent for the ETA.",
      {"tab": "progress"}, True),
 )
+
+# Plan 077: the digest row behind each folder step. Reason `unset` keeps the
+# static step (Settings link); reason `subfolder` swaps in the in-game act with
+# no link; any other row (ok, game closed, stalled watcher) means the folder is
+# there and the step is done.
+FOLDER_STEPS = {
+    "log": {"row": "session_log", "unset": "unconfigured", "subfolder": "log_dir_missing",
+            "title": "Start the game once",
+            "hint": "Install folder found - launch BDO once; EW reads the Log folder it creates."},
+    "screenshots": {"row": "screenshots", "unset": "unconfigured", "subfolder": "folder_missing",
+                    "title": "Take one screenshot in game",
+                    "hint": "Take one screenshot in game - EW reads the folder it creates."},
+}
 
 
 def _iso(ts):
@@ -86,29 +105,36 @@ def _is_dir(p):
         return False
 
 
-def _detected_dir(paths, key):
-    """A detected folder that still exists: detection already proved it (Steam's
-    manifest / a Black Desert marker), so Log / ScreenShot may appear later."""
-    p = _dir_value(paths[key])
-    return paths["source"][key] == "detected" and p is not None and _is_dir(p)
+def _folder_inputs(paths):
+    """The digest's folder inputs from the resolved folders (stat only), the same
+    shape gamewatch.health() feeds it; used when no live digest is wired."""
+    inst, docs = _dir_value(paths["install_dir"]), _dir_value(paths["documents_dir"])
+    return {"session_log": {"configured": inst is not None,
+                            "install_ok": inst is not None and _is_dir(inst),
+                            "log_dir_ok": inst is not None and _is_dir(inst / "Log")},
+            "screenshots": {"configured": docs is not None,
+                            "documents_ok": docs is not None and _is_dir(docs),
+                            "dir_ok": docs is not None and _is_dir(docs / "ScreenShot")}}
 
 
-def _has_log_dir(paths):
-    inst = _dir_value(paths["install_dir"])
-    return inst is not None and (_is_dir(inst / "Log") or _detected_dir(paths, "install_dir"))
+def _digest_rows(digest):
+    rows = digest.get("rows") if isinstance(digest, dict) else None
+    if not isinstance(rows, list):
+        return {}
+    return {r["id"]: r for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str)}
 
 
-def _has_shot_dir(paths):
-    docs = _dir_value(paths["documents_dir"])
-    if docs is None:
-        return False
-    if _detected_dir(paths, "documents_dir"):
-        return True
-    try:
-        with os.scandir(docs / "ScreenShot"):
-            return True
-    except OSError:
-        return False
+def _folder_step(sid, row):
+    """(done, title, hint, link) for a folder step from its digest row; None
+    keeps the static open step (folder unset, or the row is unreadable)."""
+    spec = FOLDER_STEPS[sid]
+    reason = row.get("reason") if isinstance(row, dict) else None
+    if not isinstance(row, dict) or row.get("level") not in signals.LEVELS \
+            or (row.get("level") != "ok" and reason is None) or reason == spec["unset"]:
+        return None
+    if reason == spec["subfolder"]:
+        return False, spec["title"], spec["hint"], None
+    return True, None, None, None
 
 
 def _has_anchor(doc):
@@ -141,19 +167,31 @@ def _dismissed(store):
     return v if isinstance(v, str) and v else None
 
 
-def status(root, store, config_path=None, detected=None):
+def status(root, store, config_path=None, detected=None, digest=None):
     """Ordered steps + totals. `root` is the repo root (config/local.json under
     it) unless `config_path` names the file; `detected` is plan 065's
-    {"install_dir", "documents_dir"} (explicit config wins per key)."""
+    {"install_dir", "documents_dir"} (explicit config wins per key); `digest` is
+    the plan 073 `/api/signals` body (plan 077; rows it lacks are classified here)."""
     doc = _read_config(config_path or Path(root) / "config" / "local.json")
-    paths = detect.resolve(_section(doc, "bdo"), detected)
-    done = {"family": _has_family(doc), "log": _has_log_dir(paths),
-            "screenshots": _has_shot_dir(paths), "overlay": _has_anchor(doc),
+    rows = _digest_rows(digest)
+    if any(spec["row"] not in rows for spec in FOLDER_STEPS.values()):
+        paths = detect.resolve(_section(doc, "bdo"), detected)
+        local = _digest_rows(signals.digest(_folder_inputs(paths), time.time()))
+        rows = dict(local, **rows)
+    done = {"family": _has_family(doc), "overlay": _has_anchor(doc),
             "watch": _watching(store), "daily": _ticked_daily(store),
             "leveling": _has_sample(store)}
-    steps = [{"id": sid, "title": title, "hint": hint, "link": dict(link), "done": done[sid],
-              "optional": optional}
-             for sid, title, hint, link, optional in STEPS]
+    steps = []
+    for sid, title, hint, link, optional in STEPS:
+        step = {"id": sid, "title": title, "hint": hint, "link": dict(link),
+                "done": done.get(sid, False), "optional": optional}
+        if sid in FOLDER_STEPS:
+            over = _folder_step(sid, rows.get(FOLDER_STEPS[sid]["row"]))
+            if over is not None:
+                step["done"] = over[0]
+                if not over[0]:
+                    step.update(title=over[1], hint=over[2], link=over[3])
+        steps.append(step)
     n = sum(1 for s in steps if s["done"])
     when = _dismissed(store)
     complete = n == len(steps)
@@ -171,11 +209,12 @@ def _check_true(arg, op):
 class OnboardingService:
     """GET /api/onboarding body; POST {"dismiss": true} | {"restore": true}."""
 
-    def __init__(self, store, config_path, clock=time.time, detected=None):
+    def __init__(self, store, config_path, clock=time.time, detected=None, signals=None):
         self.store = store
         self.config_path = Path(config_path)
         self.clock = clock
         self.detected = detected  # plan 065: callable -> detect.Detector.paths()
+        self.signals = signals  # plan 077: callable -> the /api/signals body
         self._lock = threading.Lock()
 
     def view(self):
@@ -183,8 +222,12 @@ class OnboardingService:
             found = self.detected() if self.detected is not None else None
         except Exception:  # noqa: BLE001 - a detector fault reads as "nothing detected"
             found = None
+        try:
+            dig = self.signals() if self.signals is not None else None
+        except Exception:  # noqa: BLE001 - a digest fault falls back to the folders
+            dig = None
         return status(self.config_path.parent.parent, self.store, config_path=self.config_path,
-                      detected=found)
+                      detected=found, digest=dig)
 
     def dismiss(self, arg):
         _check_true(arg, "dismiss")

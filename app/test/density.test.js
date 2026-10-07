@@ -182,3 +182,56 @@ test('delete buttons carry an aria-label; hot-list rows are buttons', () => {
   assert.match(hot, /el\('button', 'ew-mrow/);
   assert.match(hot, /\.type = 'button'/);
 });
+
+// ---- plan 077: stale / expired text contrast ----
+
+function cssBlock(css, sel) {
+  const i = css.indexOf(sel + ' {');
+  assert.ok(i >= 0, 'missing ' + sel);
+  return css.slice(i, css.indexOf('}', i));
+}
+
+function hexToken(blk, name) {
+  const m = blk.match(new RegExp(name + ':\\s*(#[0-9a-fA-F]{6})'));
+  assert.ok(m, name);
+  return [1, 3, 5].map((k) => parseInt(m[1].slice(k, k + 2), 16));
+}
+
+function lum(rgb) {
+  const c = rgb.map((v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
+
+// WCAG ratio of fg drawn at `alpha` over bg (opacity blends toward the surface).
+function contrast(fg, bg, alpha) {
+  const mix = fg.map((v, k) => alpha * v + (1 - alpha) * bg[k]);
+  const a = lum(mix);
+  const b = lum(bg);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+test('contrast helper: black on white is 21, same colour is 1', () => {
+  assert.strictEqual(Math.round(contrast([0, 0, 0], [255, 255, 255], 1)), 21);
+  assert.strictEqual(contrast([90, 90, 90], [90, 90, 90], 1), 1);
+});
+
+test('stale and expired text keep 4.5:1 on --fk-surface-2 in light and dark', () => {
+  const tokens = fs.readFileSync(path.join(APP, '..', 'ops', 'fleet_kit', 'tokens.css'), 'utf8');
+  const css = read('shared/ew.css');
+  const themes = { light: cssBlock(tokens, ':root'), dark: cssBlock(tokens, ':root[data-theme="dark"]') };
+  for (const sel of ['.ew-stale', '.ew-erow.expired']) {
+    const rule = cssBlock(css, sel);
+    assert.match(rule, /color: var\(--fk-text-muted\)/, sel);
+    const alpha = Number((rule.match(/opacity:\s*([.\d]+)/) || [0, 1])[1]);
+    assert.ok(alpha >= 0.85, sel + ' opacity ' + alpha);
+    for (const [name, blk] of Object.entries(themes)) {
+      const ratio = contrast(hexToken(blk, '--fk-text-muted'), hexToken(blk, '--fk-surface-2'), alpha);
+      assert.ok(ratio >= 4.5, sel + ' ' + name + ' ' + ratio.toFixed(2));
+    }
+  }
+  assert.match(css, /\.ew-list\.ew-stale::before \{ content: "stale"/);  // text, not fade alone
+  assert.strictEqual(C.fmtLeft(0), 'ended');  // an expired row's clock reads "ended"
+});

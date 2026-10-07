@@ -101,6 +101,91 @@ def test_screenshot_folder_readable(tmp_path):
     assert _done(svc.view())["log"] is False  # independent steps
 
 
+# ---- plan 077: folder steps from the signal digest ----
+
+def _step(view, sid):
+    return next(s for s in view["steps"] if s["id"] == sid)
+
+
+@pytest.mark.parametrize("sid,key,sub", [("screenshots", "documents_dir", "ScreenShot"),
+                                         ("log", "install_dir", "Log")])
+def test_folder_step_three_states(tmp_path, sid, key, sub):
+    parent = tmp_path / "parent"
+    # unset -> the Settings field link
+    s = _step(_svc(tmp_path)[0].view(), sid)
+    assert s["done"] is False and s["link"] == {"tab": "settings", "field": "bdo." + key}
+    assert "Settings > Game folders" in s["hint"] and "bdo." not in s["hint"]
+    # set but the folder itself is gone -> still a Settings fix
+    s = _step(_svc(tmp_path, {"bdo": {key: str(parent)}})[0].view(), sid)
+    assert s["done"] is False and s["link"]["field"] == "bdo." + key
+    # found, no subfolder yet -> an in-game act, no link (nothing to set)
+    parent.mkdir()
+    svc, _, _ = _svc(tmp_path, {"bdo": {key: str(parent)}})
+    s = _step(svc.view(), sid)
+    assert s["done"] is False and s["link"] is None
+    assert s["title"] == onboarding.FOLDER_STEPS[sid]["title"]
+    assert s["hint"] == onboarding.FOLDER_STEPS[sid]["hint"]
+    # subfolder present -> done
+    (parent / sub).mkdir()
+    assert _step(svc.view(), sid)["done"] is True
+
+
+def test_detected_documents_without_screenshot_is_the_screenshot_act(tmp_path):
+    """The 0009 live state: Documents auto-detected, no ScreenShot folder yet."""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    v = onboarding.status(tmp_path, Store(tmp_path / "store"), config_path=_cfg(tmp_path, {}),
+                          detected={"install_dir": None, "documents_dir": str(docs)})
+    s = _step(v, "screenshots")
+    assert s["done"] is False and s["link"] is None
+    assert s["hint"].startswith("Take one screenshot in game")
+    assert v["show"] is True
+
+
+def _digest(**levels):
+    from server.ew import signals
+    rows = {"session_log": {"configured": False}, "screenshots": {"configured": False}}
+    rows.update(levels)
+    return signals.digest(rows, T0)
+
+
+def test_live_digest_wins_over_the_folders(tmp_path):
+    cfg = _cfg(tmp_path, {})
+    store = Store(tmp_path / "store")
+    dig = _digest(screenshots={"configured": True, "documents_ok": True, "dir_ok": False,
+                               "state": "not_running"},
+                  session_log={"configured": True, "install_ok": True, "log_dir_ok": True,
+                               "state": "not_running", "polled_at": T0})
+    svc = onboarding.OnboardingService(store, cfg, clock=lambda: T0, signals=lambda: dig)
+    v = svc.view()
+    assert _step(v, "log")["done"] is True  # nothing on disk: the digest is the truth
+    s = _step(v, "screenshots")
+    assert s["done"] is False and s["link"] is None
+
+
+@pytest.mark.parametrize("bad", [None, "junk", {"rows": "x"}, {"rows": [{"id": "screenshots"}]}])
+def test_unreadable_digest_falls_back_to_the_folders(tmp_path, bad):
+    docs = tmp_path / "docs"
+    (docs / "ScreenShot").mkdir(parents=True)
+    cfg = _cfg(tmp_path, {"bdo": {"documents_dir": str(docs)}})
+    svc = onboarding.OnboardingService(Store(tmp_path / "store"), cfg, signals=lambda: bad)
+    s = _step(svc.view(), "screenshots")
+    if bad == {"rows": [{"id": "screenshots"}]}:  # a row with no level keeps the static step
+        assert s["done"] is False and s["link"]["field"] == "bdo.documents_dir"
+    else:
+        assert s["done"] is True
+
+    def boom():
+        raise RuntimeError("x")
+    svc.signals = boom
+    assert _step(svc.view(), "screenshots")["done"] is True
+
+
+def test_no_step_hint_names_a_config_key(tmp_path):
+    for _, _, hint, _, _ in onboarding.STEPS:
+        assert "bdo." not in hint and "profile.family" not in hint and "overlay.anchor" not in hint
+
+
 @pytest.mark.parametrize("anchor,ok", [("tr", True), ("ml", True), ({"x": 10, "y": 20}, True),
                                       ("zz", False), (None, False), ({"x": 1}, False)])
 def test_overlay_anchor_key_present_and_valid(tmp_path, anchor, ok):

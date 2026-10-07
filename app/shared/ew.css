@@ -80,7 +80,10 @@ html, body {
 .ew-mrow.sel { box-shadow: inset 2px 0 0 var(--fk-accent); }
 .ew-mname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ew-mprice { font-family: var(--ew-mono); }
-.ew-stale { color: var(--fk-text-muted); opacity: .7; }
+/* Plan 077: muted at opacity .9 keeps 4.5:1 on --fk-surface-2 in both themes
+   (.85 is 4.3:1 in light), and a stale list says so in text, not by fade alone. */
+.ew-stale { color: var(--fk-text-muted); opacity: .9; }
+.ew-list.ew-stale::before { content: "stale"; color: var(--fk-text-muted); }
 .ew-err { color: var(--fk-status-bad); font-size: 12px; margin-bottom: 4px; }
 .ew-drift { color: var(--fk-status-warn); font-size: 12px; margin-bottom: 4px; } /* plan 072 */
 .ew-drift ul { margin: 2px 0 0 16px; padding: 0; }
@@ -283,7 +286,7 @@ html, body {
 .ew-erow.soon .ew-mprice::before, .ew-hrow.warn .ew-hval::before { content: "\23F1  "; }
 .ew-hrow.bad .ew-hval::before { content: "! "; }
 .ew-erow.done .ew-ecode, .ew-erow.done .ew-ehead .ew-mname { color: var(--fk-text-muted); text-decoration: line-through; }
-.ew-erow.expired { opacity: .55; }
+.ew-erow.expired { color: var(--fk-text-muted); opacity: .9; } /* plan 077: its clock reads "ended" */
 .ew-srcrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 2px 4px; }
 .ew-srctxt { min-width: 0; }
 .ew-srcurl { user-select: all; }
