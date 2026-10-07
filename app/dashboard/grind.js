@@ -343,7 +343,7 @@
     const body = ui.logBody;
     body.textContent = '';
     const list = S.data ? S.data.sessions.filter(function (s) { return s && typeof s === 'object'; }) : [];
-    ui.logPill.textContent = S.data ? list.length + ' sessions' : '-';
+    ui.logPill.textContent = S.data ? C.zeroPill(list.length, 'session', 'sessions') : '-';
     if (!S.data) { body.appendChild(el('div', 'ew-muted', S.err ? S.err : 'loading...')); return; }
     if (!list.length) { body.appendChild(el('div', 'ew-muted', 'Log a grind to see silver/h.')); return; }
     const box = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));

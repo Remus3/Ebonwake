@@ -143,6 +143,15 @@ test('serverRows: commit, started, pid, uptime, outdated flag', () => {
   assert.match(rows.outdated, /^yes/);
   assert.strictEqual(rows.uptime, '2h 05m');
   assert.strictEqual(rows.pid, '4242');
+  // Plan 078: started in local time, the stored UTC on hover.
+  const st = C.serverRows(v, null, 'x', NOW).find((r) => r[0] === 'started');
+  assert.strictEqual(st[1], C.fmtLocal(v.started).text);
+  assert.strictEqual(st[2], C.fmtLocal(v.started).title);
+  const pt = C.serverRows({ started: '2026-10-05T03:04:05+00:00' }, null, 'x', NOW, { zone: 'pt' })
+    .find((r) => r[0] === 'started');
+  assert.deepStrictEqual(pt, ['started', '2026-10-04 20:04', 'UTC 2026-10-05 03:04']);
+  const odd = C.serverRows({ started: 'junk' }, null, 'x', NOW).find((r) => r[0] === 'started');
+  assert.deepStrictEqual(odd, ['started', 'junk']);
   const none = Object.fromEntries(C.serverRows(null, null, 'unknown', NOW));
   assert.strictEqual(none.status, 'no answer');
   assert.strictEqual(none.outdated, 'no');

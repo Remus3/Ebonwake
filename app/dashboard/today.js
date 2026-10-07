@@ -201,6 +201,15 @@
     });
   }
 
+  // Plan 078: a custom reset countdown in local time, the stored UTC rule on
+  // hover (the UTC text if the local view cannot be built).
+  function resetText(r, now) {
+    const v = C.resetCountdownView(r.rule, now);
+    const text = v ? v.text : C.fmtResetCountdown(r.rule, now);
+    if (r.el.textContent !== text) r.el.textContent = text;
+    r.el.title = v ? v.title : '';
+  }
+
   // r = { ev } (read-only Events-tab row) or { it, kind, pending, err }.
   function listRow(r) {
     if (r.ev) {
@@ -219,8 +228,9 @@
     if (r.kind === 'event') {
       extra = el('span', 'ew-muted ew-tdays', C.fmtDaysLeft(it.days_left));
     } else if (it.reset) {
-      extra = el('span', 'ew-muted ew-tdays', C.fmtResetCountdown(it.reset, Date.now()));
+      extra = el('span', 'ew-muted ew-tdays', '');
       live = { el: extra, rule: it.reset };
+      resetText(live, Date.now());
     }
     if (r.dice) { // plan 056: a suggestion only; the operator ticks
       const box = el('span', null, '');
@@ -362,7 +372,7 @@
     if (!ui) return;
     ui.daily.clock.textContent = 'reset ' + C.fmtDuration(C.nextDailyReset(now) - now);
     ui.weekly.clock.textContent = 'reset ' + C.fmtDuration(C.nextWeeklyReset(now) - now);
-    S.resetEls.forEach(function (r) { r.el.textContent = C.fmtResetCountdown(r.rule, now); });
+    S.resetEls.forEach(function (r) { resetText(r, now); });
     const left = {};
     C.eventsThisWeek(S.ev, S.evAt, now).forEach(function (ev) { left[ev.id] = ev.left_s; });
     S.evEls.forEach(function (r) { r.el.textContent = r.id in left ? C.fmtLeft(left[r.id]) : 'ended'; });

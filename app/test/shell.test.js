@@ -77,6 +77,63 @@ test('appCommit is read-only; restart is one allowlisted, sender-checked IPC', (
   assert.match(read('dashboard/index.html'), /id="server-restart"[^>]*hidden/);
 });
 
+// ---- Plan 078 ----
+
+test('plan 078: a Ctrl+K button in the top bar opens the palette, title lists the verbs', () => {
+  const C = require('../shared/ewcore');
+  const html = read('dashboard/index.html');
+  assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1">/);
+  const top = html.slice(html.indexOf('<header class="ew-top">'), html.indexOf('</header>'));
+  assert.match(top, /<button class="ew-btn ew-palbtn" id="palette-open" type="button"[^>]*>Ctrl\+K<\/button>/);
+  assert.ok(top.indexOf('id="palette-open"') < top.indexOf('id="server-pill"'), 'button before the pill');
+  assert.ok(html.indexOf('src="palette.js"') < html.indexOf('src="dashboard.js"'));
+  const d = read('dashboard/dashboard.js');
+  assert.match(d, /getElementById\('palette-open'\)/);
+  assert.match(d, /window\.EWPalette\.open\(\)/);
+  assert.match(d, /\.title = C\.paletteTitle\(\)/);
+  const t = C.paletteTitle();
+  for (const v of ['tick', 'arm', 'start grind', 'stop grind', 'log xp', 'watch', 'go']) assert.ok(t.indexOf(v) >= 0, v);
+  assert.match(t, /^Command palette \(Ctrl\+K\): /);
+  assert.match(t, /\/ to search$/);
+  // The palette's own open() is what the button calls (exported, no new hotkey).
+  const p = read('dashboard/palette.js');
+  assert.match(p, /window\.EWPalette = \{ open: open, close: close \}/);
+  assert.doesNotMatch(d + p, /globalShortcut/);
+});
+
+test('plan 078: tab strip scrolls instead of clipping; badges and pill never wrap; .ew-jump outline', () => {
+  const css = read('shared/ew.css');
+  const rule = (sel) => {
+    const m = new RegExp('(^|\\n)' + sel.replace(/[.[\]"=-]/g, '\\$&') + '\\s*\\{([^}]*)\\}').exec(css);
+    return m ? m[2] : '';
+  };
+  // A space class after the colon would read as a drive path to the leak sweep.
+  assert.match(rule('.ew-tabs'), /overflow-x: *auto/);
+  assert.match(rule('.ew-tabs'), /min-width: *0/);
+  assert.match(rule('.ew-tab'), /white-space: *nowrap/);
+  assert.match(rule('.ew-tab'), /flex-shrink: *0/);
+  assert.match(rule('.ew-tab-badge'), /white-space: *nowrap/);
+  assert.match(rule('.ew-top > .ew-pill'), /flex-shrink: *0/);
+  assert.match(rule('.ew-top > .ew-pill'), /white-space: *nowrap/);
+  assert.match(rule('.ew-pill:empty'), /display: *none/);
+  // One meaning per class: .ew-hit is the market search row, .ew-jump the palette outline.
+  assert.strictEqual((css.match(/^\.ew-hit\s*\{/gm) || []).length, 1);
+  assert.match(rule('.ew-jump'), /outline:/);
+  const p = read('dashboard/palette.js');
+  assert.match(p, /classList\.add\('ew-jump'\)/);
+  assert.doesNotMatch(p, /ew-hit\b/);
+});
+
+test('plan 078: zero pills on Grind and Events, Events Add card last', () => {
+  const g = read('dashboard/grind.js');
+  const e = read('dashboard/events.js');
+  assert.match(g, /C\.zeroPill\(list\.length, 'session', 'sessions'\)/);
+  assert.match(e, /C\.zeroPill\(open, 'open'\)/);
+  assert.match(e, /C\.zeroPill\(list\.length, 'item', 'items'\)/);
+  assert.doesNotMatch(g + e, /\+ ' sessions'|\+ ' open'|\+ ' items'/);
+  assert.match(e, /\[cp, sg, ev, sn, src, a\]\.forEach/);
+});
+
 // ---- Plan 026 ----
 
 test('ew:notify is the one new allowlisted channel: sender-checked, validated, rate-limited', () => {

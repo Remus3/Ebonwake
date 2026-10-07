@@ -65,6 +65,50 @@ existing in-window palette (no global hotkey, nothing reaches the game).
 
 Depends on: 030, 048, 050, 067.
 
+## As-built deviations
+
+1. Manual booleans kept as hidden fields. Decision: `overlay.widgets.*`
+   stay in `SETTINGS_GROUPS` with `hidden: true` (allowlisted, validated,
+   human labels) and `C.settingsRows(g)` drops them from the form.
+   Alternatives: delete the fields client-side (breaks the client / server
+   allowlist parity test and the bridge would refuse a key the server still
+   accepts). Why: plan 080 owns removing the keys on both sides at once.
+   Reverses if: plan 080 lands (it deletes the hidden fields).
+2. Overlay group order: the 9 widget rows lead, then anchor / display /
+   scale / opacity / context / idle. Alternatives: rows after the overlay
+   settings (the old order). Why: the acceptance lists the widget rows
+   first and they are the most-changed control. Reverses if: operator QA
+   asks for the old order.
+3. `zeroPill(n, one, many)` does not call `countText`; it shares its zero
+   state ('' at zero / junk) but prints 'n noun', not 'done/total'.
+   Alternatives: `countText(n, n, noun)` ('3/3 sessions', wrong shape).
+   Why: the pill is a count, not a ratio. Empty pills are hidden by CSS
+   `.ew-pill:empty`. Reverses if: never (shape fix only).
+4. Effective maintenance start in local time: shown beside the Settings
+   `HH:MM UTC` field only when a start is stored (`C.settingLocalNote`,
+   via `utcClockIn` - it is a clock, not a timestamp, so `fmtLocal` does
+   not apply). Blank shows the existing 'default blank' note. Alternatives:
+   mirror the server's default slot (07:00 UTC) in the client (a second copy
+   that drifts) or add the slot to GET /api/settings (server scope growth
+   for a field plan 080 deletes). Reverses if: plan 080 moves the slot to
+   a read-only display, which should use `C.settingLocalNote`'s shape.
+5. Custom reset rows: `C.resetCountdownView` shows the zone's weekday and
+   HH:MM of the NEXT reset instant (DST-correct), UTC rule on hover; the
+   old `fmtResetCountdown` stays as the fallback and for preset labels
+   (presets feed the existing UTC entry fields). Reverses if: the reset
+   entry moves to local time.
+6. Onboarding hints: the server keeps citing config keys; the client maps
+   them through `C.labelHint` (LABELS) in `onboardingRows`. Alternatives:
+   edit `server/ew/onboarding.py` strings. Why: one label table, and the
+   `link.field` keys stay machine-readable. Reverses if: the server grows a
+   label table of its own.
+7. Self-test top bar: `selftest.js` resizes the dashboard to 960 px content
+   width and zoom 1.3, measures the server pill and top-bar overflow, then
+   restores size and zoom; `res.ok` fails on a clipped pill. Reverses if:
+   the minimum window or `UI_SCALE` max changes (update `TOPBAR_SIZE`).
+8. The notification group has 10 rules (plan 075 added loginRisk, 074
+   maintLoss), not 8; all 10 have labels.
+
 Dependency guard: before writing code the lane checks that
 `app/dashboard/settings.js` (plan 030), `app/dashboard/palette.js` (plan
 050) and `server/ew/context.py` (plan 067) exist. If any is missing, the

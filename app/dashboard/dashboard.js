@@ -223,7 +223,9 @@
       sv.textContent = '';
       C.serverRows(H.version, H.health, appCommit, now).forEach(function (r) {
         sv.appendChild(el('span', 'ew-muted', r[0]));
-        sv.appendChild(el('span', null, r[1]));
+        const val = el('span', null, r[1]);
+        if (r[2]) val.title = r[2]; // plan 078: local time shown, UTC on hover
+        sv.appendChild(val);
       });
     }
     const fr = document.getElementById('sys-fresh');
@@ -360,6 +362,12 @@
 
   const rb = document.getElementById('server-restart');
   if (rb) rb.addEventListener('click', restart);
+  // Plan 078: the palette (plan 050, Ctrl+K in this window) gets a visible button.
+  const pb = document.getElementById('palette-open');
+  if (pb) {
+    pb.title = C.paletteTitle();
+    pb.addEventListener('click', function () { if (window.EWPalette) window.EWPalette.open(); });
+  }
   document.addEventListener('keydown', onKey);
   // Timers skip while hidden (C.pollPaused); coming back re-shows the tab.
   document.addEventListener('visibilitychange', function () { if (!document.hidden) select(); });

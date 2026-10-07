@@ -19,6 +19,8 @@ import threading
 import time
 from pathlib import Path
 
+from .settings import WIDGETS as WIDGET_DEFAULTS
+
 DATA = Path(__file__).resolve().parent / "data" / "overlay_contexts.json"
 CONTEXTS = ("closed", "maint_soon", "boss_soon", "reset_soon", "hot_time", "idle", "in_game")
 # Lead times in minutes (plan 067 item 1).
@@ -139,9 +141,16 @@ def pick_widgets(rules, contexts, modes=None):
     return out, False
 
 
+def _manual_on(v, w):
+    """Plan 078: the renderer's overlayWidgets semantics - a stored bool wins,
+    anything else (missing, junk) is the widget's plan 030 default."""
+    return v if isinstance(v, bool) else WIDGET_DEFAULTS.get(w, False) is True
+
+
 def derive(sig, now, prefs, rules):
     """Overlay context payload. `prefs`: {auto, idle_min, modes, manual} -
-    `manual` is the plan 030 widget booleans used when auto is off."""
+    `manual` is the plan 030 widget booleans used when auto is off (a missing
+    one is that widget's default, plan 078)."""
     active = active_contexts(sig, now, prefs.get("idle_min", IDLE_MIN))
     order = [c for c in rules["priority"] if c in active]
     auto = prefs.get("auto", True) is not False
@@ -149,7 +158,7 @@ def derive(sig, now, prefs, rules):
         widgets, hidden = pick_widgets(rules, active, prefs.get("modes"))
     else:
         manual = prefs.get("manual") or {}
-        widgets, hidden = [w for w in WIDGETS if manual.get(w) is True], False
+        widgets, hidden = [w for w in WIDGETS if _manual_on(manual.get(w), w)], False
     ms = _ts(sig.get("maint_start"))
     return {"context": order[0] if order else "in_game", "active": order,
             "widgets": widgets, "hidden": hidden, "auto": auto,
@@ -167,7 +176,7 @@ def prefs_from_settings(s):
     return {"auto": s.get("overlay.auto", True) is not False,
             "idle_min": s.get("overlay.idle_min", IDLE_MIN),
             "modes": {w: s.get(f"overlay.mode.{w}", "auto") for w in WIDGETS},
-            "manual": {w: s.get(f"overlay.widgets.{w}") is True for w in WIDGETS}}
+            "manual": {w: _manual_on(s.get(f"overlay.widgets.{w}"), w) for w in WIDGETS}}
 
 
 def last_activity(game_view):

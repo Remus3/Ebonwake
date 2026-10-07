@@ -183,7 +183,7 @@
     const body = ui.couponBody;
     body.textContent = '';
     const open = list.filter(function (r) { return r.status !== 'done' && r.status !== 'expired'; }).length;
-    ui.couponPill.textContent = S.data ? open + ' open' : '-';
+    ui.couponPill.textContent = S.data ? C.zeroPill(open, 'open') : '-';
     if (!list.length) { empty(body, 'No coupons yet.'); return; }
     const box = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
     list.forEach(function (r) {
@@ -341,7 +341,7 @@
     const dls = deadlines();
     const ld = C.loginDays(S.data && S.data.login_days);
     const soon = list.filter(function (r) { return r.soon; }).length + dls.length;
-    ui.eventPill.textContent = S.data ? (soon ? soon + ' ending soon' : list.length + ' items') : '-';
+    ui.eventPill.textContent = S.data ? (soon ? soon + ' ending soon' : C.zeroPill(list.length, 'item', 'items')) : '-';
     ui.eventPill.className = 'ew-pill ' + (soon ? 'warn' : 'unknown');
     if (!list.length && !dls.length) { empty(body, 'No events or drops yet.'); return; }
     const box = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
@@ -560,7 +560,8 @@
     const sn = card('Suggested events');
     const src = card('Sources');
     src.pill.textContent = 'official';
-    [a, cp, sg, ev, sn, src].forEach(function (x) { panel.appendChild(x.card); });
+    // Plan 078: the Add card goes last (lists first, typing is the fallback).
+    [cp, sg, ev, sn, src, a].forEach(function (x) { panel.appendChild(x.card); });
     S.ui = {
       form: a.form, msg: a.msg, err: a.err,
       couponBody: cp.body, couponPill: cp.pill, suggestBody: sg.body, suggestPill: sg.pill,
