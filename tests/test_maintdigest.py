@@ -118,7 +118,9 @@ def test_detail_cache_keeps_loss_and_old_entries_are_stale_once(tmp_path):
     assert client._stale(notice, c, 2.0) is True
     fresh = eventnotices._clean_detail(dict(cached, loss=[TAG], parse_v=maintdigest.PARSE_V))
     assert fresh["loss"] == [TAG] and client._stale(notice, fresh, 2.0) is False
-    assert client._stale({"title": "[Event] Plain", "stamp": None}, c, 2.0) is False
+    # plan 086 (parse_v 3: claim windows) re-reads any older entry once, event or not
+    assert client._stale({"title": "[Event] Plain", "stamp": None}, c, 2.0) is True
+    assert client._stale({"title": "[Event] Plain", "stamp": None}, fresh, 2.0) is False
     bad = eventnotices._clean_detail(dict(cached, loss=["caf" + chr(0xe9), 5, "x" * 300, TAG]))
     assert bad["loss"] == [TAG]
 

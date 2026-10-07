@@ -55,3 +55,52 @@ game input, no memory read, no client file. EW tells the operator; the
 operator opens Mail / Safe in game.
 
 Depends on: 064, 069.
+
+## As-built deviations
+
+Self-adjudicated in the build lane (operator standing order 6).
+
+1. claimDue toast is ON, not opt-in default off.
+   Decision: `claimDue` joins NOTIFY_RULES with `defaultOn: true`, one T-24 h
+   toast per notice that passes the game-closed quiet (like plan 074's
+   maintLoss T-24 h toast). Alternatives: `defaultOn: false` (as written).
+   Why: plan 080 removed every per-rule notify switch and ignores
+   `notify.<rule>` config values, so a default-off rule could never be turned
+   on - dead code. Reverses if: per-rule notify switches come back.
+2. parse_v re-read covers every notice, not only maintenance ones.
+   Decision: `maintdigest.PARSE_V` is 3 and `_stale` re-reads ANY cached Detail
+   entry below it once (plan 074 re-read only maintenance titles). Plan 074's
+   test line asserting an old event entry is not stale now asserts it is.
+   Alternatives: a second per-domain version field. Why: claim sentences sit
+   on event notices, which 074's rule never re-read; one version keeps the
+   cache simple and the 5-Detail cap still bounds the re-read. Reverses if:
+   the re-read is measured to starve new notices of the Detail budget.
+3. Claims are synced onto stored items on every notice read, not written
+   once at auto-add. Decision: `NoticeService._import` (after auto-add) calls
+   `EventsService.sync_claims({url: (claim_until, text)})`, matching items by
+   their notice url, auto-added or typed with the official link, coupons
+   included. Alternatives: store at auto-add only. Why: items added before
+   086 (or whose notice is re-read with a new deadline) get the window too.
+   A deadline on another UTC date clears a previous `claimed` ack; a time
+   re-resolved on the same date (a maintenance notice imported, 07:00 ->
+   08:30, or a slot override) keeps it, and the claimDue toast key carries
+   the date only, so neither re-fires. A notice re-read without a claim
+   sentence clears the stored window (url -> None); an unread notice leaves
+   it. Verifier round 1 found both gaps. Reverses if: never.
+4. "Same-moment adds nothing" is enforced at sync (claim must be strictly
+   later than the item's `ends`); `purge_expired` keeps an ended item while
+   its claim window is open (else the reminder would be purged).
+5. Point parsing is `claimwindows.points`, a sibling of plan 059's `_point`
+   regex (not `parse_window`, which needs a START - END pair) that also reads
+   "the Oct 29, 2026 (Thu) maintenance" as that maintenance's start
+   (edge `before`); the latest point of a sentence is its deadline. Raw points
+   are cached and resolved on read via `eventnotices._point_utc` (slot or
+   imported maintenance notice), like 064's windows.
+6. What now text is clipped to the 80-char action limit by shortening the
+   title ("Claim <title...> rewards (Mail) - 2 days left"); the place is
+   Mail / Safe / "Mail / Safe" from the claim sentence. `<n> days left`
+   counts started days (ceil), so the text changes at most once a day.
+   Weight 0.9, horizon 3 days, nominal 1 day.
+7. Home Timers rows use source `claim` (added to TIMERS_DEDUPE and the
+   client What now tab map), labelled "Claim <title>", note
+   "claim by <date> (<place>)".

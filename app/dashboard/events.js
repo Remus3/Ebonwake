@@ -159,7 +159,30 @@
   }
 
   function rowCls(r) {
-    return 'ew-erow ' + r.status + (r.soon ? ' soon' : '');
+    return 'ew-erow ' + r.status + (r.soon ? ' soon' : '') + (r.claim_open ? ' claim' : '');
+  }
+
+  // Plan 086: "claim by Oct 29 (Mail)" + its countdown + a "claimed" ack, while
+  // the notice's claim window is open (it outlives the event's own end).
+  function claimRow(row, r) {
+    const c = C.claimLine(r);
+    if (!c) return;
+    const line = el('div', 'ew-ehead');
+    const t = el('span', 'ew-mname ew-gnum', c.text + ' (' + c.place + ')');
+    t.title = c.title;
+    line.appendChild(t);
+    const n = el('span', 'ew-mprice ew-gnum', c.left);
+    S.ui.clocks.push({ id: r.id, node: n, field: 'claim_left_s' });
+    line.appendChild(n);
+    const body = C.claimBody(r);
+    if (body) {
+      const b = el('button', 'ew-btn ew-bbtn', 'claimed');
+      b.type = 'button';
+      b.title = 'rewards claimed in game (Mail / Safe): hide this claim window';
+      b.addEventListener('click', function () { send(body, 'claim window hidden'); });
+      line.appendChild(b);
+    }
+    row.appendChild(line);
   }
 
   function info(r) {
@@ -203,6 +226,7 @@
       const t = el('div', 'ew-mname ew-muted ew-gnum', r.title + (r.rewards ? ' - ' + r.rewards : ''));
       t.title = info(r);
       row.appendChild(t);
+      claimRow(row, r);
       box.appendChild(row);
     });
     body.appendChild(box);
@@ -372,6 +396,7 @@
       head.appendChild(delBtn(r));
       row.appendChild(head);
       if (r.rewards) row.appendChild(el('div', 'ew-mname ew-muted ew-gnum', r.rewards));
+      claimRow(row, r);
       loginLine(row, r, ld);
       box.appendChild(row);
     });
@@ -446,7 +471,7 @@
   }
 
   function signature(list) {
-    return list.map(function (r) { return r.id + ':' + r.status + ':' + r.soon; }).join('|');
+    return list.map(function (r) { return r.id + ':' + r.status + ':' + r.soon + ':' + (r.claim_open === true); }).join('|');
   }
 
   function draw() {
@@ -471,7 +496,7 @@
     if (signature(list) !== S.sig) { draw(); return; }
     const byId = {};
     list.forEach(function (r) { byId[r.id] = r; });
-    ui.clocks.forEach(function (c) { if (byId[c.id]) c.node.textContent = C.fmtLeft(byId[c.id].left_s); });
+    ui.clocks.forEach(function (c) { if (byId[c.id]) c.node.textContent = C.fmtLeft(byId[c.id][c.field || 'left_s']); });
   }
 
   // ---- mount ----

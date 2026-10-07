@@ -58,7 +58,7 @@ test('postToast: every POST result -> one toast (ok / 404 warn / bad)', () => {
 test('NOTIFY_RULES: stable names, every rule on with zero config (plan 080)', () => {
   assert.deepStrictEqual(C.NOTIFY_RULES.map((r) => r.name),
     ['marketAlert', 'buffEnding', 'hotTime', 'resetPassed', 'newCoupon', 'gameExit', 'bossSoon', 'resetSoon',
-      'loginRisk', 'maintLoss']);
+      'loginRisk', 'maintLoss', 'claimDue']);
   const all = {};
   C.NOTIFY_RULES.forEach((r) => { all[r.name] = true; });
   assert.deepStrictEqual(C.notifyPrefs({}), all);
