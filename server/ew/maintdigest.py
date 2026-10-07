@@ -30,7 +30,7 @@ from pathlib import Path
 from . import maint as _maint
 
 PATTERNS_FILE = Path(__file__).resolve().parent / "data" / "maint_loss_patterns.json"
-PARSE_V = 2  # Detail cache entries before plan 074 count as 1
+PARSE_V = 3  # Detail cache entries before plan 074 count as 1; plan 086 claims = 3
 MAX_LOSS = 5
 MAX_TEXT = 200
 MAX_PATTERNS = 50
@@ -228,15 +228,23 @@ def ends_at_maint(ends, now, start):
 
 def ending(items, hot, now, start):
     """[{kind, title, ends}] of open events / coupons (plan 006 store) and plan
-    064 Hot Time windows that end at this maintenance, soonest first."""
-    out = []
+    064 Hot Time windows that end at this maintenance, soonest first; plan 086:
+    + one `claim` row per notice whose claim window (not acked) ends there."""
+    out, claims = [], set()
     for it in items or ():
-        if not isinstance(it, dict) or it.get("done") is True:
+        if not isinstance(it, dict):
             continue
         kind, title = it.get("kind"), it.get("title")
-        ends = _parse(it.get("ends"))
         if not isinstance(kind, str) or not isinstance(title, str) or not title:
             continue
+        claim = _parse(it.get("claim_until"))
+        key = it.get("url") if isinstance(it.get("url"), str) else title
+        if it.get("claimed") is not True and key not in claims and ends_at_maint(claim, now, start):
+            claims.add(key)
+            out.append({"kind": "claim", "title": title, "ends": _iso(claim)})
+        if it.get("done") is True:
+            continue
+        ends = _parse(it.get("ends"))
         if ends_at_maint(ends, now, start):
             out.append({"kind": kind, "title": title, "ends": _iso(ends)})
     for w in hot or ():

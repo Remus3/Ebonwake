@@ -1,0 +1,13 @@
+{
+  "_doc": "Plan 086: reward claim-window sentences kept from official notice Detail pages. Each pattern is a case-insensitive Python regex searched in one sentence; a matching sentence is kept only when it also holds a date that resolves (at most 3 per notice, cut to 200 ASCII chars). Data, not code: add a phrase here when a notice words a claim deadline differently.",
+  "patterns": [
+    "\\b(?:can|may|must) be claimed\\b.{0,80}\\b(?:until|by|before)\\b",
+    "\\bclaimable\\b.{0,80}\\b(?:until|by)\\b",
+    "\\bclaim\\b.{0,80}\\buntil\\b",
+    "\\bavailable in (?:the |your )?mail\\b.{0,80}\\buntil\\b",
+    "\\bmail\\s*\\(B\\).{0,80}\\buntil\\b",
+    "\\bunclaimed rewards?\\b.{0,60}\\bno longer (?:be )?available\\b",
+    "\\bBlack Spirit'?s Safe\\b.{0,120}\\buntil\\b",
+    "\\breward claim period\\b"
+  ]
+}

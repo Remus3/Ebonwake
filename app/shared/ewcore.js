@@ -2257,6 +2257,15 @@
       else if (start !== null && start > now) r.status = 'upcoming';
       else r.status = 'active';
       r.soon = r.status !== 'done' && r.status !== 'expired' && r.left_s !== null && r.left_s <= EVENTS_SOON_S;
+      // Plan 086: the claim window of its notice, counted down locally too.
+      const claim = eventDateMs(it.claim_until, true);
+      if (claim !== null) {
+        r.claim_left_s = Math.max(0, Math.floor((claim - now) / 1000));
+        r.claim_open = it.claimed !== true && claim > now;
+      } else {
+        delete r.claim_left_s;
+        delete r.claim_open;
+      }
       r._i = i;
       rows.push(r);
     });
@@ -2274,6 +2283,56 @@
     });
     rows.forEach(function (r) { delete r._i; });
     return rows;
+  }
+
+  // ---- plan 086: reward claim windows ----
+  const CLAIM_TIMER_S = 7 * 86400;     // Home Timers lists claim windows inside 7 days
+  const CLAIM_TOAST = [24, 23];        // one T-24 h toast: [hours mark, window floor]
+  const GROUP_NO_RE = /[?&]groupContentNo=([0-9]{1,9})(?:&|$)/;
+
+  // Where the claim sentence says the rewards wait (= whatnow.claim_place).
+  function claimPlace(text) {
+    const t = typeof text === 'string' ? text.toLowerCase() : '';
+    const mail = t.indexOf('mail') >= 0;
+    const safe = t.indexOf('safe') >= 0;
+    return mail && !safe ? 'Mail' : safe && !mail ? 'Safe' : 'Mail / Safe';
+  }
+
+  // An eventRows row -> {text 'claim by Oct 29', place, left_s, left, title,
+  // at} while its claim window is open (opts.zone: 'local' default, 'utc',
+  // 'pt'), else null.
+  function claimLine(r, opts) {
+    if (!plainObject(r) || r.claim_open !== true) return null;
+    const ms = eventDateMs(r.claim_until, true);
+    const off = ms === null ? null : zoneOffsetMin(zoneOf(opts), ms);
+    if (off === null) return null;
+    const d = new Date(ms + off * 60000);
+    const place = claimPlace(r.claim_text);
+    return {
+      text: 'claim by ' + MONTH_NAMES[d.getUTCMonth()] + ' ' + d.getUTCDate(), place: place,
+      left_s: r.claim_left_s, left: fmtLeft(r.claim_left_s), at: ms,
+      title: (typeof r.claim_text === 'string' ? r.claim_text + '\n' : '') + 'rewards wait in ' +
+        place + ' until ' + r.claim_until
+    };
+  }
+
+  // Open claim windows, one per notice (url, else title), soonest first.
+  function claimRows(items, fetchedMs, now) {
+    const seen = {};
+    return eventRows(items, fetchedMs, now).filter(function (r) {
+      if (r.claim_open !== true) return false;
+      const k = typeof r.url === 'string' ? r.url : r.title;
+      if (seen[k]) return false;
+      seen[k] = true;
+      return true;
+    }).sort(function (a, b) { return a.claim_left_s - b.claim_left_s; });
+  }
+
+  // POST /api/events body acking a row's claim window, or null (no notice link).
+  function claimBody(r) {
+    const m = plainObject(r) && typeof r.url === 'string' ? GROUP_NO_RE.exec(r.url) : null;
+    const n = m ? Number(m[1]) : null;
+    return n !== null && validNoticeNo(n) ? { claimed: n } : null;
   }
 
   function soonestEvent(items, fetchedMs, now) {
@@ -2326,7 +2385,7 @@
     const v = body[k];
     if (k === 'delete') return validRef(v, EVENT_ID_RE);
     if (k === 'purge_expired') return v === true;
-    if (k === 'dismiss_notice' || k === 'undo_notice') return validNoticeNo(v);
+    if (k === 'dismiss_notice' || k === 'undo_notice' || k === 'claimed') return validNoticeNo(v); // 086: claimed
     if (k === 'login_mark') return exact(v, ['date', 'on']) && typeof v.date === 'string' && ISO_DAY.test(v.date) && typeof v.on === 'boolean';
     if (k === 'done') return exact(v, ['id', 'done']) && validRef(v.id, EVENT_ID_RE) && typeof v.done === 'boolean';
     if (k === 'add') {
@@ -4242,11 +4301,12 @@
   // ---- Timers (plan 076) ----
   // One card for every countdown Home shows: daily / weekly / custom resets,
   // the next 3 world bosses and events ending within 48 h, soonest first (a
-  // due tie keeps resets, bosses, events order), at most TIMERS_MAX rows. A row
+  // due tie keeps resets, bosses, events order; plan 086: + reward claim
+  // windows closing within 7 days), at most TIMERS_MAX rows. A row
   // What now already lists (same source, same due minute) is dropped, so one
   // fact appears once. Rows carry {source, due} (ms) for that match.
   const TIMERS_MAX = 6;
-  const TIMERS_DEDUPE = ['reset', 'boss', 'coupon', 'maint'];
+  const TIMERS_DEDUPE = ['reset', 'boss', 'coupon', 'maint', 'claim'];
 
   function timerRow(label, value, note, cls, source, due) {
     const r = nowRow(label, value, note, cls);
@@ -4296,12 +4356,22 @@
     });
   }
 
+  // Plan 086: claim windows closing within CLAIM_TIMER_S, one per notice.
+  function timerClaims(events, at, now) {
+    return claimRows(events.items, at, now).filter(function (r) {
+      return r.claim_left_s <= CLAIM_TIMER_S;
+    }).map(function (r) {
+      const c = claimLine(r);
+      return timerRow('Claim ' + r.title, c.left, c.text + ' (' + c.place + ')', 'warn', 'claim', c.at);
+    });
+  }
+
   // bosses / events: the GET payloads or null (absent, 404); at: the events
   // fetch time; whatnow: the GET /api/whatnow view or null.
   function nowTimers(today, bosses, events, at, now, whatnow) {
     let rows = timerResets(today, now);
     if (bosses) rows = rows.concat(timerBosses(bosses, now));
-    if (events) rows = rows.concat(timerEnding(events, at, now));
+    if (events) rows = rows.concat(timerEnding(events, at, now), timerClaims(events, at, now));
     const shown = {};
     whatNowActions(whatnow).forEach(function (a) {
       if (a.due !== null && TIMERS_DEDUPE.indexOf(a.source) >= 0) shown[dueKey(a.source, a.due)] = true;
@@ -4513,7 +4583,7 @@
   // count `due` down. Junk actions are dropped.
   const WHATNOW_TABS = { boss: 'today', reset: 'today', buff: 'grind', hot: 'progress',
     maint: 'events', coupon: 'events', dice: 'today', market: 'market', deadline: 'events',
-    ocr: 'system', maint_loss: 'events', event: 'events' };
+    ocr: 'system', maint_loss: 'events', event: 'events', claim: 'events' }; // 086: claim
   const WHATNOW_EMPTY = 'All clear - play';
 
   function whatNowAction(a) {
@@ -5062,7 +5132,7 @@
     marketAlert: 'Market price alerts', buffEnding: 'Buff ending', hotTime: 'Hot Time',
     resetPassed: 'Reset passed', newCoupon: 'New coupon', gameExit: 'Game closed',
     bossSoon: 'World boss soon', resetSoon: 'Reset soon', loginRisk: 'Login day at risk',
-    maintLoss: 'Maintenance loss warning',
+    maintLoss: 'Maintenance loss warning', claimDue: 'Reward claim due',
     'profile.family': 'Profile > Family name', 'bdo.install_dir': 'Game folders > BDO install folder',
     'bdo.documents_dir': 'Game folders > BDO Documents folder', 'overlay.anchor': 'Overlay > Anchor'
   };
@@ -6677,6 +6747,23 @@
     return out;
   }
 
+  // Plan 086 claimDue: one T-24 h toast per open claim window (one per notice);
+  // a day-scale deadline, so no 15/5/1 ladder. It passes the game-closed
+  // quiet: the operator has to start the game to claim.
+  function claimDueHits(prev, next, now) {
+    if (!plainObject(next.events)) return [];
+    return claimRows(next.events.items, null, now).filter(function (r) {
+      const left = r.claim_left_s * 1000;
+      return left <= CLAIM_TOAST[0] * 3600000 && left > CLAIM_TOAST[1] * 3600000;
+    }).map(function (r) {
+      const c = claimLine(r);
+      const k = typeof r.url === 'string' ? r.url : r.title;
+      // keyed by the UTC date: a re-resolved time that day (notice import) never re-fires
+      return Object.assign(hit('claimDue:' + k + ':' + r.claim_until.slice(0, 10), 'Claim rewards: ' + r.title,
+        c.text + ' - ' + c.place + ', ' + fmtDuration(c.left_s * 1000) + ' left'), { closed: true });
+    });
+  }
+
   function resetHits(prev, next, now) {
     if (!prev || !isNum(prev.at) || prev.at >= now) return [];
     const out = [];
@@ -6754,7 +6841,8 @@
     { name: 'bossSoon', defaultOn: true, fire: bossHits },
     { name: 'resetSoon', defaultOn: true, fire: resetSoonHits },
     { name: 'loginRisk', defaultOn: true, fire: loginRiskHits },
-    { name: 'maintLoss', defaultOn: true, fire: maintLossHits }
+    { name: 'maintLoss', defaultOn: true, fire: maintLossHits },
+    { name: 'claimDue', defaultOn: true, fire: claimDueHits }  // plan 086 (plan 080: every rule on)
   ];
 
   // {rule: bool} from each rule's defaultOn. Plan 080: a config/local.json
@@ -7057,6 +7145,12 @@
     EVENTS_SOON_S: EVENTS_SOON_S,
     fmtLeft: fmtLeft,
     eventRows: eventRows,
+    CLAIM_TIMER_S: CLAIM_TIMER_S,
+    claimPlace: claimPlace,
+    claimLine: claimLine,
+    claimRows: claimRows,
+    claimBody: claimBody,
+    claimDueHits: claimDueHits,
     soonestEvent: soonestEvent,
     localToUtcIso: localToUtcIso,
     validEventsBody: validEventsBody,

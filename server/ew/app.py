@@ -1001,12 +1001,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post_events(self, body):
         ops = {"add", "edit", "done", "delete", "purge_expired", "dismiss_notice",
-               "undo_notice", "login_mark"}
+               "undo_notice", "login_mark", "claimed"}
         if len(body) != 1 or not (ops & set(body)):
             raise ValueError("body must be one of {add|edit|done|delete|purge_expired|"
-                             "dismiss_notice|undo_notice|login_mark: ...}")
+                             "dismiss_notice|undo_notice|login_mark|claimed: ...}")
         (op, arg), = body.items()
-        if op == "login_mark":  # plan 075: "I logged in that day" (operator data)
+        if op == "claimed":  # plan 086: rewards claimed in game -> hide the claim window
+            sug_ev = self.server.notices.view(refresh=False)
+            out = self.server.notices.claimed(arg)
+        elif op == "login_mark":  # plan 075: "I logged in that day" (operator data)
             self.server.logindays.mark(arg)
             sug_ev = self.server.notices.view(refresh=False)
             out = self.server.events.view()

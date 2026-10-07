@@ -19,6 +19,7 @@ MAX_TITLE = 80
 MAX_REWARDS = 200
 MAX_URL = 300
 MAX_ITEMS = 300
+MAX_CLAIM_TEXT = 200  # = claimwindows.MAX_TEXT
 SOON_S = 172800  # 48 h
 DEADLINE_SOON_S = 14 * 86400  # plan 024: level-gated deadlines show 14 days out
 WINDOW = _dt.timedelta(days=730)  # starts/ends within 2 years of now, either side
@@ -150,6 +151,13 @@ def _clean_item(it):
     rule = logindays.clean_rule(it.get("login_rule"))
     if rule is not None:  # plan 075: qualifying login days are tracked
         out["login_rule"] = rule
+    claim = _iso_or_none(it.get("claim_until"))
+    text = it.get("claim_text")
+    if claim is not None and isinstance(text, str) and 0 < len(text) <= MAX_CLAIM_TEXT \
+            and text.isascii() and text.isprintable():  # plan 086: claim window of its notice
+        out["claim_until"], out["claim_text"] = claim, text
+        if it.get("claimed") is True:
+            out["claimed"] = True
     return out
 
 
@@ -227,7 +235,12 @@ class EventsService:
         else:
             status = "active"
         soon = status in ("active", "upcoming") and left is not None and left <= SOON_S
-        return dict(it, left_s=left, status=status, soon=soon)
+        out = dict(it, left_s=left, status=status, soon=soon)
+        claim = _parse_iso(it.get("claim_until"))
+        if claim is not None:  # plan 086: open until the deadline unless acked
+            out["claim_left_s"] = max(0, int((claim - now).total_seconds()))
+            out["claim_open"] = it.get("claimed") is not True and claim > now
+        return out
 
     def _items(self, doc, now):
         rows = [self._decorate(i, now) for i in doc["items"]]
@@ -382,15 +395,65 @@ class EventsService:
             self._save(doc)
             return self.view()
 
+    # -- plan 086: claim windows (server side only; synced from notice reads) --
+
+    def sync_claims(self, by_url):
+        """{notice url: (claim_until ISO UTC, text) | None} -> set on every item
+        with that url when the claim outlives the item's end (or it has none),
+        else (or None: the notice holds no claim any more) clear it; items of
+        other urls keep theirs. Writes only on a change. An ack survives a
+        re-resolved time on the same UTC date (an imported maintenance notice
+        moving 07:00 to 08:30); a deadline on another date asks again."""
+        if not by_url:
+            return False
+        with self._lock:
+            doc = self._load()
+            changed = False
+            for it in doc["items"]:
+                if it["url"] not in by_url:
+                    continue
+                until, text = by_url[it["url"]] or (None, None)
+                claim, ends = _parse_iso(until), _parse_iso(it["ends"])
+                keep = claim is not None and (ends is None or claim > ends)
+                if keep and (it.get("claim_until"), it.get("claim_text")) != (_iso(claim), text):
+                    old = it.get("claim_until")
+                    if old is None or old[:10] != _iso(claim)[:10]:
+                        it.pop("claimed", None)  # a new deadline asks again
+                    it["claim_until"], it["claim_text"] = _iso(claim), text[:MAX_CLAIM_TEXT]
+                    changed = True
+                elif not keep and "claim_until" in it:
+                    for k in ("claim_until", "claim_text", "claimed"):
+                        it.pop(k, None)
+                    changed = True
+            if changed:
+                self._save(doc)
+            return changed
+
+    def claim_ack(self, url):
+        """Hide the open claim window of every item with `url`; returns the view."""
+        with self._lock:
+            now = self._now()
+            doc = self._load()
+            hits = [i for i in doc["items"] if i["url"] == url and i.get("claim_until")
+                    and i.get("claimed") is not True and _parse_iso(i["claim_until"]) > now]
+            if not hits:
+                raise ValueError("no open claim window for that notice")
+            for it in hits:
+                it["claimed"] = True
+            self._save(doc)
+            return self.view()
+
     def purge_expired(self, arg):
-        """`true`: remove every item whose ends <= now, done or not; body adds `purged`."""
+        """`true`: remove every item whose ends <= now, done or not; body adds `purged`.
+        Plan 086: an item whose claim window is still open stays."""
         if arg is not True:
             raise ValueError("purge_expired must be true")
         with self._lock:
             now = self._now()
             doc = self._load()
             keep = [i for i in doc["items"]
-                    if i["ends"] is None or _parse_iso(i["ends"]) > now]
+                    if i["ends"] is None or _parse_iso(i["ends"]) > now
+                    or self._decorate(i, now).get("claim_open") is True]
             n = len(doc["items"]) - len(keep)
             doc["items"] = keep
             self._save(doc)
