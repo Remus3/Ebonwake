@@ -567,7 +567,7 @@
     const f = el('form', 'ew-brow');
     const sel = el('select');
     list.forEach(function (p, i) {
-      const o = el('option', null, p.name + ' +' + p.xp_pct + '%');
+      const o = el('option', null, p.name + ' +' + p.xp_pct + '%' + (p.check ? ' (check)' : ''));
       o.value = String(i);
       o.title = p.title;
       sel.appendChild(o);
@@ -646,7 +646,8 @@
       });
       lab.appendChild(cb);
       lab.appendChild(el('span', 'ew-mname', t.name + (t.timer ? ' (timer)' : '')));
-      lab.appendChild(el('span', 'ew-mprice', t.value + (t.unverified ? ' ?' : '') + (t.overridden ? ' *' : '')));
+      lab.appendChild(el('span', 'ew-mprice', t.value + (t.unverified ? ' ?' : '') + (t.overridden ? ' *' : '') +
+        (t.check ? ' check' : '')));  // plan 085: patch notes disagree, value kept
       det.appendChild(lab);
     });
     body.appendChild(det);

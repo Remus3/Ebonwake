@@ -134,7 +134,9 @@
       return { id: String(r.id || ''), name: name, level: level, cls: SIGNAL_CLS[level],
         text: name + ' ' + level + (isNum(r.age_s) ? ' - ' + age : ''),
         detail: typeof r.detail === 'string' ? r.detail : '',
-        hint: typeof r.hint === 'string' ? r.hint : '' };
+        hint: typeof r.hint === 'string' ? r.hint : '',
+        // plan 085: evidence lines (data row) shown under the row on System
+        lines: (Array.isArray(r.lines) ? r.lines : []).filter(function (s) { return typeof s === 'string' && s; }).slice(0, 10) };
     });
   }
 
@@ -1799,16 +1801,29 @@
       minutes: plainObject(row) ? fmtDurationShort(row.minutes) : '-' };
   }
 
-  // Plan 018 XP buff presets from GET /api/grind: [{name, xp_pct, title}],
+  // Plan 085: a tracked row's patch-notes verdict ({verdict, date, evidence})
+  // -> {check, text} for its source tooltip, or null (silent / none).
+  // `check` = contradicted: the value is kept and shown with a check badge.
+  function patchNote(p) {
+    if (!plainObject(p)) return null;
+    const d = typeof p.date === 'string' ? p.date : '?';
+    if (p.verdict === 'confirmed') return { check: false, text: 'verified by patch notes ' + d };
+    if (p.verdict !== 'contradicted') return null;
+    const ev = typeof p.evidence === 'string' && p.evidence ? ': "' + p.evidence + '"' : '';
+    return { check: true, text: 'check - patch notes ' + d + ' disagree' + ev };
+  }
+
+  // Plan 018 XP buff presets from GET /api/grind: [{name, xp_pct, title, check}],
   // junk rows dropped. The values are community / patch-note figures, verify.
   function xpPresets(d) {
     const rows = plainObject(d) && Array.isArray(d.xp_presets) ? d.xp_presets : [];
     return rows.filter(function (p) {
       return plainObject(p) && validName(p.name) && inRange(p.xp_pct, XP_PCT);
     }).map(function (p) {
+      const pn = patchNote(p.patch);
       const bits = [typeof p.notes === 'string' ? p.notes : '', typeof p.source === 'string' ? p.source : '',
-        typeof p.verified === 'string' ? 'as of ' + p.verified : ''].filter(function (x) { return x; });
-      return { name: p.name, xp_pct: p.xp_pct, title: bits.join(' - ') };
+        typeof p.verified === 'string' ? 'as of ' + p.verified : '', pn ? pn.text : ''].filter(function (x) { return x; });
+      return { name: p.name, xp_pct: p.xp_pct, title: bits.join(' - '), check: !!(pn && pn.check) };
     });
   }
 
@@ -1973,14 +1988,17 @@
     const toggles = (Array.isArray(x.buffs) ? x.buffs : []).filter(function (r) {
       return plainObject(r) && typeof r.id === 'string' && typeof r.name === 'string';
     }).map(function (r) {
+      const pn = patchNote(r.patch);  // plan 085
       const bits = [r.bypass === 'none' ? '' : 'bypass ' + String(r.bypass).replace('to', 'to ') + '%',
         r.verified === false ? 'unverified' : (typeof r.verified === 'string' ? 'as of ' + r.verified : ''),
-        typeof r.note === 'string' ? r.note : '', typeof r.source === 'string' ? r.source : '']
+        typeof r.note === 'string' ? r.note : '', typeof r.source === 'string' ? r.source : '',
+        pn ? pn.text : '']
         .filter(function (s) { return s; });
       const val = [pctText(r.rate_pct), isNum(r.amount_pct) ? pctText(r.amount_pct) + ' amt' : '']
         .filter(function (s) { return s; }).join(' ');
       return { id: r.id, name: r.name, value: val, on: r.on === true, timer: r.timer === true,
-        unverified: r.verified === false, overridden: r.overridden === true, title: bits.join(' - ') };
+        unverified: r.verified === false, overridden: r.overridden === true, title: bits.join(' - '),
+        check: !!(pn && pn.check) };
     });
     return { error: null, line: line, wasted: wasted, amount: n(x.amount_total) ? '+' + n(x.amount_total) + '% amount' : '',
       active: active, toggles: toggles, roi: agrisLine(d.agris_roi) };
@@ -3648,7 +3666,15 @@
     if (!plainObject(e) || typeof e.id !== 'string' || typeof e.label !== 'string' ||
       typeof e.starts_utc !== 'string' || !isNum(e.starts_in_s)) return null;
     return { id: e.id, label: e.label, starts_utc: e.starts_utc, starts_in_s: e.starts_in_s,
-      source: typeof e.source === 'string' ? e.source : '', verified: e.verified === true, tracked: e.tracked === true };
+      source: typeof e.source === 'string' ? e.source : '', verified: e.verified === true, tracked: e.tracked === true,
+      patch: patchNote(e.patch) };  // plan 085
+  }
+
+  // Plan 085: source tooltip of an epoch brief: "source: ..." + the patch-notes line.
+  function epochTitle(e) {
+    if (!plainObject(e)) return '';
+    return [typeof e.source === 'string' && e.source ? 'source: ' + e.source : '',
+      e.patch && typeof e.patch.text === 'string' ? e.patch.text : ''].filter(function (s) { return s; }).join('\n');
   }
 
   const LEVEL_SOURCES = ['typed', 'profile', 'ocr'];  // plan 066: ocr = read from a screenshot
@@ -7010,6 +7036,8 @@
     soonestBuff: soonestBuff,
     buffRows: buffRows,
     xpPresets: xpPresets,
+    patchNote: patchNote,
+    epochTitle: epochTitle,
     sortSpots: sortSpots,
     spotName: spotName,
     validGrindBody: validGrindBody,

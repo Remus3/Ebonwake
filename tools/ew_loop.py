@@ -26,6 +26,9 @@ One tick, under ops/loop/control/loop.lock (fleet_watch.watch_lock):
      physical / MAIN / NOTE. Each item is dispatched to a free lane as a
      DETACHED `ew_loop.py lane <ID>` process that runs tools/ew_lane.run_lane
      (kit lane + own worktree + one governor slot at the call, fail closed).
+     Plan 085: + one data item per tracked row the server's runtime verdicts
+     (ops/runtime/data_verdicts.json in main) mark contradicted by the
+     official patch notes, so a lane edits the tracked file.
   e. Idle (nothing open, nothing in flight): one deep-dive lane per day.
   f. Spawning stops at RUNS_CAP - 3 and during a usage-limit backoff
      (ops/loop/control/backoff.json, 30 min doubling, cap 6 h).
@@ -376,6 +379,37 @@ def handoff_items(text):
         skip = next((tag for tag, rx in SKIP_TAGS if rx.search(body)), None)
         hid = "H" + hashlib.sha1(" ".join(_norm_words(body)).encode()).hexdigest()[:6]
         out.append({"id": hid, "text": body, "skip": skip})
+    return out
+
+
+VERDICTS_REL = ("ops", "runtime", "data_verdicts.json")
+_KEY_RX = re.compile(r"^[A-Za-z0-9_./-]{1,80}\.json#[A-Za-z0-9_./-]{1,80}$")
+
+
+def data_items(main):
+    """Plan 085: [{"id", "text", "skip"}] - one hand-off-style data item per
+    row the runtime verdicts mark contradicted. The quoted evidence is page
+    text (ASCII, <= 200 chars), handed over as data, never as an order."""
+    try:
+        doc = json.loads(Path(main).joinpath(*VERDICTS_REL).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    verdicts = doc.get("verdicts") if isinstance(doc, dict) else None
+    out = []
+    for key, v in sorted(verdicts.items() if isinstance(verdicts, dict) else ()):
+        if not (isinstance(v, dict) and v.get("verdict") == "contradicted" and _KEY_RX.match(key)):
+            continue
+        ev = v.get("evidence") if isinstance(v.get("evidence"), str) else ""
+        ev = "".join(c for c in ev if 32 <= ord(c) < 127).replace('"', "'")[:200]
+        date = v.get("date") if isinstance(v.get("date"), str) else "?"
+        url = v.get("url") if isinstance(v.get("url"), str) else ""
+        file = key.split("#", 1)[0]
+        text = (f"DATA: tracked row {key} is contradicted by the official patch notes "
+                f"{date[:10]} ({url[:120]}); quoted evidence line: \"{ev}\". Edit that row in "
+                f"server/ew/data/{file} to the patch-notes value, update its verify hint "
+                f"and verified field (plan 085; data changes stay plan-reviewed).")
+        hid = "D" + hashlib.sha1(f"{key}|{date}|{ev}".encode()).hexdigest()[:6]
+        out.append({"id": hid, "text": text, "skip": None})
     return out
 
 
@@ -1412,6 +1446,7 @@ class Tick:
             hand = handoff_items((main / f"{CODE}-NEXT-SESSION.txt").read_text(encoding="utf-8"))
         except OSError:
             hand = []
+        hand += data_items(main)  # plan 085: contradicted tracked data rows
         # orders first, then ROADMAP rows whose status says "priority", then the rest
         open_rows = sorted((r for r in rows if r["open"]),
                            key=lambda r: "priority" not in r["status"].lower())

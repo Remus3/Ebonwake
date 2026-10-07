@@ -41,7 +41,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import __version__, logindays, maint, maintdigest
+from . import __version__, logindays, maint, maintdigest, patchverify
 from .coupons import HOST, MAX_BYTES, ROBOTS, TIMEOUT_S, UA_TOKEN, robots_verdict
 from .coupons import _TOKEN_RE, _clean_title, copy_codes, is_code, is_word_code, parse_date
 from .httpcache import CachedClient, UpstreamError, freshness, read_json
@@ -75,6 +75,9 @@ MAX_GROUP_NO = 10 ** 9
 KEY = "eventnotices_list"
 ATTEMPT_FILE = "eventnotices_attempt.json"
 DETAILS_FILE = "eventnotices_details.json"
+PATCH_FILE = "eventnotices_patchnotes.json"  # plan 085: patch-notes page text
+MAX_PATCH_NOTES = 4
+MAX_PATCH_TEXT = 300000
 DOMAIN = "event_notices"
 _DEFAULT_CACHE = (Path(__file__).resolve().parents[2] / "ops" / "runtime" / "cache"
                   / "eventnotices")
@@ -815,8 +818,41 @@ class NoticeClient(CachedClient):
                 out[int(k)] = c
         return out
 
-    def _stale(self, notice, cached, now):
+    def patch_notes(self):
+        """Plan 085: cached patch-notes pages, [{group_no, title, url, stamp,
+        fetched_at, text}] (text = visible lines); corrupt rows are skipped."""
+        with self._details_lock:
+            doc = read_json(self.cache_dir / PATCH_FILE)
+        out = []
+        for k, v in (doc.items() if isinstance(doc, dict) else ()):
+            if not (isinstance(k, str) and re.fullmatch(r"[0-9]{1,9}", k) and isinstance(v, dict)):
+                continue
+            title, text, at, stamp = v.get("title"), v.get("text"), v.get("fetched_at"), v.get("stamp")
+            if not (patchverify.is_patch_title(title) and isinstance(text, str)
+                    and len(text) <= MAX_PATCH_TEXT
+                    and isinstance(at, (int, float)) and not isinstance(at, bool)):
+                continue
+            if stamp is not None and not (isinstance(stamp, str) and _DATE_RE.match(stamp)):
+                continue
+            out.append({"group_no": int(k), "title": title, "url": detail_url(int(k)),
+                        "stamp": stamp, "fetched_at": at, "text": text})
+        return sorted(out, key=lambda n: n["group_no"])
+
+    def _keep_patch(self, notes, n, page, now):
+        """Store one patch-notes page's visible text; newest MAX_PATCH_NOTES kept."""
+        notes[n["group_no"]] = {"title": n["title"], "stamp": n["stamp"], "fetched_at": now,
+                                "text": "\n".join(_lines(page))[:MAX_PATCH_TEXT]}
+        keep = sorted(notes, reverse=True)[:MAX_PATCH_NOTES]
+        return {k: notes[k] for k in keep}
+
+    def _stale(self, notice, cached, now, patches=None):
         if cached is None:
+            return True
+        if (patches is not None and patchverify.is_patch_title(notice["title"])
+                and notice["group_no"] not in patches
+                and (len(patches) < MAX_PATCH_NOTES or notice["group_no"] > min(patches))):
+            # plan 085: a page read before its text was kept - once, and only when it
+            # would land in the newest-MAX_PATCH_NOTES window (refute r1 #1)
             return True
         if cached["parse_v"] < maintdigest.PARSE_V and _MAINT_TITLE_RE.match(notice["title"]):
             return True  # plan 074: a maintenance notice read before loss parsing, once
@@ -843,11 +879,14 @@ class NoticeClient(CachedClient):
 
     @staticmethod
     def _fetch_order(notices):
-        """Maintenance, then Hot Time titles first (time-critical), else list order."""
+        """Maintenance, then patch notes (plan 085), then Hot Time titles first
+        (time-critical), else list order."""
         def rank(n):
             if _MAINT_TITLE_RE.match(n["title"]):
                 return 0
-            return 1 if _HOT_RE.search(n["title"]) else 2
+            if patchverify.is_patch_title(n["title"]):
+                return 1
+            return 2 if _HOT_RE.search(n["title"]) else 3
         return sorted(notices, key=rank)
 
     def _download(self):
@@ -868,25 +907,34 @@ class NoticeClient(CachedClient):
             raise
         self._record(now, verdict, ok_at=now, fail_since=None)
         cache = self.details()
+        patches = {p["group_no"]: {k: p[k] for k in ("title", "stamp", "fetched_at", "text")}
+                   for p in self.patch_notes()}
+        patched = False
         today = _dt.datetime.fromtimestamp(now, _dt.timezone.utc)
         budget = MAX_DETAILS
         for n in self._fetch_order(notices):
             if budget <= 0:
                 break
-            if not self._stale(n, cache.get(n["group_no"]), now):
+            if not self._stale(n, cache.get(n["group_no"]), now, patches):
                 continue
             budget -= 1
             try:
                 page = self.fetch(n["url"], TIMEOUT_S)
             except Exception:  # noqa: BLE001 - one bad Detail page skips that notice only
                 continue
-            cache[n["group_no"]] = dict(parse_notice(_decode(page), n["title"], today.year,
+            text = _decode(page)
+            cache[n["group_no"]] = dict(parse_notice(text, n["title"], today.year,
                                                      today.month),
                                         stamp=n["stamp"], fetched_at=now)
+            if patchverify.is_patch_title(n["title"]):
+                patches, patched = self._keep_patch(patches, n, text, now), True
         listed = {n["group_no"] for n in notices}
         with self._details_lock:  # notices gone from the board are forgotten
             atomic_write_json(self.cache_dir / DETAILS_FILE,
                               {str(k): v for k, v in cache.items() if k in listed})
+            if patched:  # patch notes outlive the list: verdicts cite them (plan 085)
+                atomic_write_json(self.cache_dir / PATCH_FILE,
+                                  {str(k): v for k, v in patches.items()})
         return {"notices": notices}
 
     def due(self):

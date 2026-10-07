@@ -14,7 +14,8 @@ block), /api/settings (plan 030), /api/pets
 /api/onboarding (plan 051), /api/crafting (plan 054), /api/imperial (plan 053),
 /api/overlay/context (plan 067; SSE `overlay_context` on change),
 /api/whatnow (plan 069; SSE `whatnow` carries the full view on change),
-/api/signals (plan 073, GET only; plan 079 adds its `overrides` section),
+/api/signals (plan 073, GET only; plan 079 adds its `overrides` section; plan 085 a `data` row),
+/api/data/verdicts (plan 085, GET only: hinted data rows vs the cached patch notes),
 /api/overrides (plan 079, GET only; POST /api/settings {"clear": key} retires one),
 /api/portraits + /api/portraits/img/<id> (plan 082; SSE `portraits`; plan 083 adds
 ?cls= gallery, screenshot ids and POST pick / clear / bind), /api/prompts (plan 070: quiet gate, alert ladder,
@@ -41,7 +42,8 @@ from pathlib import Path
 
 from urllib.parse import parse_qs
 
-from . import (__version__, autotick, autowatch, bossdrift, bosses, context, coupons, crafting, deadeye,
+from . import (__version__, autotick, autowatch, bossdrift, bosses, context, coupons, crafting,
+               dataverdicts, deadeye,
                derived, detect, enhance, eventnotices, events, gamewatch, grind, imperial, inventory, itemnames,
                leveling, logindays, maint, maintdigest, market, mounts, ocr, ocrauto, onboarding, overrides,
                pets,
@@ -161,7 +163,8 @@ class EWServer(ThreadingHTTPServer):
                  ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
                  coupon_client=None, coupon_spawn=None, bosses_clock=None,
                  config_path=None, notice_client=None, notice_spawn=None, detector=None,
-                 context_clock=None, drift_client=None, drift_spawn=None):
+                 context_clock=None, drift_client=None, drift_spawn=None,
+                 verdicts_path=None, verdict_data_dir=None):
         super().__init__(addr, Handler)
         # Plan 065: read-only BDO folder auto-detect; only main() passes one, so
         # no test ever probes the real disk or registry.
@@ -255,6 +258,15 @@ class EWServer(ThreadingHTTPServer):
             notice_client, self.events, self.store, spawn=notice_spawn,
             maint_start=self._maint_start, leveling=self.leveling,
             auto_add=lambda: self.fixed_settings()["notices.auto_add"])
+        # Plan 085: hinted data rows checked against the patch-notes pages plan
+        # 064 keeps (local cache only, never a fetch); runtime verdicts, tracked
+        # data never edited. Leveling / grind read a row's verdict by key.
+        self.verdicts = dataverdicts.VerdictService(
+            getattr(notice_client, "patch_notes", None) or (lambda: []),
+            path=verdicts_path or (Path(store_root).parent if store_root else RUNTIME)
+            / "data_verdicts.json", data_dir=verdict_data_dir)
+        self.leveling.verdict = self.verdicts.verdict
+        self.grind.verdict = self.verdicts.verdict
         # Plan 074: before-maintenance digest - loss sentences from the cached
         # maintenance notices + what ends at the next maintenance; never fetches.
         self.maintdigest = maintdigest.DigestService(
@@ -426,7 +438,8 @@ class EWServer(ThreadingHTTPServer):
         self.signals = signals.SignalService({
             "session_log": self._sig_session_log, "screenshots": self._sig_screenshots,
             "ocr": self._sig_ocr, "notices": self._sig_notices, "market": self._sig_market,
-            "profile": self._sig_profile, "boss_drift": lambda: None},
+            "profile": self._sig_profile, "boss_drift": lambda: None,
+            "data": self.verdicts.signal},  # plan 085
             clock=today_clock or time.time, overrides=self._sig_overrides)
         # Plan 080: coupon / event-notice checks are always on; a config incident
         # switch (plan 079 entry, 24 h) turns one off until the first start after
@@ -916,6 +929,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, self.server.maintdigest.view())
         if path == "/api/signals":
             return self._send(200, self.server.signals.view())
+        if path == "/api/data/verdicts":
+            return self._send(200, self.server.verdicts.view())
         if path == "/api/overrides":
             return self._send(200, self.server.overrides_view())
         if path == "/api/portraits":  # plan 083: ?cls=<cls> adds that class's gallery
@@ -1311,7 +1326,8 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                 ocr_runner=None, ocr_cache_dir=None, leveling_clock=None,
                 coupon_client=None, coupon_spawn=None, bosses_clock=None,
                 config_path=None, notice_client=None, notice_spawn=None, detector=None,
-                context_clock=None, drift_client=None, drift_spawn=None):
+                context_clock=None, drift_client=None, drift_spawn=None,
+                verdicts_path=None, verdict_data_dir=None):
     return EWServer(("127.0.0.1", port), store_root=store_root, commit=commit,
                     sse_interval=sse_interval, market_client=market_client,
                     market_seed=market_seed, today_clock=today_clock,
@@ -1324,7 +1340,8 @@ def make_server(port=ports.SERVER, store_root=None, commit=None, sse_interval=15
                     bosses_clock=bosses_clock, config_path=config_path,
                     notice_client=notice_client, notice_spawn=notice_spawn,
                     detector=detector, context_clock=context_clock,
-                    drift_client=drift_client, drift_spawn=drift_spawn)
+                    drift_client=drift_client, drift_spawn=drift_spawn,
+                    verdicts_path=verdicts_path, verdict_data_dir=verdict_data_dir)
 
 
 def _drift_client():

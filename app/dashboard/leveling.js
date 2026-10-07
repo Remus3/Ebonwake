@@ -113,7 +113,10 @@
     const ep = d.epoch_next || d.epoch;
     ui.epoch.textContent = d.epoch_error ? 'epoch table: ' + d.epoch_error :
       (ep ? 'XP patch: ' + C.epochText(Object.assign({}, ep, { starts_in_s: ep.starts_in_s - since })) +
-        (d.epoch ? ' - rate from post-patch samples' : '') : '');
+        (d.epoch ? ' - rate from post-patch samples' : '') +
+        (ep.patch && ep.patch.check ? ' [check]' : '') : '');
+    // Plan 085: "verified by patch notes <date>" (or the disagreeing line) in the source tooltip.
+    ui.epoch.title = ep && !d.epoch_error ? C.epochTitle(ep) : '';
     ui.epoch.hidden = !ui.epoch.textContent;
     ui.cap.textContent = d.kill_xp_cap ? 'Lv ' + d.level + ': ' + d.kill_xp_cap : '';
     ui.cap.hidden = !d.kill_xp_cap;
@@ -200,7 +203,9 @@
       t.addEventListener('click', function () { fillEpoch(e); });
       r.appendChild(t);
       r.appendChild(localSpan('ew-muted ew-gnum', e.starts_utc, 0));
-      r.appendChild(el('span', 'ew-muted', e.verified ? 'verified' : 'verify'));
+      const vb = el('span', 'ew-muted', e.patch && e.patch.check ? 'check' : (e.verified ? 'verified' : 'verify'));
+      if (e.patch) vb.title = e.patch.text;  // plan 085
+      r.appendChild(vb);
       const x = el('button', 'ew-tx', 'x');
       x.type = 'button';
       x.title = 'delete epoch';

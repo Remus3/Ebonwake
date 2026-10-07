@@ -13,7 +13,7 @@ import time
 from fractions import Fraction
 from pathlib import Path
 
-from . import levels, market, spots
+from . import levels, market, patchverify, spots
 from .today import _iso, _parse_iso, slug
 
 MAX_MINUTES = 1440
@@ -45,7 +45,7 @@ AGRIS_BUFF_ID = "agris-scroll"
 CAPS_ID = "caps"
 SCROLL_ID = "agris_scroll"
 DROP_ROW_FIELDS = ("id", "name", "bypass", "source", "verified")
-DROP_ROW_OPTIONAL = ("aliases", "rate_pct", "amount_pct", "note")
+DROP_ROW_OPTIONAL = ("aliases", "rate_pct", "amount_pct", "note", "verify")  # 085: verify hint
 CAPS_FIELDS = CAP_KEYS + ("source", "verified")
 SCROLL_INTS = {"price_silver": (0, MAX_SILVER), "minutes": (1, MAX_MINUTES),
                "per_week": PER_WEEK_RANGE}
@@ -121,6 +121,11 @@ def _check_sourced(row, what):
         raise ValueError(f"{what}: verified must be a date or false")
 
 
+def _confirmed_on(patch):
+    """Plan 085: the patch-notes date of a confirmed verdict, else None."""
+    return patch["date"] if patch is not None and patch["verdict"] == "confirmed" else None
+
+
 def _check_drop_row(r):
     if (not isinstance(r, dict) or not set(DROP_ROW_FIELDS) <= set(r)
             or not set(r) <= set(DROP_ROW_FIELDS + DROP_ROW_OPTIONAL)):
@@ -144,6 +149,8 @@ def _check_drop_row(r):
         raise ValueError(f"{r['id']}: an unverified row needs a note")
     if "note" in r and not levels._ok_text(r["note"], MAX_DROP_TEXT):
         raise ValueError(f"{r['id']}: bad note")
+    if "verify" in r:
+        patchverify.compile_hint(r["verify"], f"{r['id']}.verify")
 
 
 def load_drop_data(path=DROPS_FILE):
@@ -495,6 +502,8 @@ class GrindService:
         # Plan 081: ocr_loot(spot, started) -> the loot counts auto-OCR read during
         # that session ({source: "ocr", items, at}) or None; set by the app.
         self.ocr_loot = None
+        # Plan 085: verdict(key) -> a tracked row's patch-notes verdict or None; set by the app.
+        self.verdict = None
         # `epoch` returns the newest started XP epoch or None (plan 018): until
         # one has started the presets offer the pre-patch value and no hint shows.
         self.epoch = epoch
@@ -565,6 +574,15 @@ class GrindService:
 
     # -- drop buffs (plan 038) -------------------------------------------------
 
+    def _patch(self, file, rid):
+        """Plan 085 verdict of tracked row `<file>#<rid>`, or None (a fault: None)."""
+        if self.verdict is None:
+            return None
+        try:
+            return self.verdict(f"{file}#{rid}")
+        except Exception:  # noqa: BLE001 - a verdict fault never breaks the view
+            return None
+
     def _drop_kind(self, rid):
         if rid == CAPS_ID:
             return "caps"
@@ -628,10 +646,13 @@ class GrindService:
             via = "timer" if names & armed else ("toggle" if r["id"] in on else None)
             if via:
                 active.append(dict(r, via=via))
+            # plan 085: an operator override changes the value, so no verdict applies
+            pv = None if r["overridden"] else self._patch(DROPS_FILE.name, r["id"])
             out_rows.append({"id": r["id"], "name": r["name"], "aliases": r.get("aliases", []),
                              "rate_pct": r.get("rate_pct"), "amount_pct": r.get("amount_pct"),
                              "bypass": r["bypass"], "source": r["source"],
-                             "verified": r["verified"], "note": r.get("note"),
+                             "verified": _confirmed_on(pv) or r["verified"], "patch": pv,
+                             "note": r.get("note"),
                              "on": r["id"] in on, "timer": bool(names & armed),
                              "overridden": r["overridden"]})
         drops = dict(drop_stack(active, caps), error=None,
@@ -955,10 +976,13 @@ class GrindService:
                 buffs.append({"id": b["id"], "name": b["name"], "ends": None, "left_s": None,
                               "xp_pct": b["xp_pct"], "xp_hint": hint})
         sessions = list(reversed(doc["sessions"][-VIEW_SESSIONS:]))
-        presets = [{"name": p["name"],
-                    "xp_pct": p["xp_pct"] if patched else p["pre_patch_xp_pct"],
-                    "patched": patched, "notes": p["notes"], "source": p["source"],
-                    "verified": p["verified"]} for p in self.presets]
+        presets = []
+        for p in self.presets:
+            pv = self._patch(levels.BUFFS_FILE.name, p["id"])
+            presets.append({"name": p["name"],
+                            "xp_pct": p["xp_pct"] if patched else p["pre_patch_xp_pct"],
+                            "patched": patched, "notes": p["notes"], "source": p["source"],
+                            "verified": _confirmed_on(pv) or p["verified"], "patch": pv})
         drops, roi = self._drops_view(doc, buffs, spots, now)
         pend = doc["pending_stop"]
         if pend is not None:
