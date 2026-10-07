@@ -1,17 +1,27 @@
 EW NEXT SESSION
 ---------------
-SESSION: 10
+SESSION: 11
 
-Next action: watch the loop build plans 074 (priority) then 075-078
-(ROADMAP rows open since 94305bd). Read the inbox, progress/loop.json and
-loop_items/*.json; adjudicate anything in adjudicate / merge-conflict /
-gave-up / failed-dirty (session 7: 061 merge-refused and 070 merge-conflict
-were NOT auto-retried by the loop - check for that pattern each session).
-Plan 018 at the 2026-10-08 maintenance (cap 75): LEVEL_MAX=75 already in
-server/ew/levels.py; confirm the Leveling card in use after maintenance;
-018 start date is verifiable once the patch notes post (research 0008).
+Next action: watch the loop (ROADMAP 074-086 all merged; deep-dive 0013
+done). Read the inbox, progress/loop.json and loop_items/*.json;
+adjudicate anything in adjudicate / merge-conflict / gave-up /
+failed-dirty (session 10: 080 sat in merge-conflict, fixed by a session
+agent b8fbef8 - check for that pattern every session). Plan 018 at the
+2026-10-08 maintenance (cap 75): LEVEL_MAX=75 already in
+server/ew/levels.py; confirm the Leveling card after maintenance.
 
 Carried forward (not acted on yet):
+- NOTE (new, operator order 2026-10-06): ZERO-TOUCH. EW self-adjusts from
+  the live game; no required toggles or typed entry (a changed setting
+  gets forgotten and skews output). Every new plan follows research 0010
+  and the plan 079 override ledger (visible badge, auto-expiry, live
+  signal supersedes). Settings left after 080: market.vp,
+  profile.multi_character.
+- NOTE (new): operator likes the character portrait (082/083/084, research
+  0011); End Game window = optional OCR source for level + class binding
+  (084 follow-up, not planned). Operator has no PrtSc key; screenshots via
+  a rebound BDO Screenshot key; 24 UI-hidden scenery shots exist for the
+  gallery.
 - NOTE (new, operator 2026-10-06): one account, ONE character (the
   Deadeye), no alts, no tag partner. Tag EXP / alt-only warnings do not
   apply; 074's loss warnings should be suppressed for features the
@@ -130,31 +140,33 @@ Carried forward (not acted on yet):
   runs before stopping.
 
 Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew, HALT absent at
-/done. State: ops/loop/control/loop_items/*.json, progress/loop.json,
-progress/lane-<i>.json, inbox_status.json. Merge-stuck items are fixed by a
-session agent (pattern: merge refs/ew/keep/<id> onto main, keep both sides,
-mark item merged, delete keep ref, push). EW server restarted on 4649c98
-(version read back = HEAD); restart after more server merges if
-/api/version lags (server was found offline once this session).
+/done (session 10 set HALT briefly during a manual main merge, cleared).
+State: ops/loop/control/loop_items/*.json, progress/loop.json,
+progress/lane-<i>.json, inbox_status.json. Merge-stuck items are fixed by
+a session agent (merge refs/ew/keep/<id> onto main, keep both sides, mark
+item merged, delete keep ref, push). EW server restarted at /done onto
+0531237 (version read back = HEAD). Restart: stop the server pid from
+/api/version, then `python tools/launch.py --server-only`.
 
-Acceptance: each new deep-dive plan merged by the loop with ci green,
-nothing in adjudicate / merge-conflict / gave-up / failed-dirty.
+Acceptance: loop keeps merging new deep-dive plans with ci green, nothing
+in adjudicate / merge-conflict / gave-up / failed-dirty; 084 card visible
+in the dashboard at default window size.
 
-Do NOT redo: session 9 (2026-10-06): research 0008 deep dive 2026-10-06b
-(plans 074-075) and research 0009 UI/UX audit (plans 076-078) written,
-refute 2/3 each, merged 94305bd with ROADMAP conflict resolved (rows
-074-078 contiguous). Session 8 check: loop items 69 merged / 8 no-change,
-none stuck. Plans 019-073 merged, research 0007, loop stall fix 56be70f,
-lane-race fix bc5a6bd, LaneLoop arm, kit v8.
+Do NOT redo: session 10 (2026-10-06/07): research 0010 zero-touch audit
+(plans 079-081), research 0011 portrait UX (082-083), plan 084 larger
+portrait card, research 0012 OCR QA (25 UI-hidden shots, auto-OCR
+partial-file fix c3df83e), 080 merge-conflict fix b8fbef8, headless run
+counter reset 2026-10-06 ~21:00 on operator order (backup in
+ops/runtime/headless_budget.pre-reset-*.json, read back starts=[]). Loop
+merged 074-086 (085/086 from deep-dive 0013). Tag EXP item retracted
+(single character).
 
-In flight: loop tick fire ~133 dispatched hand-off NOTE bullets
-Hf6e696 / H61d819 to lanes (progress/lane-<i>.json, ~4-7m); loop will then
-pick up 074-078.
+In flight: none started by this session. Loop lanes per
+progress/lane-<i>.json.
 
-Status: main 94305bd pushed (a6bff3c..94305bd) before this hand-off
-commit. Gates this /done: pytest exit 0, node 600/600, leak sweep ARMED
-(19). CI: ci 37550131220 + codeql 37550131198 on 94305bd success (182 s).
-Server health ok, version 4649c98 (no server
-code changed since). HALT absent. Session jsonl ~0.6 MB.
+Status: main 0531237 pushed, in sync with origin. Gates this /done: pytest
+exit 0, node 693/693, leak sweep ARMED (19). CI: ci 37605042510 + codeql
+37605042515 on 0531237 success. Server health ok, version 0531237. Runs
+39/120 in window. Session jsonl ~1.9 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
