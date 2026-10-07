@@ -8,7 +8,7 @@ const C = require('../shared/ewcore');
 
 test('profile.base_url is an allowlisted Profile setting', () => {
   const g = C.SETTINGS_GROUPS.find((x) => x.id === 'profile');
-  assert.deepStrictEqual(g.fields.map((f) => f.key),
+  assert.deepStrictEqual(g.fields.map((f) => f.key).slice(0, 3),
     ['profile.family', 'profile.base_url', 'profile.multi_character']);
 });
 

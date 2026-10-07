@@ -87,15 +87,15 @@ const prompts = (at) => ({ ladder_min: [15, 5, 1],
   maint_loss: [{ key: 'maintLoss:' + KEY, at: new Date(START).toISOString(), title: 'Before maintenance', text: TAG },
     { key: 7 }, null] });
 
-test('maintLoss: opt-in, T-24 h toast passes the game-closed quiet', () => {
-  assert.strictEqual(C.notifyPrefs({}).maintLoss, false);
+test('maintLoss: on with zero config (plan 080), T-24 h toast passes the game-closed quiet', () => {
+  assert.strictEqual(C.notifyPrefs({}).maintLoss, true);
   const now = START - 24 * H + 60000;
   const hits = C.notifyRules(null, { at: now, prompts: prompts() }, now, { maintLoss: true });
   assert.deepStrictEqual(hits.map((h) => [h.key, h.rule, h.closed === true]),
     [['maintLoss:' + KEY + ':24h', 'maintLoss', true]]);
   const g = C.promptGate(hits, { state: 'not_running' }, { quiet_closed: true });
   assert.strictEqual(g.fire.length, 1);
-  assert.strictEqual(C.notifyRules(null, { at: now, prompts: prompts() }, now, {}).length, 0, 'off by default');
+  assert.strictEqual(C.notifyRules(null, { at: now, prompts: prompts() }, now, {}).length, 0, 'empty prefs: nothing');
 });
 
 test('maintLoss: quiet between the toasts, ladder near the start (dropped while closed)', () => {
@@ -112,10 +112,11 @@ test('maintLoss: quiet between the toasts, ladder near the start (dropped while 
   assert.deepStrictEqual(C.notifyRules(null, { at: START + 1, prompts: prompts() }, START + 1, { maintLoss: true }), []);
 });
 
-test('wiring: Home polls the digest; server + settings know the rule', () => {
+test('wiring: Home polls the digest; server knows the route; the rule is always on', () => {
   assert.match(read('dashboard/home.js'), /maint: '\/api\/maint\/digest'/);
   const app = fs.readFileSync(path.join(APP, '..', 'server', 'ew', 'app.py'), 'utf8');
   assert.match(app, /"\/api\/maint\/digest": _post_maint_digest/);
   const settings = fs.readFileSync(path.join(APP, '..', 'server', 'ew', 'settings.py'), 'utf8');
-  assert.match(settings, /"maintLoss": False/);
+  assert.doesNotMatch(settings, /maintLoss/, 'plan 080: no per-rule setting');
+  assert.ok(C.NOTIFY_RULES.some((r) => r.name === 'maintLoss' && r.defaultOn === true));
 });

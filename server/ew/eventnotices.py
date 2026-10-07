@@ -18,7 +18,8 @@ per MIN_INTERVAL_S and MAX_DETAILS Detail GETs per run in total, and reads
 more from each Detail page: a "<Mon D> (<Ddd>) Maintenance" notice's UTC
 column (found by header text) -> store domain `maint_notices`, which beats
 the weekly slot; Hot Time bonus lines -> plan 011 auto windows; word-style
-coupon codes beside the copy button. With setting `notices.auto_add` a
+coupon codes beside the copy button. With `notices.auto_add` (plan 080:
+fixed on; a config value is a 24 h incident switch) a
 parse whose window has both ends is ADDED (`auto: true`, source link) and
 remembered by groupContentNo, so undo / dismiss sticks; partial parses stay
 suggestions. When the official host has failed for STEAM_AFTER_S, the Steam

@@ -62,10 +62,9 @@ test('normalizeLeveling keeps valid hot_auto rows; hotAutoText reads in the zone
   assert.strictEqual(C.hotAutoText(null), '');
 });
 
-test('settings: notices.auto_add is an allowlisted bool', () => {
-  assert.ok(C.SETTINGS_KEYS.indexOf('notices.auto_add') >= 0);
-  assert.strictEqual(C.validSettingsBody({ set: { 'notices.auto_add': false } }), true);
-  assert.strictEqual(C.validSettingsBody({ set: { 'notices.auto_add': 'yes' } }), false);
+test('settings: notices.auto_add is not a setting (plan 080: fixed on)', () => {
+  assert.ok(C.SETTINGS_KEYS.indexOf('notices.auto_add') < 0);
+  assert.strictEqual(C.validSettingsBody({ set: { 'notices.auto_add': false } }), false);
 });
 
 test('static: the Events tab offers undo; the Leveling card lists auto windows', () => {

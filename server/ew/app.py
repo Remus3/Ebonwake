@@ -246,13 +246,14 @@ class EWServer(ThreadingHTTPServer):
         self.coupons = coupons.CouponService(coupon_client, self.events, spawn=coupon_spawn,
                                              extra=lambda: self.notices.coupon_extra())
         # Plan 059: official event-notice windows, gated like plan 014;
-        # maintenance-relative ends follow the events.maintenance_start_utc setting.
-        # Plan 064: + Notices / Updates boards; full windows auto-added (with
-        # undo) while notices.auto_add is on, Hot Time into plan 011's card.
+        # maintenance-relative ends follow the effective maintenance start (plan
+        # 079 config entry, else the slot). Plan 064: + Notices / Updates boards;
+        # full windows auto-added (with undo; plan 080: fixed on unless a 24 h
+        # config incident switch), Hot Time into plan 011's card.
         self.notices = eventnotices.NoticeService(
             notice_client, self.events, self.store, spawn=notice_spawn,
             maint_start=self._maint_start, leveling=self.leveling,
-            auto_add=lambda: self.settings.view()["settings"]["notices.auto_add"])
+            auto_add=lambda: self.fixed_settings()["notices.auto_add"])
         # Plan 074: before-maintenance digest - loss sentences from the cached
         # maintenance notices + what ends at the next maintenance; never fetches.
         self.maintdigest = maintdigest.DigestService(
@@ -360,7 +361,7 @@ class EWServer(ThreadingHTTPServer):
         # silver/h over the plan 062 play session.
         self.ocr_auto = ocrauto.AutoOcr(
             self.store, self.game, self.ocr, self.grind,
-            settings=lambda: self.settings.view()["settings"], clock=grind_clock or time.time,
+            settings=self.fixed_settings, clock=grind_clock or time.time,
             on_change=self._ocr_auto_changed, leveling=self.leveling, progress=self.progress,
             play=self.play.view, loot_target=self.grind.loot_target)
         # Plan 081: the running session's OCR loot counts prefill the loot form.
@@ -371,7 +372,7 @@ class EWServer(ThreadingHTTPServer):
         # near a boss spawn while logged in suggests that boss's loot tick.
         self.autotick = autotick.AutoTick(
             self.store, self.today, self.dice, self.game, table=self.bosses.table,
-            settings=lambda: self.settings.view()["settings"], clock=today_clock or time.time,
+            settings=self.fixed_settings, clock=today_clock or time.time,
             on_change=lambda: self.bus.bump("today"))
         if isinstance(listeners, list):
             listeners.append(self.autotick.on_game)
@@ -389,8 +390,7 @@ class EWServer(ThreadingHTTPServer):
             pollers.append(self.portraits.poll)
         # Plan 070: prompt registry (expiry, dedupe) + game-closed quiet + ladder.
         self.prompts = prompts.PromptRegistry(
-            self.store, clock=today_clock or time.time,
-            settings=lambda: self.settings.view()["settings"])
+            self.store, clock=today_clock or time.time, settings=self.fixed_settings)
         if isinstance(listeners, list):
             listeners.append(self.prompts.on_game)
         # Plan 051: first-run checklist over the same config file + store.
@@ -421,6 +421,15 @@ class EWServer(ThreadingHTTPServer):
             "ocr": self._sig_ocr, "notices": self._sig_notices, "market": self._sig_market,
             "profile": self._sig_profile, "boss_drift": lambda: None},
             clock=today_clock or time.time, overrides=self._sig_overrides)
+        # Plan 080: coupon / event-notice checks are always on; a config incident
+        # switch (plan 079 entry, 24 h) turns one off until the first start after
+        # it expires. Only read when a live client was passed (main(), never a bare test).
+        if coupon_client is not None or notice_client is not None:
+            eff = self.fixed_settings()
+            if eff["coupons.check"] is False:
+                self.coupons.client = None
+            if eff["events.notice_check"] is False:
+                self.notices.client = None
         if game_poll:  # off by default so tests never probe processes; main() turns it on
             self.game.start()
             self.ocr_auto.start()
@@ -498,12 +507,19 @@ class EWServer(ThreadingHTTPServer):
         end = self._maint_end_after(now.timestamp(), self._maint_start())
         return _dt.datetime.fromtimestamp(end, _dt.timezone.utc) if end else None
 
-    def eff_settings(self):
+    def fixed_settings(self):
+        """Plan 080: effective settings for readers of the FIXED keys - no live
+        signal is read (none applies to them, and the VP signal reads the grind
+        view, which a play-session listener holding its lock must not re-enter)."""
+        return self.eff_settings(live=False)
+
+    def eff_settings(self, live=True):
         """Settings with every ledger key resolved (plan 079): config imported
         as `source: config`, then live signal > unexpired override > default.
-        The market keys resolve from the configured base `market.settings`."""
-        view = self.settings.view()
-        s, dflt = view["settings"], view["defaults"]
+        The market keys resolve from the configured base `market.settings`.
+        Plan 080: the FIXED keys default to their fixed value; a config value
+        is an incident switch (24 h from first sight)."""
+        s, dflt = self.settings.inputs()
         base = self.market.settings
         s["market.vp"], s["market.fame_pct"] = base["vp"], base["fame_pct"]
         try:
@@ -511,8 +527,9 @@ class EWServer(ThreadingHTTPServer):
         except OSError:
             mtime = float(self.overrides.clock())
         self.overrides.sync_config(s, dflt, mtime)
-        live = {"market.vp": self._vp_live, "events.maintenance_start_utc": self._maint_live,
-                "market.fame_pct": self._fame_live}
+        live = ({"market.vp": self._vp_live, "events.maintenance_start_utc": self._maint_live,
+                 "market.fame_pct": self._fame_live}
+                if live else {})
         spec = {k: (self._live(live[k]) if k in live else None, dflt[k]) for k in s}
         for k, out in self.overrides.effective_many(spec).items():
             s[k] = out["value"]
@@ -620,7 +637,7 @@ class EWServer(ThreadingHTTPServer):
         self.bus.bump("progress")  # plan 066: gs stats (leveling bumps its own seq)
 
     def _play_config(self):
-        s = self.settings.view()["settings"]
+        s = self.fixed_settings()
         return s["play.auto_session"], s["play.grace_s"]
 
     def _maint_inputs(self):
@@ -998,8 +1015,19 @@ class Handler(BaseHTTPRequestHandler):
             # Plan 079: {"clear": key} retires the override and puts the key back
             # to its default (so config/local.json never re-imports it).
             clear = body["clear"]
-            if not (isinstance(clear, str) and clear in settings.SPEC and led.covers(clear)):
+            if not (isinstance(clear, str) and clear in (settings.SPEC.keys() | settings.FIXED.keys())
+                    and led.covers(clear)):
                 raise ValueError("clear: not a clearable override key")
+            if clear in settings.FIXED:  # plan 080: back to the fixed value, config untouched
+                led.clear(clear, by="operator")
+                self.server.context.invalidate()
+                out = self.server.settings.view()
+                # The two start-read checks come back at the next server start.
+                out["changed"] = []
+                out["restart"] = [clear] if clear in ("coupons.check",
+                                                      "events.notice_check") else []
+                out["overrides"] = self.server.overrides_view()
+                return out
             body = {"set": {clear: settings.SPEC[clear][1]}}
         out = self.server.settings.apply(body)
         dflt = out["defaults"]
@@ -1284,15 +1312,11 @@ def main(argv=None, probe=None):
     # Single instance (plan 010): an EW server already on the port wins.
     if (probe or single.probe)() == "ew":
         return 0
-    # Plan 030: settings coupons.check = false keeps coupon suggestions off.
-    # Plan 059: events.notice_check = false keeps event-notice suggestions off.
-    cfg = settings.Settings(CONFIG_PATH).view()["settings"]
     srv = make_server(commit=read_commit(), game_poll=True,
                       game_cfg=gamewatch.config_bdo(REPO_ROOT),
                       detector=detect.Detector(config=lambda: gamewatch.config_bdo(REPO_ROOT)),
-                      coupon_client=coupons.CouponClient() if cfg["coupons.check"] else None,
-                      notice_client=(eventnotices.NoticeClient()
-                                     if cfg["events.notice_check"] else None),
+                      coupon_client=coupons.CouponClient(),
+                      notice_client=eventnotices.NoticeClient(),
                       drift_client=_drift_client())
     try:
         srv.serve_forever()

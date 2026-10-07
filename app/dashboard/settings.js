@@ -10,7 +10,7 @@
   'use strict';
   const C = window.EWCore;
   const S = { panel: null, saved: null, defaults: null, restartKeys: [], err: null, msg: null,
-    msgCls: 'ok', busy: false, inputs: {}, theme: 'dark' };
+    msgCls: 'ok', busy: false, inputs: {}, theme: 'system' };
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -118,6 +118,7 @@
     window.EWToast.via(b).post('/api/settings', body).then(function (res) {
       if (!res || !res.ok) throw new Error((res && res.error) || 'unknown error');
       take(res.data);
+      if (window.EWOverrides) window.EWOverrides.refresh(true); // plan 080: mute / scale badges
       const changed = res.data && Array.isArray(res.data.changed) ? res.data.changed : [];
       const restart = res.data && Array.isArray(res.data.restart) ? res.data.restart : [];
       return after(changed).then(function (notes) {
@@ -144,10 +145,11 @@
       input = el('input');
       input.type = 'checkbox';
       input.checked = v === true;
-    } else if (f.type === 'enum') {
+    } else if (f.type === 'enum' || f.type === 'mute') {
       input = el('select');
       // Plan 078: display text may differ from the stored value (pin = always).
-      C.enumOptions(f).forEach(function (o) {
+      // Plan 080: the mute select keeps an active mute as its first option.
+      (f.type === 'mute' ? C.muteOptions(v, Date.now()) : C.enumOptions(f)).forEach(function (o) {
         const opt = el('option', null, o.text);
         opt.value = o.value;
         input.appendChild(opt);

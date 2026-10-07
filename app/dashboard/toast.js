@@ -4,7 +4,7 @@
    .post(route, body): the ew:post bridge call every module uses; its result
    also becomes a toast (C.postToast). The notify loop polls the same GET payloads
    the tabs read (game every 5 s, the rest every 60 s), runs C.notifyRules
-   with the operator's prefs (config notify.*, a launch argument), dedupes
+   with every rule on (plan 080; a launch argument carries the names), dedupes
    through C.notifyLedger and turns each hit into a toast plus an OS
    notification via the allowlisted ew:notify bridge. Plan 070: GET
    /api/prompts feeds C.promptGate (game-closed quiet) and the 15/5/1 alert
@@ -124,7 +124,8 @@
         prompts: docs.prompts || null };
       // Plan 070: game-closed quiet; a ladder step missed while closed is
       // consumed (never fires late), other held hits re-fire at login.
-      const g = C.promptGate(C.notifyRules(prev, next, t, prefs()), next.game, next.prompts);
+      // Plan 080: notify.mute_until drops (consumes) every hit while it holds.
+      const g = C.promptGate(C.notifyRules(prev, next, t, prefs()), next.game, next.prompts, t);
       ledger.take(g.drop, t);
       fire(ledger.take(g.fire, t));
       prev = next;

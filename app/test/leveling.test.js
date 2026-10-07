@@ -163,7 +163,7 @@ test('overlayWidgets: leveling is opt-in (default off, only a literal true turns
   const off = C.widgetsQuery({});
   assert.strictEqual(C.widgetsFromQuery('?' + new URLSearchParams(off).toString()).leveling, false);
   const ex = JSON.parse(fs.readFileSync(path.join(APP, '..', 'config', 'local.example.json'), 'utf8'));
-  assert.strictEqual(ex.overlay.widgets.leveling, false);
+  assert.ok(!('widgets' in ex.overlay), 'plan 080: no manual overlay layout in the example');
 });
 
 test('leveling card: DOM-built, bridge writes, SSE leveling event, collapsed editor', () => {

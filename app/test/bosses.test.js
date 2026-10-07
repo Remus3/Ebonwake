@@ -127,8 +127,8 @@ test('worldBoss widget: opt-in, default off, query round-trip', () => {
   const q = new URLSearchParams(C.widgetsQuery({ worldBoss: true })).toString();
   assert.strictEqual(C.widgetsFromQuery('?' + q).worldBoss, true);
   const ex = JSON.parse(fs.readFileSync(path.join(APP, '..', 'config', 'local.example.json'), 'utf8'));
-  assert.strictEqual(ex.overlay.widgets.worldBoss, false);
-  assert.strictEqual(ex.notify.bossSoon, false);
+  assert.ok(!('widgets' in ex.overlay), 'plan 080: no manual overlay layout in the example');
+  assert.ok(!('bossSoon' in ex.notify), 'plan 080: no per-rule switch in the example');
 });
 
 test('validPost: /api/bosses tick|untick {boss, day} only', () => {
@@ -193,8 +193,8 @@ test('composeNow: next 3 bosses in Timers (Garmoth meta), absent without the pay
 const ON = { bossSoon: true };
 const at0 = Date.parse('2026-10-06T00:00:00Z');
 
-test('bossSoon: default off; 15 then 5 min before, once each, keyed per spawn', () => {
-  assert.strictEqual(C.notifyPrefs({}).bossSoon, false);
+test('bossSoon: on with zero config (plan 080); 15 then 5 min before, once each, keyed per spawn', () => {
+  assert.strictEqual(C.notifyPrefs({}).bossSoon, true);
   assert.ok(C.NOTIFY_RULES.some((r) => r.name === 'bossSoon'));
   const snap = { at: NOW, bosses: view() };
   assert.deepStrictEqual(C.notifyRules(null, snap, at0 - 16 * MIN, ON), []);

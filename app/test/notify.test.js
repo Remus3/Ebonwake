@@ -55,18 +55,16 @@ test('postToast: every POST result -> one toast (ok / 404 warn / bad)', () => {
 
 // ---- rule table + prefs ----
 
-test('NOTIFY_RULES: stable names, marketAlert + buffEnding on by default', () => {
+test('NOTIFY_RULES: stable names, every rule on with zero config (plan 080)', () => {
   assert.deepStrictEqual(C.NOTIFY_RULES.map((r) => r.name),
     ['marketAlert', 'buffEnding', 'hotTime', 'resetPassed', 'newCoupon', 'gameExit', 'bossSoon', 'resetSoon',
       'loginRisk', 'maintLoss']);
-  assert.deepStrictEqual(C.notifyPrefs({}), { marketAlert: true, buffEnding: true, hotTime: false,
-    resetPassed: false, newCoupon: false, gameExit: false, bossSoon: false, resetSoon: false,
-    loginRisk: false, maintLoss: false });
-  const p = C.notifyPrefs({ notify: { gameExit: true, buffEnding: false, hotTime: 'yes', bogus: true } });
-  assert.strictEqual(p.gameExit, true);
-  assert.strictEqual(p.buffEnding, false);
-  assert.strictEqual(p.hotTime, false);
-  assert.ok(!('bogus' in p));
+  const all = {};
+  C.NOTIFY_RULES.forEach((r) => { all[r.name] = true; });
+  assert.deepStrictEqual(C.notifyPrefs({}), all);
+  // A forgotten config/local.json switch never silences a rule.
+  const p = C.notifyPrefs({ notify: { gameExit: false, buffEnding: false, hotTime: 'yes', bogus: true } });
+  assert.deepStrictEqual(p, all);
 });
 
 test('notifySilent: default true, boolean override only', () => {
@@ -79,7 +77,7 @@ test('notifySilent: default true, boolean override only', () => {
 test('notifyPrefs round-trips through the launch argument', () => {
   const p = C.notifyPrefs({ notify: { gameExit: true } });
   const arg = C.notifyArg(p);
-  assert.strictEqual(arg, 'marketAlert,buffEnding,gameExit');
+  assert.strictEqual(arg, C.NOTIFY_RULES.map((r) => r.name).join(','));
   assert.deepStrictEqual(C.notifyPrefsFromArg(arg), p);
   assert.deepStrictEqual(C.notifyPrefsFromArg(''), C.notifyPrefsFromArg('x,y'));
   assert.strictEqual(C.notifyPrefsFromArg('').marketAlert, false);

@@ -53,10 +53,10 @@ test('bossSuggested: suggested and not looted only', () => {
   assert.strictEqual(C.bossSuggested(null, '2026-10-06', 'Kzarka'), false);
 });
 
-test('settings: checklist.auto is a bool field in the Checklist group', () => {
-  const g = C.SETTINGS_GROUPS.filter((x) => x.id === 'checklist')[0];
-  assert.ok(g);
-  assert.deepStrictEqual(g.fields.map((f) => [f.key, f.type]), [['checklist.auto', 'bool']]);
+test('settings: checklist.auto is not a setting (plan 080: fixed on)', () => {
+  assert.ok(!C.SETTINGS_GROUPS.some((x) => x.id === 'checklist'));
+  assert.strictEqual(C.validSettingsBody({ set: { 'checklist.auto': false } }), false);
+  assert.ok(C.INCIDENT_KEYS.includes('checklist.auto'));
 });
 
 test('today.js: auto pill + undo via the normal untick; bosses.js: one-click suggestion', () => {

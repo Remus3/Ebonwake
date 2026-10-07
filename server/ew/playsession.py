@@ -68,7 +68,8 @@ def _clean_last(v):
 
 
 class PlaySession:
-    """`config()` -> (auto_session, grace_s) from the plan 030 settings;
+    """`config()` -> (auto_session, grace_s), fixed values (plan 080) unless a
+    24 h config incident switch holds;
     `on_change()` is called after an open or close (the app bumps the grind
     domain so dashboards re-GET)."""
 

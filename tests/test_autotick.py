@@ -264,9 +264,10 @@ def test_disabled_setting_does_nothing(tmp_path):
     assert changes == []
 
 
-def test_settings_key_default_true():
-    assert settings.defaults()["checklist.auto"] is True
-    ok = settings.SPEC["checklist.auto"][0]
+def test_settings_key_fixed_true():
+    # Plan 080: fixed on, not settable; config false is only a 24 h incident switch.
+    assert settings.fixed()["checklist.auto"] is True and "checklist.auto" not in settings.SPEC
+    ok = settings.FIXED["checklist.auto"][0]
     assert ok(True) and ok(False) and not ok(1) and not ok("true")
 
 

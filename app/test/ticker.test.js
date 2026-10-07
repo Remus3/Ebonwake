@@ -122,7 +122,7 @@ test('marketTicker widget: opt-in, default off, query round-trip, template off',
   const q = new URLSearchParams(C.widgetsQuery({ marketTicker: true })).toString();
   assert.strictEqual(C.widgetsFromQuery('?' + q).marketTicker, true);
   const ex = JSON.parse(fs.readFileSync(path.join(APP, '..', 'config', 'local.example.json'), 'utf8'));
-  assert.strictEqual(ex.overlay.widgets.marketTicker, false);
+  assert.ok(!('widgets' in ex.overlay), 'plan 080: no manual overlay layout in the example');
 });
 
 test('overlay: ticker from GET /api/market/watch every 60 s, opt-in row, no POST', () => {

@@ -336,11 +336,13 @@ def test_auto_stop_ignores_other_sessions(rig):
 # --- settings ---------------------------------------------------------------------------
 
 def test_settings_allowlist():
-    d = settings.defaults()
+    # Plan 080: fixed values (a config value is a 24 h incident switch only).
+    d = settings.fixed()
     assert d["play.auto_session"] is True and d["play.grace_s"] == 120
-    ok = settings.SPEC["play.grace_s"][0]
+    assert "play.grace_s" not in settings.SPEC and "play.auto_session" not in settings.SPEC
+    ok = settings.FIXED["play.grace_s"][0]
     assert ok(60) and ok(600) and not ok(59) and not ok(601) and not ok(True)
-    assert not settings.SPEC["play.auto_session"][0](1)
+    assert not settings.FIXED["play.auto_session"][0](1)
 
 
 # --- server: GET /api/grind session.auto + SSE play_session ----------------------------

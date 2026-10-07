@@ -181,7 +181,7 @@ test('overlayWidgets: eventsSoon default on, only a literal false turns it off',
   const q = C.widgetsQuery({ grindSession: true, grindBuff: true, eventsSoon: false });
   assert.strictEqual(C.widgetsFromQuery('?' + new URLSearchParams(q).toString()).eventsSoon, false);
   const ex = JSON.parse(fs.readFileSync(path.join(APP, '..', 'config', 'local.example.json'), 'utf8'));
-  assert.strictEqual(ex.overlay.widgets.eventsSoon, true);
+  assert.ok(!('widgets' in ex.overlay), 'plan 080: no manual overlay layout in the example');
 });
 
 test('events.js: safe DOM, POST via the bridge only, uses the shared helpers', () => {

@@ -4,5 +4,5 @@
  "duration_min": 180,
  "source": "publisher's usual NA/EU weekly maintenance slot (Wednesday night Pacific = Thursday morning UTC), research 0006 section 3; verify against the next maintenance notice",
  "verified": false,
- "note": "verify: the start shifts with the publisher's notice; override with the setting events.maintenance_start_utc (HH:MM UTC)"
+ "note": "verify: the start shifts with the publisher's notice; an official maintenance notice supersedes it; config events.maintenance_start_utc (HH:MM UTC) is a plan 079 override until that maintenance ends"
 }

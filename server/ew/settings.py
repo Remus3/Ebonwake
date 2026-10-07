@@ -11,6 +11,7 @@ be written through this route.
 """
 
 import copy
+import datetime as _dt
 import json
 import math
 import os
@@ -23,22 +24,17 @@ from pathlib import Path
 from . import maint, market, progress, prompts
 
 ANCHORS = ("tl", "tr", "bl", "br", "ml", "mr")
-WIDGETS = {"grindSession": True, "grindBuff": True, "eventsSoon": True,
-           "leveling": False, "season": False, "marketTicker": False,
-           "worldBoss": False, "dice": False, "whatNow": True}  # plan 069: whatNow
-# Plan 026 rule names (+ plan 032 bossSoon, plan 070 resetSoon, plan 075
-# loginRisk, plan 074 maintLoss); default off except marketAlert and buffEnding.
-NOTIFY = {"marketAlert": True, "buffEnding": True, "hotTime": False,
-          "resetPassed": False, "newCoupon": False, "gameExit": False,
-          "bossSoon": False, "resetSoon": False, "loginRisk": False,
-          "maintLoss": False}
+# The plan 030 overlay widgets (+ plan 069 whatNow); context mode picks them.
+WIDGETS = ("grindSession", "grindBuff", "eventsSoon", "leveling", "season", "marketTicker",
+           "worldBoss", "dice", "whatNow")
 THEMES = ("system", "dark", "light")
 OVERLAY_MODES = ("auto", "pin", "block")  # plan 067: per-widget pin / block
 MODS = ("Control", "Ctrl", "Alt", "Shift", "CommandOrControl", "Super")
 _KEY_RE = re.compile(r"^([A-Z0-9]|F([1-9]|1[0-9]|2[0-4]))$")
 MAX_SET = 64
+MUTE_MAX_S = 24 * 3600  # plan 080: notify.mute_until at most now + 24 h
 # Keys the running server reads only at start (dashboard offers a restart).
-RESTART_KEYS = ("profile.family", "profile.base_url", "coupons.check", "events.notice_check")
+RESTART_KEYS = ("profile.family", "profile.base_url")
 _LOCK = threading.Lock()
 
 
@@ -113,11 +109,28 @@ def _one_of(choices):
     return lambda v: isinstance(v, str) and v in choices
 
 
+def _iso_ts(v):
+    """Epoch seconds of an ISO-8601 string with an offset, else None."""
+    if not isinstance(v, str) or len(v) > 40:
+        return None
+    try:
+        t = _dt.datetime.fromisoformat(v)
+    except ValueError:
+        return None
+    return t.timestamp() if t.tzinfo is not None else None
+
+
+def valid_mute(v, now=None):
+    """Plan 080: "" (not muted) or an ISO UTC time at most now + 24 h."""
+    if v == "":
+        return True
+    t = _iso_ts(v)
+    return t is not None and t <= (time.time() if now is None else now) + MUTE_MAX_S + 60
+
+
 # dotted key -> (validator, default); insertion order is the GET order.
-SPEC = {}
-for _w, _d in WIDGETS.items():
-    SPEC[f"overlay.widgets.{_w}"] = (_is_bool, _d)
-SPEC.update({
+# Plan 080: only placement, hotkeys, profile, display and folders are settable.
+SPEC = {
     "overlay.anchor": (valid_anchor, "ml"),
     "overlay.display": (valid_display, None),
     "overlay.scale": (_num_in(0.8, 1.6), 1.0),
@@ -128,47 +141,51 @@ SPEC.update({
     "profile.base_url": (valid_base_url, ""),
     # Off = one character: Tag / alt-only loss warnings (plan 074) are suppressed.
     "profile.multi_character": (_is_bool, False),
-    "ui.theme": (_one_of(THEMES), "dark"),
+    "ui.theme": (_one_of(THEMES), "system"),  # plan 080: follows Electron nativeTheme
     "ui.scale": (_num_in(0.9, 1.3), 1.0),
-})
-for _n, _d in NOTIFY.items():
-    SPEC[f"notify.{_n}"] = (_is_bool, _d)
-SPEC.update({
-    # Plan 070: game-closed quiet (only allowlisted rules notify while the game
-    # is not running) and the minutes-before alert ladder, "15,5,1".
-    "notify.quiet_closed": (_is_bool, True),
-    "notify.ladder_min": (lambda v: prompts.parse_ladder(v) is not None, "15,5,1"),
+    # Plan 080: one mute for every notification rule (a plan 079 entry, 24 h max).
+    "notify.mute_until": (valid_mute, ""),
     "market.vp": (_is_bool, False),
     "market.fame_pct": (_num_in(0, market.FAME_MAX), 0),
-    "coupons.check": (_is_bool, True),
-    # Plan 059: official event-notice suggestions + the maintenance start override.
-    "events.notice_check": (_is_bool, True),
-    "events.maintenance_start_utc": (valid_maint_start, ""),
-    # Plan 064: full-window notice reads are added (with undo), not suggested.
-    "notices.auto_add": (_is_bool, True),
-    # Plan 062: login opens / exit closes the grind log; exit grace in seconds.
-    "play.auto_session": (_is_bool, True),
-    "play.grace_s": (lambda v: _is_int(v) and 60 <= v <= 600, 120),
-    # Plan 063: auto-OCR of screenshots taken while logged in.
-    "ocr.auto": (_is_bool, True),
-    "ocr.auto_commit_min": (_num_in(0.75, 0.99), 0.9),
-    "ocr.daily_cap": (lambda v: _is_int(v) and 0 <= v <= 1000, 120),
     # Plan 065: "use other" overrides for the auto-detected BDO folders.
     "bdo.install_dir": (valid_dir, ""),
     "bdo.documents_dir": (valid_dir, ""),
-    # Plan 067: widgets chosen by context; per-widget pin / block on top.
-    "overlay.auto": (_is_bool, True),
-    "overlay.idle_min": (lambda v: _is_int(v) and 5 <= v <= 240, 20),
-    # Plan 068: auto-tick inferable Today rows + boss-shot suggestions.
-    "checklist.auto": (_is_bool, True),
-})
+}
 for _w in WIDGETS:
     SPEC[f"overlay.mode.{_w}"] = (_one_of(OVERLAY_MODES), "auto")
 DETECTED_KEYS = ("bdo.install_dir", "bdo.documents_dir")
 
+# Plan 080: no longer settable - each has one fixed value. A config/local.json
+# value is still read, but only as a plan 079 override (`source: config`,
+# badged, 24 h from first sight; the maintenance start until the maintenance
+# ends), after which the fixed value applies again.
+FIXED = {
+    # Kill switches for automation (plans 014, 059, 062, 063, 064, 067, 068).
+    "ocr.auto": (_is_bool, True),
+    "play.auto_session": (_is_bool, True),
+    "notices.auto_add": (_is_bool, True),
+    "events.notice_check": (_is_bool, True),
+    "coupons.check": (_is_bool, True),
+    "checklist.auto": (_is_bool, True),
+    "overlay.auto": (_is_bool, True),
+    # Tunables, fixed at their plan defaults.
+    "ocr.auto_commit_min": (_num_in(0.75, 0.99), 0.9),
+    "ocr.daily_cap": (lambda v: _is_int(v) and 0 <= v <= 1000, 120),
+    "play.grace_s": (lambda v: _is_int(v) and 60 <= v <= 600, 120),
+    "overlay.idle_min": (lambda v: _is_int(v) and 5 <= v <= 240, 20),
+    "notify.ladder_min": (lambda v: prompts.parse_ladder(v) is not None, "15,5,1"),
+    "notify.quiet_closed": (_is_bool, True),
+    # Plan 059: the maintenance start is a plan 079 ledger key only.
+    "events.maintenance_start_utc": (valid_maint_start, ""),
+}
+
 
 def defaults():
     return {k: copy.deepcopy(d) for k, (_, d) in SPEC.items()}
+
+
+def fixed():
+    return {k: copy.deepcopy(d) for k, (_, d) in FIXED.items()}
 
 
 def _lookup(doc, key):
@@ -180,10 +197,11 @@ def _lookup(doc, key):
     return cur, True
 
 
-def values_from(doc):
-    """Allowlisted dotted keys -> configured value, or the default when missing/invalid."""
+def values_from(doc, spec=None):
+    """Allowlisted dotted keys -> configured value, or the default when missing/invalid.
+    `spec` FIXED reads the plan 080 incident switches the same way."""
     out = {}
-    for key, (ok, dflt) in SPEC.items():
+    for key, (ok, dflt) in (SPEC if spec is None else spec).items():
         v, found = _lookup(doc if isinstance(doc, dict) else {}, key)
         out[key] = copy.deepcopy(v) if found and ok(v) else copy.deepcopy(dflt)
     return out
@@ -344,14 +362,26 @@ class Settings:
         except FileNotFoundError:
             return None
 
-    def view(self):
+    def _doc(self):
         try:
             text = self._read_text()
             doc = json.loads(text) if text is not None else {}
             error = None if isinstance(doc, dict) else "config/local.json is not a JSON object"
         except (OSError, ValueError):
             doc, error = {}, "config/local.json is unreadable"
-        return {"settings": values_from(doc if isinstance(doc, dict) else {}),
+        return (doc if isinstance(doc, dict) else {}), error
+
+    def inputs(self):
+        """Plan 079 / 080 effective-settings inputs, no folder detection:
+        (values, defaults) over SPEC + FIXED; a FIXED value is the config one."""
+        doc, _ = self._doc()
+        vals = values_from(doc)
+        vals.update(values_from(doc, FIXED))
+        return vals, dict(defaults(), **fixed())
+
+    def view(self):
+        doc, error = self._doc()
+        return {"settings": values_from(doc),
                 "defaults": defaults(), "restart_keys": list(RESTART_KEYS), "error": error,
                 "detected": self._detected()}
 

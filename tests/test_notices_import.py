@@ -459,11 +459,11 @@ def test_steam_robots_disallow_reads_no_feed(tmp_path):
 
 # --- settings + routes -----------------------------------------------------------
 
-def test_setting_allowlisted_default_on():
-    assert settings.defaults()["notices.auto_add"] is True
-    assert settings.validate({"set": {"notices.auto_add": False}}) == {"notices.auto_add": False}
-    with pytest.raises(ValueError):
-        settings.validate({"set": {"notices.auto_add": "yes"}})
+def test_setting_fixed_on_not_settable():
+    # Plan 080: fixed on; config false is only a 24 h incident switch.
+    assert settings.fixed()["notices.auto_add"] is True
+    with pytest.raises(ValueError, match="not a settable key"):
+        settings.validate({"set": {"notices.auto_add": False}})
 
 
 def _no_network(url, timeout):
