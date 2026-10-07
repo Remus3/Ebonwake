@@ -74,6 +74,39 @@ def _epoch(s):
         return None
 
 
+def _count(v):
+    """A shown count: a non-negative int (a whole float too), never bool / str."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or v < 0:
+        return None
+    return int(v) if float(v).is_integer() else None
+
+
+def _text(v):
+    return v if isinstance(v, str) and v else None
+
+
+def card_block(level, lifeskill, cp):
+    """Plan 084 character card over values EW already has, never fetched or
+    stored: `level` = LevelingService.level_info(), `lifeskill` = the plan 042
+    Life & CP view, `cp` = ImperialService.cp_info() (the plan 081 value the
+    Imperial card shows). Hidden / missing / malformed -> None, never zero."""
+    lv = level if isinstance(level, dict) else {}
+    life = lifeskill if isinstance(lifeskill, dict) and lifeskill.get("status") == "ok" else {}
+    row = cp if isinstance(cp, dict) else {}
+    lvl = _count(lv.get("level"))
+    energy = _count(life.get("energy"))
+    cpv = _count(row.get("value"))
+    src = _text(row.get("source")) if cpv is not None else None
+    cp_at = _text(row.get("at")) if cpv is not None else None
+    if cp_at is None and src == "profile":
+        cp_at = _text(life.get("at"))
+    return {"level": lvl,
+            "level_source": _text(lv.get("level_source")) if lvl is not None else None,
+            "level_at": _text(lv.get("level_at")) if lvl is not None else None,
+            "energy": energy, "energy_at": _text(life.get("at")) if energy is not None else None,
+            "cp": cpv, "cp_src": src, "cp_at": cp_at, "name": _text(life.get("character"))}
+
+
 def _shot_ok(name):
     return (isinstance(name, str) and SHOT_NAME_RE.match(name) is not None and ".." not in name
             and os.path.splitext(name)[1].lower() in SHOT_MIME)
@@ -255,8 +288,9 @@ class PortraitService:
 
     def __init__(self, store, archive_dir, documents=lambda: None, loads=lambda: [],
                  progress_cls=lambda: None, clock=time.time, on_change=None,
-                 shots=lambda: [], windows=lambda: [], ledger=None):
+                 shots=lambda: [], windows=lambda: [], ledger=None, card=None):
         self.store = store
+        self.card = card  # plan 084: () -> card_block(...), or None
         self.archive_dir = Path(archive_dir)
         self.documents = documents
         self.loads = loads
@@ -531,6 +565,14 @@ class PortraitService:
     def _ledger_item(self, entry, now):
         return overrides.item(entry, self.ledger.policy, now)
 
+    def _card(self):
+        if self.card is None:
+            return None
+        try:
+            return self.card()
+        except Exception:  # noqa: BLE001 - a broken source never breaks the chip
+            return None
+
     def view(self, char_no=None, cls=None):
         """GET /api/portraits body; `cls` adds that class's gallery (plan 083)."""
         with self._lock:
@@ -550,7 +592,8 @@ class PortraitService:
                "unknown": sum(1 for e in d["index"] if e["char_no"] not in bound),
                "char_no": char_no if isinstance(char_no, str) else None,
                "loaded_cls": loaded["cls"] if loaded else None,
-               "progress_cls": pcls if isinstance(pcls, str) and pcls else None}
+               "progress_cls": pcls if isinstance(pcls, str) and pcls else None,
+               "card": self._card()}
         if want:
             out.update(cls=want, history=self._history(d, want),
                        shots=self._class_shots(d, want)[:SHOTS_PER_CLASS],

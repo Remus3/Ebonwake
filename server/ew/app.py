@@ -390,7 +390,9 @@ class EWServer(ThreadingHTTPServer):
             # Plan 083: screenshots attributed by load + logged-in window; a
             # gallery pick is a plan 079 override.
             shots=lambda: self.game.view().get("screenshots") or [],
-            windows=self.play.windows, ledger=self.overrides)
+            windows=self.play.windows, ledger=self.overrides,
+            # Plan 084: card values from leveling, Life & CP and the Imperial CP.
+            card=self._portrait_card)
         if isinstance(pollers, list):
             pollers.append(self.portraits.poll)
         # Plan 070: prompt registry (expiry, dedupe) + game-closed quiet + ladder.
@@ -474,6 +476,11 @@ class EWServer(ThreadingHTTPServer):
             return None
 
     # -- plan 081 derived planner inputs ---------------------------------------
+
+    def _portrait_card(self):
+        """Plan 084: the character card block; no new input, never fetches."""
+        return portraits.card_block(self.leveling.level_info(), self.progress.lifeskill_view(),
+                                    self.imperial.cp_info())
 
     def _ocr_read(self, kind):
         """Newest committed OCR read of `kind` {value, at, source}, or None."""

@@ -17,7 +17,12 @@
     <span class="ew-pill unknown" id="server-pill">server ?</span>
     <button class="ew-btn" id="server-restart" type="button" hidden>Restart server</button>
   </header>
-  <main id="panels" class="ew-main"></main>
+  <div class="ew-main">
+    <aside class="ew-rail" aria-label="Character">
+      <button class="ew-card-btn" id="char-card" type="button" aria-label="Character card"><span class="ew-card-frame"><span class="ew-card-pic ew-card-empty" role="img" aria-label="Character: no portrait yet"></span></span><span class="ew-card-lines"></span></button>
+    </aside>
+    <main id="panels" class="ew-panels"></main>
+  </div>
 </div>
 <div class="ew-toasts" id="toasts" role="status" aria-live="polite"></div>
 <script src="../shared/ewcore.js"></script>

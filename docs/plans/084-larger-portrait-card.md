@@ -1,6 +1,6 @@
 # Plan 084 - Larger class portrait card: a left-rail character card in the spirit of the in-game End Game card
 
-Status: open. Operator feedback 2026-10-07 (research 0011 section 8). Lane hint: `build`.
+Status: built (lane, awaiting merge). Operator feedback 2026-10-07 (research 0011 section 8). Lane hint: `build`.
 
 Spec gap: operator feedback 2026-10-07 - "the portrait in the dashboard
 could be larger". Plan 082 shipped a 28 x 36 top-bar chip. The reference the
@@ -137,6 +137,45 @@ exist and `app/shared/ewcore.js` exports `portraitChip`. If any is missing
 the lane changes nothing, writes `"status": "blocked", "needs": ["011",
 "082"]` into `ops/loop/control/progress/p084-build.json` and exits 0.
 
+## As-built deviations
+
+Dependency guard passed (`portraits.py`, `leveling.py`, `portraitChip`
+present; 083 merged, so the pinned dot ships). Self-adjudicated:
+
+1. `card` also carries `level_at` and `cp_at` (the plan block listed
+   `energy_at` only). Decision: add both, read from the leveling sample ts
+   and the plan 081 CP row (a profile CP takes the snapshot `at`).
+   Alternatives: title without an age for level / CP. Why: Work 2 asks the
+   title to show the source and local age of each value. Reverses if: never
+   (additive).
+2. Card values (Lv, name, energy, CP) are shown only when the card's class
+   is the Progress class (or no Progress class is set); another class tab
+   shows the frame + class line only. Decision: gate client-side in
+   `portraitCard`. Alternatives: show them for every class; map the profile
+   character name to a class. Why: leveling, the profile snapshot and the
+   Imperial CP are the main (Progress) character's values, and the profile
+   snapshot carries no class, so a Wizard tab would otherwise show the
+   Deadeye's level. Reverses if: per-class leveling / profile rows land.
+3. Small server helpers: `LevelingService.level_info()` and
+   `ImperialService.cp_info()` (the exact `_cp_row` the Imperial card
+   shows), plus `portraits.card_block(...)` (pure) and an injected
+   `card=` source on `PortraitService`; a broken source yields
+   `card: null`, never a broken chip. Alternatives: call `leveling.view()`
+   / `imperial.view()` (much heavier per request). Why: one truth, cheap.
+   Reverses if: never.
+4. Dashboard listens for `leveling` and `ocr` bus bumps as well, and polls
+   `/api/portraits` every 30 s while visible (no portraits poll existed;
+   typed Imperial CP has no bus domain). Alternatives: bus only (typed CP
+   would lag until the next portraits event). Why: the plan names a 30 s
+   poll. Reverses if: Imperial gets a bus domain.
+5. Markup: `.ew-main` is now a wrapper holding `aside.ew-rail` and the
+   panels container `main#panels.ew-panels` (id kept; `render()` clears
+   only `#panels`). Compact (600-1099 px) hides the name line and the
+   over-image band with CSS; energy / CP stay in the title. A real `0` is a
+   value ("CP 0"); hidden / null / non-integer values are omitted. The
+   scrim is `color-mix(in srgb, var(--fk-surface-2) 82%, transparent)`
+   (tokens only). Reverses if: the operator wants the name in compact.
+
 ## Optional follow-up (not required by this plan)
 
 The End Game window (ESC > End Game) is a good OCR source of the plan 066
@@ -150,3 +189,4 @@ the class icon. Screenshot-only (operator takes it; plan 008 watcher);
 no game input. Not planned now; file as a ROADMAP row when adopted.
 
 refute-rounds: 0/3 (plan doc; the lane's verifier rounds apply to the build).
+refute-rounds: 1/3 (verifier PASS round 1)

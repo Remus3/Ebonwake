@@ -293,6 +293,13 @@ class ImperialService:
         src = "operator" if p["source"] == "typed" else p["source"]
         return p["value"], src, p["at"], p["age_s"], p["stale"]
 
+    def cp_info(self):
+        """Plan 084 card: {value, source, at} - the same CP the card shows."""
+        with self._lock:
+            doc = self._load(self._day(self._now()))
+        cp, src, at, _, _ = self._cp_row(doc)
+        return {"value": cp, "source": src, "at": at}
+
     def _cap(self, doc):
         return daily_cap(self._cp(doc)[0], self.divisor)
 

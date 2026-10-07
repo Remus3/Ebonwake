@@ -218,3 +218,100 @@ test('Deadeye tab: Portraits is the first card; strip a11y; chip dot; css tokens
   assert.match(block, /width: 48px; height: 62px/);
   assert.match(block, /object-fit: cover/);
 });
+
+// ---- Plan 084: left-rail character card ----
+
+const CARD = { level: 62, level_source: 'ocr', level_at: '2026-10-06T18:00:00+00:00',
+  energy: 412, energy_at: '2026-10-06T19:00:00+00:00',
+  cp: 390, cp_src: 'ocr', cp_at: '2026-10-06T20:00:00+00:00', name: 'Testarcher' };
+const CVIEW = Object.assign({}, VIEW, { card: CARD });
+
+test('card: m-size src, Lv / class / name lines and energy / CP over the image, in order', () => {
+  const c = C.portraitCard(CVIEW, null, UTC);
+  assert.strictEqual(c.cls, 'Deadeye');
+  assert.strictEqual(c.src, C.SERVER + '/api/portraits/img/' + ID + '?size=m');
+  assert.strictEqual(c.empty, false);
+  assert.strictEqual(c.pinned, false);
+  assert.deepStrictEqual(c.lines, [{ k: 'level', text: 'Lv.62' }, { k: 'cls', text: 'Deadeye' },
+    { k: 'name', text: 'Testarcher' }]);
+  assert.deepStrictEqual(c.over, [{ k: 'energy', text: 'Energy 412' }, { k: 'cp', text: 'CP 390' }]);
+  assert.strictEqual(c.alt, 'Deadeye portrait');
+  assert.match(c.title, /Lv\.62 \(ocr, 2026-10-06 18:00\)/);
+  assert.match(c.title, /Energy 412 \(profile, 2026-10-06 19:00\)/);
+  assert.match(c.title, /CP 390 \(ocr, 2026-10-06 20:00\)/);
+});
+
+test('card: hidden / null energy and CP omitted - no 0, no ?', () => {
+  [null, 'hidden', undefined, -1, true, '5', 1.5].forEach(function (bad) {
+    const v = Object.assign({}, VIEW, { card: Object.assign({}, CARD, { energy: bad, cp: bad }) });
+    const c = C.portraitCard(v, 'Deadeye', UTC);
+    assert.deepStrictEqual(c.over, [], String(bad));
+    assert.doesNotMatch(c.title, /Energy|CP/);
+  });
+  const zero = C.portraitCard(Object.assign({}, VIEW, { card: Object.assign({}, CARD, { cp: 0 }) }), 'Deadeye', UTC);
+  assert.deepStrictEqual(zero.over.map((o) => o.text), ['Energy 412', 'CP 0']); // a real 0 is a value
+});
+
+test('card: no level -> no Lv line; no card block -> class line only', () => {
+  const v = Object.assign({}, VIEW, { card: Object.assign({}, CARD, { level: null, name: null }) });
+  assert.deepStrictEqual(C.portraitCard(v, 'Deadeye', UTC).lines, [{ k: 'cls', text: 'Deadeye' }]);
+  const bare = C.portraitCard(VIEW, 'Deadeye', UTC);
+  assert.deepStrictEqual(bare.lines, [{ k: 'cls', text: 'Deadeye' }]);
+  assert.deepStrictEqual(bare.over, []);
+});
+
+test('card: empty class -> no src, frame only, text lines still render, never another class image', () => {
+  const v = Object.assign({}, CVIEW, { classes: { Deadeye: { current: null } } });
+  const c = C.portraitCard(v, 'Deadeye', UTC);
+  assert.strictEqual(c.src, null);
+  assert.strictEqual(c.empty, true);
+  assert.deepStrictEqual(c.over, []); // no art over an empty frame
+  assert.deepStrictEqual(c.lines.map((l) => l.k), ['level', 'cls', 'name']);
+  assert.match(c.title, /Take your character portrait/);
+  ['Wizard', 'Musa'].forEach(function (cls) {
+    const w = C.portraitCard(CVIEW, cls, UTC);
+    assert.strictEqual(w.src, null);
+    assert.strictEqual(w.cls, cls);
+    // the card values belong to the Progress (main) character only
+    assert.deepStrictEqual(w.lines, [{ k: 'cls', text: cls }]);
+  });
+  const blank = C.portraitCard(null, null);
+  assert.strictEqual(blank.src, null);
+  assert.ok(blank.empty);
+  assert.deepStrictEqual(blank.lines, []);
+});
+
+test('card: pinned override -> dot flag + pinned title', () => {
+  const v = { classes: { Deadeye: { current: { id: ID, at: '2026-10-06T19:48:00+00:00', from: 'override',
+    set_at: '2026-10-07T01:00:00+00:00' } } }, progress_cls: 'Deadeye', card: CARD };
+  const c = C.portraitCard(v, 'Deadeye', UTC);
+  assert.strictEqual(c.pinned, true);
+  assert.match(c.title, /pinned 2026-10-07 \(override\)/);
+});
+
+test('rail shell: aside card in index.html, chip hidden >= 600 px, breakpoints 600 / 1100, tokens only', () => {
+  const html = read('dashboard/index.html');
+  assert.match(html, /<aside class="ew-rail"[^>]*>\s*<button class="ew-card-btn" id="char-card"/);
+  assert.match(html, /<main id="panels" class="ew-panels">/);
+  const js = read('dashboard/dashboard.js');
+  assert.match(js, /C\.portraitCard\(/);
+  const paint = js.slice(js.indexOf('function paintCard'), js.indexOf('function paintCard') + 2000);
+  assert.match(paint, /dataset\.sig === sig/);
+  assert.match(paint, /character card/);
+  assert.match(paint, /loading = 'eager'/);
+  assert.match(paint, /ew-chip-dot/);
+  assert.doesNotMatch(paint, /toast|onboarding/i);
+  const css = read('shared/ew.css');
+  const block = css.slice(css.indexOf('/* plan 084'), css.indexOf('/* end plan 084'));
+  assert.ok(block.length > 0);
+  assert.doesNotMatch(block, /#[0-9a-fA-F]{3,8}\b|rgba?\(|hsla?\(/);
+  assert.match(block, /@media \(min-width: 600px\) \{ \.ew-top > \.ew-chip \{ display: none; \} \}/);
+  assert.match(block, /@media \(max-width: 599px\) \{ \.ew-rail \{ display: none; \} \}/);
+  assert.match(block, /@media \(min-width: 1100px\)/);
+  assert.match(block, /width: 156px; height: 201px/);
+  assert.match(block, /width: 96px; height: 124px/);
+  assert.match(block, /object-fit: cover/);
+  assert.match(block, /var\(--fk-surface-2/);
+  assert.match(block, /dashed var\(--fk-border\)/);
+  assert.doesNotMatch(block, /transition|animation|transform/);
+});

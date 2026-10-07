@@ -61,6 +61,12 @@ def test_portraits_route_and_image(srv):
     s, inst, docs = srv
     st, _, body = _req(s, "/api/portraits")
     assert st == 200 and json.loads(body)["classes"] == {"Deadeye": {"current": None}}
+    card = json.loads(body)["card"]  # plan 084: nothing known yet -> every value None
+    assert set(card) == {"level", "level_source", "level_at", "energy", "energy_at",
+                         "cp", "cp_src", "cp_at", "name"}
+    assert card["level"] is None and card["energy"] is None and card["cp"] is None
+    s.leveling.sample({"level": 61, "pct": 1.0})
+    assert json.loads(_req(s, "/api/portraits")[2])["card"]["level"] == 61
     _log(inst)
     p = docs / "FaceTexture" / f"{CHAR}.bmp"
     p.write_bytes(bmp(6, 8))

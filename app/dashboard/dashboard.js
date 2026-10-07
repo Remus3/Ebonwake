@@ -107,6 +107,7 @@
     if (id === 'system' && window.EWGame) window.EWGame.show();
     if (id === 'settings' && window.EWSettings) window.EWSettings.show();
     paintChip();
+    paintCard();
   }
 
   // Plan 082: top-left class chip - newest portrait of the class in view, or
@@ -136,9 +137,48 @@
     b.title = chip.title;
   }
 
+  // Plan 084: left-rail character card (End Game card style) - the m thumb,
+  // Lv / class / name below, energy + CP over the image bottom. Sized by CSS
+  // media queries; below 600 px the rail hides and the 082 chip returns.
+  function paintCard() {
+    const b = document.getElementById('char-card');
+    if (!b) return;
+    const card = C.portraitCard(portraits, C.classOfTab(active, portraits));
+    const texts = function (a) { return a.map(function (x) { return x.k + '=' + x.text; }).join(','); };
+    const sig = [card.cls, card.src, card.title, card.pinned, texts(card.lines), texts(card.over)].join('|');
+    if (b.dataset.sig === sig) return;
+    b.dataset.sig = sig;
+    b.textContent = '';
+    const frame = el('span', 'ew-card-frame');
+    let pic;
+    if (card.empty) {
+      pic = el('span', 'ew-card-pic ew-card-empty');
+      pic.setAttribute('role', 'img');
+      pic.setAttribute('aria-label', card.alt);
+    } else {
+      pic = el('img', 'ew-card-pic');
+      pic.loading = 'eager';
+      pic.src = card.src;
+      pic.alt = card.alt;
+    }
+    frame.appendChild(pic);
+    if (card.pinned) frame.appendChild(el('span', 'ew-chip-dot ew-card-dot'));
+    if (card.over.length) {
+      const over = el('span', 'ew-card-over');
+      card.over.forEach(function (o) { over.appendChild(el('span', 'ew-card-ov ew-card-' + o.k, o.text)); });
+      frame.appendChild(over);
+    }
+    b.appendChild(frame);
+    const lines = el('span', 'ew-card-lines');
+    card.lines.forEach(function (l) { lines.appendChild(el('span', 'ew-card-line ew-card-' + l.k, l.text)); });
+    b.appendChild(lines);
+    b.setAttribute('aria-label', (card.cls || 'Character') + ' character card');
+    b.title = card.title;
+  }
+
   function loadPortraits() {
     return getJSON('/api/portraits').then(function (v) { portraits = v; }, function () { /* keep last */ })
-      .then(paintChip);
+      .then(function () { paintChip(); paintCard(); });
   }
 
   function render(state) {
@@ -418,8 +458,20 @@
       if (id) select(id);
     });
   }
-  ['portraits', 'progress', 'game'].forEach(function (d) { bus.on(d, loadPortraits); });
+  // Plan 084: the card selects its class tab too (optional, as the chip).
+  const cardBtn = document.getElementById('char-card');
+  if (cardBtn) {
+    cardBtn.addEventListener('click', function () {
+      const card = C.portraitCard(portraits, C.classOfTab(active, portraits));
+      const id = C.tabOfClass(card.cls, tabIds());
+      if (id) select(id);
+    });
+  }
+  // Plan 084: card values follow leveling and OCR writes; typed Imperial CP
+  // has no bus domain, so the 30 s poll catches it.
+  ['portraits', 'progress', 'game', 'leveling', 'ocr'].forEach(function (d) { bus.on(d, loadPortraits); });
   loadPortraits();
+  setInterval(function () { if (!document.hidden) loadPortraits(); }, 30000);
   document.addEventListener('keydown', onKey);
   // Timers skip while hidden (C.pollPaused); coming back re-shows the tab.
   document.addEventListener('visibilitychange', function () { if (!document.hidden) select(); });
