@@ -12,9 +12,11 @@ server/ew/levels.py; confirm the Leveling card in use after maintenance;
 018 start date is verifiable once the patch notes post (research 0008).
 
 Carried forward (not acted on yet):
-- OPERATOR (time-critical): claim Tag Characters EXP before 2026-10-08
-  08:00 UTC - official maintenance notice 10663 says unclaimed EXP is
-  deleted at the update (research 0008). Plan 074 will not land in time.
+- NOTE (new, operator 2026-10-06): one account, ONE character (the
+  Deadeye), no alts, no tag partner. Tag EXP / alt-only warnings do not
+  apply; 074's loss warnings should be suppressed for features the
+  operator cannot have (no tagged character). Alt-account safety tests
+  are not possible - overlay check runs on the main.
 - NOTE (new): research 0008 data items, no plan: Lv 70+ monster AP / DR and
   level-gap DR rows (018 / 023 / 012), HYPERBOOST track seed for 034 once an
   official stage list is read, My Info (P) EXP OCR region for 066.
