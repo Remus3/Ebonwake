@@ -15,8 +15,7 @@ Carried forward (not acted on yet):
 - NOTE (new, operator 2026-10-06): one account, ONE character (the
   Deadeye), no alts, no tag partner. Tag EXP / alt-only warnings do not
   apply; 074's loss warnings should be suppressed for features the
-  operator cannot have (no tagged character). Alt-account safety tests
-  are not possible - overlay check runs on the main.
+  operator cannot have (no tagged character).
 - NOTE (new): research 0008 data items, no plan: Lv 70+ monster AP / DR and
   level-gap DR rows (018 / 023 / 012), HYPERBOOST track seed for 034 once an
   official stage list is read, My Info (P) EXP OCR region for 066.
@@ -34,9 +33,8 @@ Carried forward (not acted on yet):
   cannot run shell operators in ci.yml steps (none today).
 - EW sent two v8 ANSWERs to MAIN (04:00 loop note said "blocked on v6";
   04:11 supersedes it). If MAIN flags the duplicate, point to 04:11.
-- OPERATOR: overlay safety check - run BDO borderless/windowed, overlay shown,
-  on an alt account first, watch for XIGNCODE3 complaints (ADR 0001 reversal
-  condition).
+- NOTE: overlay safety check DONE by operator 2026-10-06 ("the overlay is
+  fine"); ADR 0001 reversal condition not met.
 - OPERATOR (plan 008 check): launch BDO, log in, log out; the System card must
   walk not running -> running -> logged in -> running. A missed step = one
   classifier row in server/ew/gamewatch.py CLASSIFIERS (data change). Exit
