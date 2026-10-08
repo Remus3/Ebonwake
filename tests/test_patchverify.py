@@ -465,6 +465,46 @@ def test_api_acceptance(srv, tmp_path):
     assert _digest(DATA) == before
 
 
+def test_notice_detail_list_links_confirm_the_cap75_epoch(tmp_path):
+    """Research 0016 / plan 018 check: with the Updates list linking
+    /News/Notice/Detail (live shape since 2026-10-08), patch notes 10678 are
+    read and /api/data/verdicts marks cap75-xp-rescale confirmed."""
+    net = Net()
+    net.boards[2] = ("<ul><li><a href='/News/Notice/Detail?groupContentNo=10678&amp;"
+                     f"countryType=en-US'><strong class='title'>{TITLE}</strong></a></li>"
+                     "</ul>").encode()
+    net_call = net.__call__
+
+    def fetch(url, timeout):
+        if url == eventnotices.detail_url(10678):
+            net.calls.append(url)
+            return net.page
+        return net_call(url, timeout)
+    client = eventnotices.NoticeClient(fetch=fetch, clock=lambda: T0, cache_dir=tmp_path / "c")
+    client._download()
+    assert [n["group_no"] for n in client.patch_notes()] == [10678]
+
+    def no_net(url, timeout):
+        raise AssertionError("test touched the network")
+    client.fetch = no_net
+    s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
+                          sse_interval=0.05, market_seed=[], profile_cfg={},
+                          market_client=market.ArshaClient(fetch=no_net,
+                                                           cache_dir=tmp_path / "mcache"),
+                          leveling_clock=lambda: T0, config_path=tmp_path / "local.json",
+                          notice_client=client, notice_spawn=lambda fn: None,
+                          verdict_data_dir=_stale_dir(tmp_path))
+    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t.start()
+    try:
+        st, v = _get(s, "/api/data/verdicts")
+    finally:
+        s.shutdown()
+        s.server_close()
+    assert st == 200 and v["verdicts"][EPOCH]["verdict"] == "confirmed"
+    assert v["last_notice"]["notice_no"] == 10678
+
+
 # --- plan 087: Unicode fold, name aliases, hints for the official numbers ------------------
 
 ASIA = "patch-20261008-asia.html"

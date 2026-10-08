@@ -39,6 +39,10 @@ MAX_CANDIDATES = 20
 KEY = "coupons_news"
 ATTEMPT_FILE = "coupons_attempt.json"
 ROBOTS = ("allow", "disallow", "unreachable")
+# Notice Detail link paths: the old shape, and the list links since 2026-10-08
+# (research 0016: /News/Notice/Detail, seen with and without the locale prefix).
+DETAIL_PATHS = ("/en-US/News/Detail", "/News/Notice/Detail", "/en-US/News/Notice/Detail")
+_DETAIL_HINTS = ("/News/Detail", "/News/Notice/Detail")
 _DEFAULT_CACHE = Path(__file__).resolve().parents[2] / "ops" / "runtime" / "cache" / "coupons"
 
 _UA_LINE_RE = re.compile(r"^\s*user-agent\s*:\s*\S", re.IGNORECASE)
@@ -179,13 +183,15 @@ def parse_date(text):
 
 
 def official_url(href, base=NEWS_URL):
-    """Absolute https URL on the official host under /en-US/News/, or None."""
+    """Absolute https URL on the official host under /en-US/News/ (or a
+    DETAIL_PATHS notice link), or None."""
     try:
         url = urllib.parse.urljoin(base, href.strip())
         p = urllib.parse.urlsplit(url)
     except (ValueError, AttributeError):
         return None
-    if p.scheme != "https" or p.hostname != HOST or not p.path.startswith("/en-US/News/"):
+    if p.scheme != "https" or p.hostname != HOST or not (
+            p.path.startswith("/en-US/News/") or p.path in DETAIL_PATHS):
         return None
     if len(url) > MAX_URL or not url.isascii() or any(ch.isspace() for ch in url):
         return None
@@ -195,6 +201,12 @@ def official_url(href, base=NEWS_URL):
 def _clean_title(text):
     t = "".join(ch for ch in _WS_RE.sub(" ", text) if ord(ch) >= 32 and ord(ch) != 127).strip()
     return t[:MAX_TITLE].rstrip()
+
+
+def is_detail_href(href):
+    """A notice-Detail-looking link (either path shape); the host and exact
+    path are checked later (`official_url`, `eventnotices.group_no_of`)."""
+    return any(h in href for h in _DETAIL_HINTS)
 
 
 class _Notices(html.parser.HTMLParser):
@@ -217,7 +229,7 @@ class _Notices(html.parser.HTMLParser):
         if tag == "a":
             self._flush()
             href = a.get("href") or ""
-            if "/News/Detail" in href:
+            if is_detail_href(href):
                 self._cur = {"href": href, "text": [], "title": []}
                 self._depth = 0
                 self._title_depth = []
