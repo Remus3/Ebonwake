@@ -1,6 +1,6 @@
 EW NEXT SESSION
 ---------------
-SESSION: 16
+SESSION: 17
 
 Next action (session-only, not loop work): first session started from
 drive E: recycles the old system-drive checkout and the old ew-worktrees
