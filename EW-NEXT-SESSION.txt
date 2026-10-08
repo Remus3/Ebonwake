@@ -1,6 +1,6 @@
 EW NEXT SESSION
 ---------------
-SESSION: 14
+SESSION: 15
 
 Next action: plan 018 at the 2026-10-08 maintenance (cap 75):
 LEVEL_MAX=75 already in server/ew/levels.py; after maintenance confirm
@@ -154,7 +154,10 @@ item merged, delete keep ref, push). Restart: stop the server pid from
 Acceptance: loop keeps merging with ci green, nothing in adjudicate /
 merge-conflict / gave-up / failed-dirty; no NOTE bullet dispatched as work.
 
-Do NOT redo: session 13 (2026-10-07 ~12:50): loop read back idle,
+Do NOT redo: session 14 (2026-10-07 ~20:50): inbox read on
+operator ask - 12 notes, newest 2026-10-05 08:41, all already handled by
+the loop (ORDERs answered, SS notes skipped/acked); no reply sent. Loop
+idle, items 87 merged / 12 no-change, none stuck, runs 43/120. Session 13 (2026-10-07 ~12:50): loop read back idle,
 fire 189, items 87 merged / 12 no-change, none stuck, inbox 0 new,
 runs 43/120; 018 not started (maintenance is 2026-10-08). Session 12 (2026-10-07): Hea62ec confirmed merged
 (d31831e, read back); loop items read back 87 merged / 12 no-change, none
@@ -166,9 +169,8 @@ b8fbef8, run counter reset 2026-10-06.
 
 In flight: none (loop idle, deep-dive done 2026-10-07, runs 43/120).
 
-Status: main in sync with origin after the session 13 hand-off push.
-Gates (session 13): pytest exit 0, node 693/693, leak sweep ARMED (19).
-CI on d31831e: ci 37635672135 + codeql 37635672201 success. Session
-jsonl ~0.5 MB.
+Status: main in sync with origin after the session 14 hand-off push.
+Gates (session 14): pytest ok 229 s, node ok, leak sweep ARMED (19). CI on dc51bec: ci 37662726190 +
+codeql 37662726224 success. Session jsonl ~0.4 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
