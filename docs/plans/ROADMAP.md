@@ -91,6 +91,19 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 084 | Larger class portrait card: left-rail character card (156 x 201, 96 x 124 compact) with Lv, class, energy / CP over the image, End Game card style (depends on 082) | [x] done 2026-10-07 (loop; refute 0/3 PASS) |
 | 085 | Patch-notes data verifier: hinted unverified data rows checked against official patch notes, runtime verdicts, digest row (depends on 064, 073) | [x] done 2026-10-07 (loop; refute 0/3 PASS) |
 | 086 | Reward claim windows: claim-by deadlines that outlive the event, Events row, Timers, What now (depends on 064, 069) | [x] done 2026-10-07 (loop; refute 0/3 PASS) |
+| 087 | Patch-notes match fidelity: Unicode fold, name aliases, hints for the official 2026-10-08 numbers (depends on 085) | [ ] open |
+| 088 | Monster Zone Info OCR: per-kill EXP and recommended level per zone, kills-to-level, cap-bound buff flag (depends on 063, 066) | [ ] open |
+
+Deep dive 2026-10-08 (research 0015): two plans. Ranking: 087 first - NA
+patch notes post today and the shipped 085 hints miss the official
+wording (U+2192 arrows, "Adventure's Boon"), so it would confirm nothing,
+while the tracked 62-75 per-kill cap band is already wrong (62-64 is
+0.02 %); 088 second - the new in-game Monster Zone Info panel is the only
+per-kill EXP source and from Lv 56 the buff-inclusive cap decides spot
+choice and buff spending. Data items (no plan): 14 cap bands, Lv 70-75
+AP / DR +3 per level, level-gap DR max +9, "Adventure's Boon" alias, no
+Bio area in My Information (066). Dropped: Asia board as a runtime source,
+patch-note loss lines into 074, pre-revamp EXP tables.
 
 Deep dive 2026-10-07 (research 0013): two plans. Ranking: 085 first -
 the 2026-10-08 patch notes confirm or contradict the level-cap epoch, the
