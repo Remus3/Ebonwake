@@ -143,6 +143,30 @@ def test_extract_skips_non_coupon_offsite_script_and_words():
     assert not codes & {"EVENT", "COUPON", "BLACK", "DESERT", "MORE"}
 
 
+NOTICE_DETAIL = """<ul>
+<li><a href="/News/Notice/Detail?groupContentNo=9101&amp;countryType=en-US">
+  <strong class="title">Coupon Code: FALL-2026-GIFT</strong><span class="date">Oct 8, 2026</span></a></li>
+<li><a href="https://www.naeu.playblackdesert.com/en-US/News/Notice/Detail?groupContentNo=9102">
+  <strong class="title">Coupon KNOWN-CODE-2026</strong></a></li>
+<li><a href="https://evil.example.com/News/Notice/Detail?groupContentNo=9103">
+  <strong class="title">Coupon PHISH-CODE-0001</strong></a></li>
+<li><a href="/News/Other/Detail?groupContentNo=9104">
+  <strong class="title">Coupon WRONG-PATH-0001</strong></a></li>
+</ul>"""
+
+
+def test_extract_reads_the_notice_detail_links():
+    """Research 0016: list links moved to /News/Notice/Detail; both shapes read,
+    other hosts and paths still dropped."""
+    got = coupons.extract(NOTICE_DETAIL)
+    by = {c["code"]: c for c in got}
+    assert set(by) == {"FALL-2026-GIFT", "KNOWN-CODE-2026"}
+    assert by["FALL-2026-GIFT"]["url"] == ("https://www.naeu.playblackdesert.com/News/Notice/"
+                                           "Detail?groupContentNo=9101&countryType=en-US")
+    assert by["FALL-2026-GIFT"]["date"] == "2026-10-08"
+    assert all(coupons.clean_candidate(c) == c for c in got), "cache round-trip keeps them"
+
+
 @pytest.mark.parametrize("tok,ok", [
     ("ABCD-1234", True), ("HAWKEYE7TREAT", True), ("AB12", True),
     ("EVENT", False), ("MAINTENANCE", False), ("Autumn2026", False), ("ABC1", True),

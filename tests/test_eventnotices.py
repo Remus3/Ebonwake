@@ -142,6 +142,54 @@ def test_parse_list_fixture():
     assert 10544 not in nos and 10543 not in nos, "off-site host / other path prefix dropped"
 
 
+def test_parse_list_reads_the_notice_detail_links():
+    """Research 0016: the list now links /News/Notice/Detail; both shapes parse."""
+    got = eventnotices.parse_list(
+        (FIX / "list_notice_detail.html").read_text(encoding="utf-8"))
+    assert [n["group_no"] for n in got] == [10678, 10661, 10640], "dedup, order kept"
+    assert got[0]["title"] == "[Updates] Patch Notes - October 8, 2026"
+    assert got[0]["url"] == eventnotices.detail_url(10678), "fetched by the old Detail URL"
+
+
+@pytest.mark.parametrize("href,want", [
+    ("/en-US/News/Detail?groupContentNo=5", 5),
+    ("/News/Notice/Detail?groupContentNo=5&countryType=en-US", 5),
+    ("/en-US/News/Notice/Detail?groupContentNo=5", 5),
+    ("https://www.naeu.playblackdesert.com/News/Notice/Detail?groupContentNo=5", 5),
+    ("https://evil.example.com/News/Notice/Detail?groupContentNo=5", None),
+    ("http://www.naeu.playblackdesert.com/News/Notice/Detail?groupContentNo=5", None),
+    ("/News/Other/Detail?groupContentNo=5", None),
+    ("/News/Notice/Detail/x?groupContentNo=5", None),
+    ("/News/Notice?boardType=2", None),
+])
+def test_group_no_of_both_paths_only(href, want):
+    assert eventnotices.group_no_of(href) == want
+
+
+def test_list_with_detail_links_parsing_to_nothing_is_a_failure(tmp_path):
+    """Research 0016 step 4: a 200 list page with Detail-like anchors that
+    parses to 0 notices is a parse failure - no ok_at, Detail cache kept."""
+    svc, _ev, net, clock = _svc(tmp_path)
+    svc.view(refresh=True)
+    client = svc.client
+    ok_at, cached = client.attempt()["ok_at"], set(client.details())
+    assert ok_at == T0 and cached
+    net.page = (b"<ul><li><a href='/News/Changed/Detail?groupContentNo=10658'>"
+                b"<b class='title'>T</b></a></li></ul>")
+    clock.t += 6 * 3600
+    v = svc.view(refresh=True)
+    assert v["status"] == "stale" and "0 notices" in v["error"]
+    assert client.attempt()["ok_at"] == ok_at and client.attempt()["fail_since"] == clock.t
+    assert set(client.details()) == cached, "Detail cache not pruned"
+
+
+def test_empty_board_without_detail_links_is_still_ok(tmp_path):
+    net = Net(page=b"<html><body><ul></ul></body></html>")
+    svc, _ev, net, _clock = _svc(tmp_path, net=net)
+    assert svc.view(refresh=True)["status"] == "ok"
+    assert svc.client.attempt()["ok_at"] == T0
+
+
 def test_parse_list_tolerates_garbage():
     assert eventnotices.parse_list("") == []
     assert eventnotices.parse_list("<a href='/en-US/News/Detail?groupContentNo=abc'>x</a>") == []

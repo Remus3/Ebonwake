@@ -48,7 +48,8 @@ import urllib.request
 from pathlib import Path
 
 from . import __version__, claimwindows, logindays, maint, maintdigest, patchverify
-from .coupons import HOST, MAX_BYTES, ROBOTS, TIMEOUT_S, UA_TOKEN, robots_verdict
+from .coupons import DETAIL_PATHS, HOST, MAX_BYTES, ROBOTS, TIMEOUT_S, UA_TOKEN, is_detail_href
+from .coupons import robots_verdict
 from .coupons import _TOKEN_RE, _clean_title, copy_codes, is_code, is_word_code, parse_date
 from .httpcache import CachedClient, UpstreamError, freshness, read_json
 from .store import atomic_write_json
@@ -58,7 +59,7 @@ BOARDS = (3, 1, 2)  # Events (plan 059) first, then Notices and Updates (plan 06
 LIST_URLS = {b: f"https://{HOST}/en-US/News/Notice?boardType={b}" for b in BOARDS}
 LIST_URL = LIST_URLS[3]  # = events.SOURCES[1]
 DETAIL_URL = f"https://{HOST}/en-US/News/Detail?groupContentNo="
-DETAIL_PATH = "/en-US/News/Detail"
+DETAIL_PATH = "/en-US/News/Detail"  # the URL we fetch; list links may use DETAIL_PATHS
 ROBOT_URLS = tuple(LIST_URLS.values()) + (DETAIL_URL + "1",)
 USER_AGENT = (f"{UA_TOKEN}/{__version__} (BDO companion; event notice check, "
               "3 lists + at most 5 notice GETs per 6 h)")
@@ -116,13 +117,14 @@ def detail_url(group_no):
 
 
 def group_no_of(href, base=LIST_URL):
-    """groupContentNo of an official Detail link (same host, same path), or None."""
+    """groupContentNo of an official Detail link (same host, one of
+    DETAIL_PATHS - research 0016), or None."""
     try:
         p = urllib.parse.urlsplit(urllib.parse.urljoin(base, href.strip()))
         q = urllib.parse.parse_qs(p.query)
     except (ValueError, AttributeError):
         return None
-    if p.scheme != "https" or p.hostname != HOST or p.path != DETAIL_PATH:
+    if p.scheme != "https" or p.hostname != HOST or p.path not in DETAIL_PATHS:
         return None
     vals = q.get("groupContentNo") or []
     if len(vals) != 1 or not re.fullmatch(r"[0-9]{1,9}", vals[0]):
@@ -134,11 +136,13 @@ def group_no_of(href, base=LIST_URL):
 # -- list -------------------------------------------------------------------------
 
 class _ListParser(html.parser.HTMLParser):
-    """Every <a href=...Detail...> with its text and its class="title" text."""
+    """Every <a href=...Detail...> with its text and its class="title" text;
+    `detail_like` counts every <a> whose href carries a groupContentNo."""
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.links = []
+        self.detail_like = 0
         self._cur = None
         self._skip = 0
         self._title = []
@@ -152,7 +156,8 @@ class _ListParser(html.parser.HTMLParser):
         if tag == "a":
             self._flush()
             href = a.get("href") or ""
-            if DETAIL_PATH in href:
+            self.detail_like += "groupContentNo=" in href
+            if is_detail_href(href):
                 self._cur = {"href": href, "text": [], "title": [], "rest": []}
                 self._depth, self._title = 0, []
             return
@@ -193,6 +198,11 @@ def parse_list(page):
     """Events board -> [{group_no, title, url, stamp}] in page order, one per
     group_no, official Detail links only; `stamp` is a date beside the title
     ("Last Updated"), or None when the list shows none."""
+    return _parse_list(page)[0]
+
+
+def _parse_list(page):
+    """(parse_list rows, count of <a> links carrying a groupContentNo)."""
     p = _ListParser()
     try:
         p.feed(page if isinstance(page, str) else _decode(page))
@@ -213,7 +223,7 @@ def parse_list(page):
                     "stamp": parse_date(link["rest"]) if has_title else None})
         if len(out) >= MAX_NOTICES:
             break
-    return out
+    return out, p.detail_like
 
 
 # -- detail -----------------------------------------------------------------------
@@ -874,14 +884,20 @@ class NoticeClient(CachedClient):
         """One GET per board (BOARDS order) -> notices tagged with their board,
         one per group_no. Any failed board fails the run (UpstreamError), so
         the last good list stays in force (plan 002 stale) rather than a
-        partial one dropping that board's cached Detail reads."""
+        partial one dropping that board's cached Detail reads. A board whose
+        page links notices (groupContentNo) but parses to none is a parse
+        failure too (research 0016: the link shape moved under us)."""
         notices, seen = [], set()
         for b in BOARDS:
             try:
                 raw = self.fetch(LIST_URLS[b], TIMEOUT_S)
             except Exception as e:  # noqa: BLE001 - HTTPError, URLError, timeout
                 raise UpstreamError(f"{type(e).__name__}: {e}"[:200]) from e
-            for n in parse_list(_decode(raw)):
+            rows, linked = _parse_list(_decode(raw))
+            if linked and not rows:
+                raise UpstreamError(f"list parse: board {b} has {linked} notice links, "
+                                    "0 notices")
+            for n in rows:
                 if n["group_no"] not in seen:
                     seen.add(n["group_no"])
                     notices.append(dict(n, board=b))

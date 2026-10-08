@@ -45,3 +45,41 @@ System Revamp":
 5. After the merge, the next `/api/events` after the 6 h floor (or a cleared
    `eventnotices_attempt.json` "at") reads 10678. Confirm that
    `/api/data/verdicts` shows `cap75-xp-rescale` confirmed.
+
+## As-built (lane fix, 2026-10-08)
+
+- `coupons.DETAIL_PATHS` / `is_detail_href` shared by both parsers;
+  `eventnotices.group_no_of` takes an exact path from DETAIL_PATHS, so other
+  hosts and paths stay rejected. Detail pages are still fetched by the old
+  `DETAIL_URL`. `coupons.official_url` also accepts the DETAIL_PATHS links
+  (they sit outside `/en-US/News/`).
+- Guard: a board page with `<a>` links carrying `groupContentNo=` that parses
+  to 0 notices raises `UpstreamError` in `NoticeClient._lists`, so the run is
+  a failure (`fail_since` set, `ok_at` kept, Detail cache not pruned, last
+  good list served stale).
+
+### As-built deviations
+
+1. Fixture reconstructed, not cut from the live page.
+   Decision: `tests/fixtures/eventnotices/list_notice_detail.html` is built
+   from the anchor shape recorded above. Alternatives: one live GET in the
+   lane (no network grant in the headless lane). Why: the shape is recorded
+   verbatim here; the fixture pins it. Reverses if: a live read shows another
+   anchor shape - cut a fresh fixture then.
+2. A third accepted path, `/en-US/News/Notice/Detail`.
+   Decision: accepted alongside the two in step 2. Alternatives: exactly the
+   two recorded paths. Why: a relative `Notice/Detail?...` link resolved
+   against the list URL lands there; same host, same notice board, no wider
+   than needed. Reverses if: that path ever serves something that is not a
+   notice.
+3. Step 5 confirmed in-repo, live check left to the post-merge tick.
+   Decision: `tests/test_patchverify.py::test_notice_detail_list_links_confirm_the_cap75_epoch`
+   drives a new-shape Updates list through `_download` to
+   `/api/data/verdicts` and asserts `cap75-xp-rescale` confirmed from 10678.
+   Alternatives: hit the running server from the lane (it runs main's code,
+   not this fix). Why: only the merged server can read 10678 live. Reverses
+   if: the post-merge `/api/data/verdicts` does not show it confirmed.
+4. No zero-parse guard on the coupon news page.
+   Why: `coupons.extract` keeps only coupon-mentioning notices, so 0 is a
+   normal result there. Reverses if: a coupon miss is traced to a link-shape
+   change again.
