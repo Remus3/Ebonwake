@@ -71,17 +71,27 @@ async function runFake(opts) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ewst-'));
   const out = path.join(dir, 'out.json');
   process.env.EW_SELFTEST_STAY = '1';
-  await selftest.run({
-    app: { quit() {} }, dashboard: f.dash, overlay: f.ov, keys: { a: 'F9' },
-    globalShortcut: { isRegistered: () => true }, toggleOverlay: f.toggle, out: out, freshStore: (opts || {}).freshStore,
-    notifyShown: (() => { let n = 0; return () => n++; })(),
-    wait: () => Promise.resolve(), paintTimeoutMs: 20,
-    overlayPlace: Object.assign({ workArea: { x: 0, y: 0, width: 1920, height: 1040 }, defaultAnchor: true },
-      (opts || {}).place)
-  });
-  delete process.env.EW_SELFTEST_STAY;
-  return { log, res: JSON.parse(fs.readFileSync(out, 'utf8')) };
+  try {
+    await selftest.run({
+      app: { quit() {} }, dashboard: f.dash, overlay: f.ov, keys: { a: 'F9' },
+      globalShortcut: { isRegistered: () => true }, toggleOverlay: f.toggle, out: out, freshStore: (opts || {}).freshStore,
+      notifyShown: (() => { let n = 0; return () => n++; })(),
+      wait: () => Promise.resolve(), paintTimeoutMs: 20,
+      overlayPlace: Object.assign({ workArea: { x: 0, y: 0, width: 1920, height: 1040 }, defaultAnchor: true },
+        (opts || {}).place)
+    });
+    return { log, dir, res: JSON.parse(fs.readFileSync(out, 'utf8')) };
+  } finally {
+    delete process.env.EW_SELFTEST_STAY;
+    // MAIN FIX N19178f: never leave an ewst-* dir in the user temp folder.
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+  }
 }
+
+test('N19178f: the self-test temp dir is removed after each run', async () => {
+  const { dir } = await runFake();
+  assert.strictEqual(fs.existsSync(dir), false, dir);
+});
 
 test('every tab capture follows showInactive and a paint after its click', async () => {
   const { log, res } = await runFake();
