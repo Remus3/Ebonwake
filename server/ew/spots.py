@@ -164,6 +164,8 @@ class SpotsService:
         self.grind = grind
         self.error = error
         self.epoch = epoch
+        # Plan 088: zones() -> {spot id: zone row} of in-game Monster Zone Info reads.
+        self.zones = None
 
     @classmethod
     def from_file(cls, character, grind, path=DATA_FILE, epoch=None):
@@ -192,6 +194,33 @@ class SpotsService:
                 out[s["name"].strip().lower()] = s["silver_per_h"]
         return out
 
+    def _zones(self):
+        try:
+            z = self.zones() if self.zones is not None else {}
+        except Exception:  # noqa: BLE001 - zone reads are an extra, never fatal
+            return {}
+        return z if isinstance(z, dict) else {}
+
+    def _table(self, zones):
+        """The table with each read zone's in-game recommended level in place of
+        the community level_min (plan 088: the panel value wins)."""
+        out = []
+        for r in self.table:
+            z = zones.get(r["id"])
+            if isinstance(z, dict) and _ok_int(z.get("recommended_level"), *LEVEL_RANGE):
+                r = dict(r, level_min=z["recommended_level"], level_min_community=r["level_min"],
+                         level_source=z.get("source"))
+            out.append(r)
+        return out
+
+    @staticmethod
+    def _zone_brief(z):
+        if not isinstance(z, dict):
+            return None
+        return {k: z.get(k) for k in ("recommended_level", "read_at", "source", "current",
+                                      "reread_level", "kills_to_level", "next_level",
+                                      "cap_bound", "cap_pct", "effective_pct")}
+
     def view(self, q):
         """`q` is a parse_qs dict: goal=xp|silver (default xp), ap, dp, level."""
         goals = q.get("goal", ["xp"])
@@ -215,10 +244,12 @@ class SpotsService:
         missing = [k for k in ("ap", "dp", "level") if inp[k] is None]
         res = {"top": [], "unlocks": []}
         if not missing and self.table:
-            res = rank(self.table, inp["ap"], inp["dp"], inp["level"], goal)
+            zones = self._zones()
+            res = rank(self._table(zones), inp["ap"], inp["dp"], inp["level"], goal)
             logged = self._logged()
             epoch = self._epoch()
             for r in res["top"] + res["unlocks"]:
+                r["zone_xp"] = self._zone_brief(zones.get(r["id"]))
                 r["logged_silver_per_h"] = logged.get(r["name"].lower())
                 r["reverify"] = reverify(r, epoch)
                 ml = r.get("monster_level")

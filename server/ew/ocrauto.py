@@ -14,7 +14,8 @@ buff timer through GrindService) with source `ocr:<file>` and an undo id; the
 rest go to store domain `ocr_review` (MAX_REVIEW, oldest dropped) for accept /
 fix / discard. Plan 066 adds level / XP % samples (held for review when they
 break the history), AP / AAP / DP and a book-use suggestion (always reviewed)
-through `ocrinfer`. Nothing reaches the game: the input is image files the operator
+through `ocrinfer`; plan 088 adds Monster Zone Info reads (`zoneinfo`, queued
+for review below the gate). Nothing reaches the game: the input is image files the operator
 saved with the game's own screenshot key, read after they are written.
 """
 
@@ -24,7 +25,7 @@ import re
 import threading
 import time
 
-from . import ocr, ocrinfer
+from . import ocr, ocrinfer, zoneinfo
 from .grind import MAX_BUFF_MINUTES, MAX_SILVER, SEED_BUFFS
 from .leveling import _ok_pct
 from .levels import LEVEL_RANGE
@@ -46,8 +47,9 @@ MAX_READS = 50
 MAX_LOOT_ROWS = 60
 # Plan 081: planner reads (inventory weight / slots, CP, market fame bonus).
 PLANNER_KINDS = ("weight", "slots", "cp", "fame")
-KINDS = ("silver", "buff", "level", "gear", "book_use") + PLANNER_KINDS
-# a book suggestion is accept / discard only
+# Plan 088: a Monster Zone Info read (zone, recommended level, per-kill EXP).
+KINDS = ("silver", "buff", "level", "gear", "book_use") + PLANNER_KINDS + (zoneinfo.KIND,)
+# a book suggestion and a zone read are accept / discard only
 FIX_KINDS = ("silver", "buff", "level", "gear") + PLANNER_KINDS
 
 # Silver confidence (separators between the digit groups of the read amount).
@@ -252,6 +254,8 @@ def _check_value(kind, v):
         raise ValueError(f"slots value must be {{used, total}}, total {lo}..{hi}")
     if kind == "cp" and _ok_int(v, 0, ocrinfer.CP_MAX_READ):
         return v
+    if kind == zoneinfo.KIND:
+        return zoneinfo.check_value(v)
     if kind == "fame":
         if _ok_num(v) and 0 <= v <= ocrinfer.FAME_MAX_READ:
             return v
@@ -269,7 +273,7 @@ class AutoOcr:
 
     def __init__(self, store, game, reader, grind, settings=None, clock=time.time,
                  on_change=None, leveling=None, progress=None, play=None, regions=None,
-                 loot_target=None):
+                 loot_target=None, zones=None):
         self.store = store
         self.game = game
         self.reader = reader              # OcrService (plan 009): .doc(name) -> {text, lines}
@@ -281,6 +285,9 @@ class AutoOcr:
         # Plan 081: fn() -> {spot, started, names} of the running grind session, or
         # None; its loot counts read from each shot prefill the loot form.
         self.loot_target = loot_target
+        # Plan 088: ZoneXpService; without one zone panels are not read.
+        self.zones = zones
+        self.zone_titles = zoneinfo.load_titles()
         self.regions = regions if regions is not None else ocrinfer.load_regions()
         self.settings = settings or (lambda: {})
         self.clock = clock
@@ -425,6 +432,8 @@ class AutoOcr:
         size = self._size(shot["name"])
         fields += self._progress_fields(shot["name"], doc, size)
         fields += ocrinfer.planner_fields(doc, size=size, regions=self.regions)
+        if self.zones is not None:
+            fields += zoneinfo.parse(doc, self.zone_titles)
         shot_at = _ts(shot.get("mtime")) or self.clock()
         touched = self._loot_read(shot["name"], doc, shot_at, mn)
         for f in fields:
@@ -474,7 +483,10 @@ class AutoOcr:
         if self.leveling is None and self.progress is None:
             return []
         out = []
-        if self.leveling is not None:
+        # Plan 088: a zone panel's "Lv. 58 <zone>" + a monster % below it is no
+        # character level; level / XP % are not read from such a shot.
+        if self.leveling is not None and not (self.zones is not None
+                                              and zoneinfo.is_zone_info(doc, self.zone_titles)):
             lv = ocrinfer.level_field(doc, size=size, regions=self.regions)
             if lv is not None:
                 out.append(lv)
@@ -643,6 +655,12 @@ class AutoOcr:
                     raise ValueError("gear score is not available")
                 entry["prev"] = self.progress.gs_ocr(name, value, _iso(shot_at),
                                                      force=via != "auto")
+            elif kind == zoneinfo.KIND:
+                if self.zones is None:
+                    raise ValueError("zone info is not available")
+                level = self.leveling.level_at(shot_at) if self.leveling is not None else None
+                key, prev = self.zones.commit(value, _str(file, 255), shot_at, level)
+                entry.update(key=key, prev=prev, read_at=_iso(shot_at))
             elif kind in PLANNER_KINDS:
                 reads = self._reads()
                 reads[kind] = (reads.get(kind, []) + [{
@@ -703,6 +721,9 @@ class AutoOcr:
             elif c.get("kind") == "gear":
                 self._need(self.progress).gs_restore(c.get("name"), c.get("value"),
                                                      c.get("prev"))
+            elif c.get("kind") == zoneinfo.KIND:
+                self._need(self.zones).restore(c.get("key"), c.get("prev"), c.get("read_at"),
+                                               c.get("file"))
             elif c.get("kind") in PLANNER_KINDS:
                 reads = self._reads()
                 reads[c["kind"]] = [r for r in reads.get(c["kind"], []) if r.get("id") != uid]

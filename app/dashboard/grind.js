@@ -663,6 +663,16 @@
     // Plan 018: level gap vs the spot's monsters, and rows sourced pre-patch.
     const gap = C.spotGapText(r);
     if (gap) b.appendChild(el('span', 'ew-muted', gap));
+    // Plan 088: the in-game Monster Zone Info read - recommended level + kills to level.
+    const zl = C.zoneLevelText(r.zone_xp);
+    if (zl) {
+      const s = el('span', 'ew-muted', zl);
+      s.title = (r.zone_xp.source || 'in-game zone info') +
+        (typeof r.level_min_community === 'number' ? ' (community lvl ' + r.level_min_community + ')' : '');
+      b.appendChild(s);
+    }
+    const zk = C.zoneKillsText(r.zone_xp);
+    if (zk) b.appendChild(el('span', 'ew-muted', zk + (r.zone_xp.cap_bound === true ? ' (cap-bound)' : '')));
     if (r.reverify === true) {
       const badge = el('span', 'ew-pill unknown', 're-verify after patch');
       badge.title = 'transcribed ' + r.verified + ', before the newest XP patch';

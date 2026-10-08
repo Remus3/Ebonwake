@@ -2167,6 +2167,27 @@
     return 'Lv ' + sign + r.level_gap + ' vs mob' + dr;
   }
 
+  // Plan 088: "~830 kills to Lv 58" from a spot row's in-game zone read
+  // (`zone_xp`), "re-read at Lv 57" when it was read in another level band,
+  // '' without one.
+  function zoneKillsText(z) {
+    if (!plainObject(z)) return '';
+    if (z.current === false) return isInt(z.reread_level, 1) ? 're-read at Lv ' + z.reread_level : '';
+    if (!isInt(z.kills_to_level, 0) || !isInt(z.next_level, 1)) return '';
+    return '~' + String(z.kills_to_level).replace(/\B(?=(\d{3})+(?!\d))/g, ',') +
+      ' kills to Lv ' + z.next_level;
+  }
+
+  // Plan 088: "in-game Lv 58" (the panel's recommended level), '' without one.
+  function zoneLevelText(z) {
+    return plainObject(z) && isInt(z.recommended_level, 1) ? 'in-game Lv ' + z.recommended_level : '';
+  }
+
+  // Plan 088: the XP-buff card line while the grind session's zone is cap-bound.
+  function zoneCapText(zc) {
+    return plainObject(zc) && zc.cap_bound === true ? 'cap-bound here - XP buffs add nothing' : '';
+  }
+
   // /api/spots body -> { top, unlocks, missing, error } with junk rows dropped.
   function spotRecs(d) {
     const rows = function (v) {
@@ -3779,6 +3800,10 @@
       epochs: (Array.isArray(d.epochs) ? d.epochs : []).map(epochBrief).filter(function (e) { return e !== null; }),
       epoch_error: typeof d.epoch_error === 'string' ? d.epoch_error : null,
       kill_xp_cap: typeof d.kill_xp_cap === 'string' ? d.kill_xp_cap : null,
+      // Plan 088: the grind session's in-game zone read (cap-bound flag), or null.
+      zone_cap: plainObject(d.zone_cap) && typeof d.zone_cap.zone_name === 'string' ?
+        { zone_name: d.zone_cap.zone_name, cap_bound: d.zone_cap.cap_bound === true,
+          source: typeof d.zone_cap.source === 'string' ? d.zone_cap.source : null } : null,
       // Plan 024 level-gated deadlines, already decorated with state by the server.
       deadlines: (Array.isArray(d.deadlines) ? d.deadlines : []).map(deadlineBrief).filter(function (x) { return x !== null; }),
       // Plan 060 Combat Secret Book ledger (null on a pre-060 server).
@@ -7140,6 +7165,9 @@
     spotNeedText: spotNeedText,
     spotGapText: spotGapText,
     spotRecs: spotRecs,
+    zoneKillsText: zoneKillsText,
+    zoneLevelText: zoneLevelText,
+    zoneCapText: zoneCapText,
     matchSpot: matchSpot,
     EVENT_KINDS: EVENT_KINDS,
     EVENTS_SOON_S: EVENTS_SOON_S,

@@ -444,6 +444,9 @@ class LevelingService:
         self.maint_end = maint_end
         # Plan 085: verdict(key) -> a tracked row's patch-notes verdict or None.
         self.verdict = None
+        # Plan 088: zone_here() -> {zone_name, cap_bound, cap_pct, source} of the
+        # running grind spot's in-game zone read, or None (XP-buff card line).
+        self.zone_here = None
         self.seq = 0
         self.epoch_error = None
         self.deadline_error = None
@@ -612,9 +615,41 @@ class LevelingService:
                 # epoch (no caps) does not hide them (refute r1 minor 2)
                 "kill_xp_cap": levels.kill_cap_note(levels.active_epoch(
                     [e for e in epochs if "kill_xp_cap" in e], now), level),
+                "zone_cap": self._zone_here(),
                 "samples": [dict(s, pre_patch=since is not None
                                  and _parse_iso(s["ts"]) < since)
                             for s in reversed(samples[-VIEW_SAMPLES:])]}
+
+    def _zone_here(self):
+        if self.zone_here is None:
+            return None
+        try:
+            return self.zone_here()
+        except Exception:  # noqa: BLE001 - the zone line is an extra, never fatal
+            return None
+
+    def kill_caps(self, now=None):
+        """kill_xp_cap bands of the newest started epoch that carries them."""
+        ep = levels.active_epoch([e for e in self.epochs() if "kill_xp_cap" in e],
+                                 now or self._now())
+        return list(ep["kill_xp_cap"]) if ep else []
+
+    def xp_state(self):
+        """Plan 088 inputs without the full view: {level, pct, xp_stack_pct, caps}."""
+        now = self._now()
+        doc = self._load()
+        level, pct, _ = _level_now(doc["samples"])
+        hot = hot_status(doc["hot_windows"], now, doc["hot_auto"])
+        buffs = _live_xp_buffs(self.buffs() if self.buffs is not None else [])
+        return {"level": level, "pct": pct, "xp_stack_pct": xp_stack(hot["active"], buffs),
+                "caps": self.kill_caps(now)}
+
+    def level_at(self, ts):
+        """Plan 088: level from the samples at or before epoch `ts` (+1 s: a level
+        read from the same shot counts), or None when none is that old."""
+        samples = self._load()["samples"]
+        before = [s for s in samples if _parse_iso(s["ts"]).timestamp() <= ts + 1]
+        return _level_now(before)[0] if before else None
 
     def hot_active(self, now=None):
         """Plan 067: True while a Hot Time window (typed or plan 064 dated) is on."""
