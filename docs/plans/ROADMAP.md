@@ -251,7 +251,7 @@ the ONE ANSWER (HOP 2) from it after merge.
 
 ## Order N67971f - blocked items
 
-Plan: `docs/plans/087-fleet-kit-v9-done-marker.md` (As-built deviations 1-7).
+Plan: `docs/plans/089-fleet-kit-v9-done-marker.md` (As-built deviations 1-7).
 
 ORDER OPEN: acceptance is not met until the main session does items 1, 2, 3, 5
 and 6. Merging lane-0 does not close it.
