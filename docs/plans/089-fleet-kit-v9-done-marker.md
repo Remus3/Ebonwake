@@ -1,4 +1,4 @@
-# Plan 087 - Fleet kit v9: CLI display, /done marker, Stop hook, MIG-1 worktree prune
+# Plan 089 - Fleet kit v9: CLI display, /done marker, Stop hook, MIG-1 worktree prune
 
 Status: partial (lane-0, order N67971f). ORDER NOT CLOSED: acceptance is not met
 until the main session does items 1, 2, 3, 5 and 6. Merging this lane does not

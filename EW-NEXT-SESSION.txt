@@ -2,7 +2,24 @@ EW NEXT SESSION
 ---------------
 SESSION: 16
 
-Next action: plan 018 at the 2026-10-08 maintenance (cap 75):
+Next action: RESUME N67971f v9-move at step D (progress/v9-move.json).
+HALT is set on the system-drive copy. Check lane-0 item 088 (pid 8268,
+lane timeout ends it by 03:08 2026-10-08) has exited; if its output is
+unmerged, save it to refs/ew/salvage/088 and set 088 paused (as done for
+087, refs/ew/salvage/087, script logic: state paused, attempts-1, pid and
+worktree cleared). Then steps E-I of the ruled plan: MIG-1 prune with
+git worktree list counts (4 before), self-move to drive E: (robocopy,
+re-point loop/logon tasks + 2 shortcuts + claude project dirs, read back),
+gates, push, unhalt E: only, ONE ANSWER HOP 2 to MAIN re 2354 + 2155
+(vendoring commit 3eb2d01, MANIFEST sha256 cbc8b7de..., conformance,
+prune counts, 2230 inventory "as of C:, pre-move", move fact).
+- NOTE: adjudicated N67971f (refute-rounds: 3/3): merge 4432f11 as is
+  (ca1e51a); v9 items 1/2/3 done in 3eb2d01 (pushed by loop tick 237);
+  v9 plan doc renumbered 087 -> 089 (d5d450c; deep-dive owns 087/088).
+  Step D cap (45 min, ended 02:19) hit with 088 still running ->
+  stopped, nothing moved (ruling: stop per brief; reverses-if 8268 gone).
+  The loop's 01:15 ANSWER to 2354 promised a fresh ANSWER; still owed.
+Then: plan 018 at the 2026-10-08 maintenance (cap 75):
 LEVEL_MAX=75 already in server/ew/levels.py; after maintenance confirm
 the Leveling card and add/flip the ROADMAP row so the loop ships 018.
 Then watch the loop: read the inbox, progress/loop.json and
