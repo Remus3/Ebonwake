@@ -154,6 +154,27 @@ def test_title_gate_and_epoch_date():
     assert patchverify.check(_text(), "[Event] Hot Time", hinted) == {}
 
 
+BARE = "Patch Notes - October 8, 2026"
+
+
+@pytest.mark.parametrize("title,want", [
+    (TITLE, True), (BARE, True), ("[Updates]Patch Notes - October 8, 2026", True),
+    ("patch notes - October 8, 2026", True), ("[Event] Hot Time", False),
+    ("October 2 Maintenance Patch Notes", False), ("[Event] Patch Notes", False), (None, False),
+])
+def test_bare_list_title_is_a_patch_title(title, want):
+    """Research 0016 post-merge: the live list carries the bare title; only the
+    Detail page <title> has the [Updates] prefix."""
+    assert patchverify.is_patch_title(title) is want
+
+
+def test_bare_title_meets_the_prefixed_hints():
+    hinted = patchverify.load()["hinted"]
+    assert patchverify.check(_text(), BARE, hinted) == patchverify.check(_text(), TITLE, hinted)
+    assert patchverify.check(_text(), BARE, hinted)[EPOCH]["verdict"] == "confirmed"
+    assert patchverify.check(_text(), "[Event] Patch Notes - October 8, 2026", hinted) == {}
+
+
 def test_contradict_wins_and_evidence_is_short_ascii():
     hint = patchverify.compile_hint({"title": "x", "expect": ["foo"], "contradict": ["bar"]})
     text = "foo\n" + ("z" * 300) + " bar " + chr(0x2014) + " " + ("y" * 300)
@@ -503,6 +524,48 @@ def test_notice_detail_list_links_confirm_the_cap75_epoch(tmp_path):
         s.server_close()
     assert st == 200 and v["verdicts"][EPOCH]["verdict"] == "confirmed"
     assert v["last_notice"]["notice_no"] == 10678
+
+
+LIVE_A = ("<li><a href=\"https://www.naeu.playblackdesert.com/News/Notice/Detail?groupContentNo={no}"
+          "&countryType=en-US\" name=\"btnDetail\"><span class=\"title line_clamp\">{title}</span>"
+          "</a></li>")
+
+
+def test_live_bare_title_list_reads_10678_first_and_confirms_cap75(tmp_path):
+    """Research 0016 post-merge live check: the list title is bare (no
+    [Updates]), no stamp; 10678 must get a Detail GET ahead of the older event
+    notices that filled all MAX_DETAILS slots, then cap75 is confirmed."""
+    net = Net(n_events=0)
+    net.boards[3] = ("<ul>" + "".join(LIVE_A.format(no=n, title=f"[Event] E{n}")
+                                      for n in (10663, 10646, 10609, 10580, 10563, 10550))
+                     + "</ul>").encode()
+    net.boards[2] = ("<ul>" + LIVE_A.format(no=10678, title=BARE)
+                     + LIVE_A.format(no=10661, title="Patch Notes - October 1, 2026")
+                     + "</ul>").encode()
+    net_call = net.__call__
+
+    def fetch(url, timeout):
+        if url == eventnotices.detail_url(10678):
+            net.calls.append(url)
+            return net.page
+        return net_call(url, timeout)
+    client = eventnotices.NoticeClient(fetch=fetch, clock=lambda: T0, cache_dir=tmp_path / "c")
+    notices = client._lists()
+    assert [n["title"] for n in notices if n["group_no"] == 10678] == [BARE]
+    assert eventnotices.NoticeClient._fetch_order(notices)[0]["group_no"] == 10678
+    client._download()
+    details = [u for u in net.calls if "groupContentNo=" in u]
+    assert details[0] == eventnotices.detail_url(10678)
+    assert len(details) == eventnotices.MAX_DETAILS
+    notes = client.patch_notes()
+    assert 10678 in [n["group_no"] for n in notes]
+    hinted = patchverify.load()["hinted"]
+    new = next(n for n in notes if n["group_no"] == 10678)
+    assert new["title"] == BARE
+    assert patchverify.check(new["text"], new["title"], hinted)[EPOCH]["verdict"] == "confirmed"
+    svc = dataverdicts.VerdictService(client.patch_notes, path=tmp_path / "v.json",
+                                      clock=lambda: T0)
+    assert svc.verdict(EPOCH)["verdict"] == "confirmed"
 
 
 # --- plan 087: Unicode fold, name aliases, hints for the official numbers ------------------

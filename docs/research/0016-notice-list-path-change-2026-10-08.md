@@ -105,3 +105,22 @@ prefix) for both `is_patch_title` and the hint `title` match. Make sure the
 newest patch-notes notice gets a Detail GET within MAX_DETAILS ahead of older
 event notices. Use a fixture with the live markup above (bare title). Live
 read-back: `/api/data/verdicts` shows `cap75-xp-rescale` confirmed from 10678.
+
+## As-built deviations (second-defect fix, lane H184b9e)
+
+1. Hint titles are not edited. `patchverify.hint_title` gives a bare list
+   title the `[Updates] ` prefix back before the hint `title` match, so every
+   tracked hint keeps the official Detail title. Alternatives: loosen each
+   data hint to `^(?:\[Updates\] )?Patch Notes`. Why: one code point, no
+   fingerprint churn on 13+ rows. Reverses if: a hint must tell the bare and
+   prefixed titles apart.
+2. The newest patch-notes notice ranks ahead of maintenance in the Detail
+   order (was: maintenance first). Alternatives: keep maintenance first.
+   Why: the item asks for the newest patch notes' slot first; it costs one
+   slot only while uncached. Reverses if: a maintenance window is missed
+   because of it.
+3. Live read-back not run in the lane (the lane may not run network
+   scripts). Fixture with the live markup (bare title, `title line_clamp`,
+   absolute /News/Notice/Detail href, no stamp) confirms cap75 through
+   `VerdictService`. Live `/api/data/verdicts` is read back after merge.
+   Reverses if: the post-merge read does not show cap75-xp-rescale confirmed.
