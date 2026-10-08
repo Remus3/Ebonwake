@@ -1,16 +1,37 @@
 EW NEXT SESSION
 ---------------
-SESSION: 17
+SESSION: 18
 
-Next action (session-only, not loop work): first session started from
-drive E: recycles the old system-drive checkout and the old ew-worktrees
-parent (Recycle Bin), after confirming nothing references them (tasks,
-shortcuts, other trees' notes, open processes). The old copy is HALTed.
-Then confirm loop items 087 and 088 re-ran from E: (state paused before
-the move -> re-dispatched); their pre-move lane output is kept on local
-refs refs/ew/salvage/087 and refs/ew/salvage/088 - compare with the
-re-run, cherry-pick a salvage ref only if the re-run produced less, then
-delete both refs.
+Next action: watch the loop: read the inbox, progress/loop.json and
+loop_items/*.json; adjudicate anything in adjudicate / merge-conflict /
+gave-up / failed-dirty. The loop should pick up the patchverify
+hint-tuning bullet below; read back /api/data/verdicts after it merges
+(restart the server on the merge first).
+
+Carried forward (not acted on yet):
+- NOTE: session 17 (2026-10-08): old C: checkout + C: ew-worktrees sent to
+  the Recycle Bin after the reference check (tasks / shortcuts / env /
+  worktrees clean); Test-Path both False read back. Desktop Ebonwake.lnk
+  still pointed at the old copy and the app ran from it (d58457c): shortcut
+  re-pointed to E: and read back; app restarted via the \Ebonwake task and
+  read back running from E:. Salvage refs 087/088 deleted after the re-runs
+  merged (75b7ee9, 4949f58; re-run >= salvage). 0 refs/ew/ left.
+- NOTE: Electron started from a Claude shell dies (GPU process launch
+  failed, error_code=18); start the app with `schtasks /run /tn \Ebonwake`.
+  The python server starts fine from the shell (launch.py --server-only).
+- NOTE: plan 018 cap 75 CONFIRMED live: official patch notes 10678
+  (2026-10-08) read; /api/data/verdicts shows xp_epochs cap75-xp-rescale
+  confirmed on server 24171e7. Took two loop fixes (research 0016): list
+  links moved to /News/Notice/Detail (H29230b, 0341fca) and bare list titles
+  without [Updates] (H184b9e, 24171e7). To force a notice re-read: set
+  eventnotices_attempt.json at=0 AND eventnotices_list.json fetched_at=0.
+- Patchverify hint tuning: 36 hinted rows read `silent` against 10678
+  although the notes state the Lv 70-75 +3/level AP/DR bonus (brackets
+  lv-bonus-70..75) and the per-kill EXP cap table (xp_epochs cap-*). Check
+  each hint's expect patterns against the cached patch-notes text (folded)
+  and fix the hints so stated rows read confirmed; data rows stay unedited
+  except the hints. Lane fixtures must be cut from live markup, never
+  invented (0016 deviation 1 missed the bare title).
 - NOTE: repo moved itself to drive E: on 2026-10-08 (operator order,
   same folder name; robocopy 7021/7021 files, git status clean, fsck ok,
   HEAD equal). Loop task, logon task, both Desktop shortcuts and the
@@ -28,20 +49,6 @@ delete both refs.
   vendored in 3eb2d01; v9 plan doc renumbered 087 -> 089 (d5d450c,
   deep-dive owns 087/088). Step D first stopped at its 45 min cap
   (lane 088 running), resumed on coordinator order once 8268 exited.
-Then: plan 018 at the 2026-10-08 maintenance (cap 75):
-LEVEL_MAX=75 already in server/ew/levels.py; after maintenance confirm
-the Leveling card and add/flip the ROADMAP row so the loop ships 018.
-Then watch the loop: read the inbox, progress/loop.json and
-loop_items/*.json; adjudicate anything in adjudicate / merge-conflict /
-gave-up / failed-dirty.
-
-Carried forward (not acted on yet):
-- FIX (priority): patch notes never reach patchverify: the live notice
-  list title is bare 'Patch Notes - October 8, 2026' (no '[Updates]'), so
-  PATCH_TITLE_RE misses it and 10678 gets no Detail GET (research 0016,
-  section 'Post-merge live check'). Root-cause TDD with the live markup in
-  0016: accept the bare title, give the newest patch notes a Detail slot
-  first; then confirm /api/data/verdicts marks cap75-xp-rescale confirmed.
 - NOTE (operator order 2026-10-06): ZERO-TOUCH. EW self-adjusts from
   the live game; no required toggles or typed entry (a changed setting
   gets forgotten and skews output). Every new plan follows research 0010
@@ -186,7 +193,7 @@ item merged, delete keep ref, push). Restart: stop the server pid from
 Acceptance: loop keeps merging with ci green, nothing in adjudicate /
 merge-conflict / gave-up / failed-dirty; no NOTE bullet dispatched as work.
 
-Do NOT redo: session 15 (2026-10-07 ~21:10): loop read back idle,
+Do NOT redo: session 16-17 work listed under the NOTE bullets above (recycle, salvage refs, 087/088, notice fixes). session 15 (2026-10-07 ~21:10): loop read back idle,
 fire 221, items 87 merged / 12 no-change, none stuck, inbox 0 new,
 runs 43/120; 018 still waits for maintenance. Session 14 (2026-10-07 ~20:50): inbox read on
 operator ask - 12 notes, newest 2026-10-05 08:41, all already handled by
@@ -201,10 +208,11 @@ NOTE-classifier fix 73553e9; dependabot PR 2 merged; server on 8d5b483.
 Session 10 items as before: research 0010-0012, plans 079-086, c3df83e,
 b8fbef8, run counter reset 2026-10-06.
 
-In flight: none (loop idle, deep-dive done 2026-10-07, runs 43/120).
+In flight: none at hand-off (loop armed, lanes idle).
 
-Status: main in sync with origin after the session 15 hand-off push.
-Gates (session 15): pytest ok (all dots), node 693 pass 0 fail, leak sweep ARMED (19). CI on 41dedc3: ci 37714970444 +
-codeql 37714970181 success. Session jsonl ~0.4 MB.
+Status: session 17 pushed b360d85 + b46731c; loop merged 088 75b7ee9, 087
+4949f58, H29230b 0341fca, H184b9e 24171e7. CI on b46731c: ci 37767101004 +
+codeql 37767101005 success. Gates (session 17 /done): pytest ok, node 698 pass 0 fail, leak ARMED (19). Server on
+24171e7, /api/health ok. Session jsonl ~0.8 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
