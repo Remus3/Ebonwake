@@ -26,7 +26,10 @@ from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 FOLD_FILE = DATA_DIR / "patch_fold.json"
-PATCH_TITLE_RE = re.compile(r"^\[Updates\]\s*Patch Notes\b", re.IGNORECASE)
+# research 0016: the live list title is bare (`Patch Notes - <date>`); only the
+# Detail page <title> carries the `[Updates] ` prefix the hints are written to
+PATCH_TITLE_RE = re.compile(r"^(?:\[Updates\]\s*)?Patch Notes\b", re.IGNORECASE)
+UPDATES_PREFIX = "[Updates] "
 HINT_KEYS = ("title", "expect", "contradict", "aliases")
 NAME_TOKEN = "{name}"
 MAX_PATTERNS = 4
@@ -48,6 +51,14 @@ _HWS_RE = re.compile(r"[ \t]{2,}|\t")
 
 def is_patch_title(title):
     return isinstance(title, str) and bool(PATCH_TITLE_RE.match(title))
+
+
+def hint_title(title):
+    """The title a hint's `title` pattern is matched against: a bare list
+    title gets the official `[Updates] ` prefix back."""
+    if is_patch_title(title) and not title.startswith("["):
+        return UPDATES_PREFIX + title
+    return title
 
 
 def _ascii(s):
@@ -226,7 +237,7 @@ def check(text, title, hinted):
     out = {}
     if not isinstance(text, str) or not isinstance(title, str):
         return out
-    text, title = fold(text), fold(title)
+    text, title = fold(text), fold(hint_title(title))
     for key, h in hinted.items():
         if h["hint"]["title"].search(title):
             out[key] = _check_folded(text, h["hint"])

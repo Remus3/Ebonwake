@@ -905,14 +905,20 @@ class NoticeClient(CachedClient):
 
     @staticmethod
     def _fetch_order(notices):
-        """Maintenance, then patch notes (plan 085), then Hot Time titles first
-        (time-critical), else list order."""
+        """The newest patch notes (research 0016: its verdicts wait on that one
+        GET), maintenance, older patch notes (plan 085), then Hot Time titles
+        first (time-critical), else list order."""
+        newest = max((n["group_no"] for n in notices
+                      if patchverify.is_patch_title(n["title"])), default=None)
+
         def rank(n):
-            if _MAINT_TITLE_RE.match(n["title"]):
+            if n["group_no"] == newest:
                 return 0
-            if patchverify.is_patch_title(n["title"]):
+            if _MAINT_TITLE_RE.match(n["title"]):
                 return 1
-            return 2 if _HOT_RE.search(n["title"]) else 3
+            if patchverify.is_patch_title(n["title"]):
+                return 2
+            return 3 if _HOT_RE.search(n["title"]) else 4
         return sorted(notices, key=rank)
 
     def _download(self):
