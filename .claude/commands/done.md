@@ -13,6 +13,8 @@ description: End-of-session ritual - gate, commit, push (fires CI), paperwork wh
 > Long steps (suites, CI watch) run as background commands with an ETA from
 > `python tools/eta.py estimate <kind>`.
 
+> **DISPATCH (kit v10):** the main session runs no tool for /done; it dispatches the whole ritual to ONE background sub-agent and relays only that agent's final line verbatim.
+
 Shape: **Phase 1** fast local gate - **Phase 2** commit + push (fires CI) -
 **Phase 3** paperwork while CI runs - **Phase 4** collect CI, write the hand-off,
 print the one line. Every step is idempotent: re-running /done after a partial

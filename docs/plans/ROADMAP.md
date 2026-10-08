@@ -93,6 +93,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 086 | Reward claim windows: claim-by deadlines that outlive the event, Events row, Timers, What now (depends on 064, 069) | [x] done 2026-10-07 (loop; refute 0/3 PASS) |
 | 087 | Patch-notes match fidelity: Unicode fold, name aliases, hints for the official 2026-10-08 numbers (depends on 085) | [x] done 2026-10-08 (loop; refute 0/3 PASS) |
 | 088 | Monster Zone Info OCR: per-kill EXP and recommended level per zone, kills-to-level, cap-bound buff flag (depends on 063, 066) | [x] done 2026-10-08 (loop; refute 0/3 PASS) |
+| 091 | loop: route ORDER items needing ops/fleet_kit/, CLAUDE.md or .claude/ edits to a session (or grant that lane those paths) - lane briefs block them by construction (N94ff08) | [ ] open |
 
 Deep dive 2026-10-08 (research 0015): two plans. Ranking: 087 first - NA
 patch notes post today and the shipped 085 hints miss the official
@@ -267,25 +268,18 @@ commits outside main (read with `git log main..<sha>`).
 - Item 5 MIG-1 worktree prune (`git worktree list` = 4 before): BLOCKED - `git -C` status of lane-1/2, `git worktree remove/prune` and Recycle Bin moves outside this lane's allow list; lane-0 is held by this lane and stays. Lane-1/2 locks read FREE, HEADs contain nothing unmerged; uncommitted state unread.
 - Item 6 deliver the 2230 ANSWER to ORDER 2155: BLOCKED - outbox outside this lane's read grant; the loop carries it in the HOP 2 ANSWER.
 
-## Order N94ff08 - blocked items
+## Order N94ff08 - closed
 
-Kit v10 (subagent-first hook). ORDER OPEN: acceptance is not met until the
-main session does items 1, 2, 4 and 5 below. Merging this lane does not close it.
-Plan and as-built deviations: `docs/plans/090-fleet-kit-v10-subagent-first.md`.
+CLOSED 2026-10-08 by the main-checkout commit "kit v10: vendor, re-embed
+FLEET-COMMON, re-pin conformance, subagent-first hook (log), /done dispatch,
+emit()" on top of merge 126cfc7 (lane WIP 0bbc472 merged as a partial;
+adjudicated, refute-rounds 3/3). Plan and as-built deviations:
+`docs/plans/090-fleet-kit-v10-subagent-first.md`.
 
-Done in-lane: `.gitignore` names `ops/loop/control/subagent_first.mode` and
-`ops/loop/control/subagent_first.jsonl` explicitly (already covered by
-`ops/loop/control/*`). Headless paths audited: every `claude` start already
-goes through kit `fleet_headless.spawn` (`tools/ew_lane.py`); no direct spawn in
-`tools/` or `server/`, so item 5's headless half needs no change.
-
-- Item 1 vendor kit v10 (17 files, one commit) + re-embed FLEET-COMMON in CLAUDE.md + re-pin `tests/test_fleet_kit_conformance.py` to v10: BLOCKED - bundle sits in the main checkout inbox, outside this lane's read grant; lane brief also forbids editing CLAUDE.md and `ops/fleet_kit/`.
-- Item 2 wire PreToolUse `python ops/fleet_kit/fleet_subagent_first.py` (matcher `Bash|PowerShell|Read|Edit|Write|Grep|Glob|NotebookEdit|MultiEdit`, timeout 10) in `.claude/settings.json`: BLOCKED - `.claude/` outside this lane's write grant; must also wait for item 1 (a missing script makes python exit 2, which on PreToolUse DENIES every tool call).
-- Item 3 log mode: lane wrote `log` to its worktree copy only; the file is gitignored, so it does not travel by merge. BLOCKED - main checkout outside this lane's write grant. Main session writes `log` into the main checkout's `ops/loop/control/subagent_first.mode` BEFORE item 2 (the hook default is deny). Deny switch expected after 3 clean interactive sessions: target 2026-10-11.
-- Item 4 /done dispatched whole to ONE sub-agent, main relays only its final line: BLOCKED - `.claude/commands/done.md` outside this lane's write grant. Text to add after the CHAT OUTPUT CONTRACT block: "DISPATCH (kit v10): the main session runs no tool for /done; it dispatches the whole ritual to ONE background sub-agent and relays only that agent's final line verbatim."
-- Item 5 checklist printing via `fleet_checklist.emit()` (`tools/ew_loop.py` `checklist` command, line ~1851): BLOCKED on item 1 - emit() exists only in v10 and its signature is not readable from this lane; switch after vendoring.
-- Item 6 ONE ANSWER (HOP 2): left to the loop after merge per lane brief; it must name the vendoring commit and MANIFEST sha256 from items 1-2, so it waits for them.
-
-As-built deviations (adjudicated in-lane):
-1. Decision: do not wire the hook before the kit file exists. Alternatives: wire now (python exit 2 denies every tool), wire with an existence guard (edits a kit-owned command line). Why: a missing hook script blocks all work. Reverses if: item 1 lands, then wire exactly as ordered.
-2. Decision: do not call emit() blind. Alternatives: guess the signature with a getattr fallback. Why: an unverified kit API call in the loop's printer risks a silent wrong checklist. Reverses if: v10 is vendored and emit()'s signature read.
+- Item 1 DONE: kit v10 vendored, 17/17 files match MANIFEST.json; FLEET-COMMON block re-embedded (block sha256 matches); `tests/test_fleet_kit_conformance.py` pinned to v10.
+- Item 2 DONE: PreToolUse `python ops/fleet_kit/fleet_subagent_first.py` (matcher `Bash|PowerShell|Read|Edit|Write|Grep|Glob|NotebookEdit|MultiEdit`, timeout 10) in `.claude/settings.json`, wired after the kit file landed.
+- Item 3 DONE: main checkout `ops/loop/control/subagent_first.mode` = `log`, written before the hook; both files gitignored. Deny target 2026-10-11 (3 clean interactive sessions).
+- Item 4 DONE: `.claude/commands/done.md` DISPATCH line (whole ritual to ONE background sub-agent).
+- Item 5 DONE: `tools/ew_loop.py checklist` prints via kit `fleet_checklist.emit()`; headless paths were already on `spawn()`.
+- Item 6 DONE: ONE ANSWER (HOP 2) to MAIN after push.
+- Routing defect filed as ROADMAP row 091.

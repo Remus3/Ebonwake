@@ -1848,7 +1848,8 @@ def main(argv=None):
     if a.cmd == "lane":
         return lane_worker(a.item)
     doc = read_json(ROOT / "ops/loop/control/progress/loop.json", {}) or {}
-    sys.stdout.buffer.write((render_checklist(doc) + "\n").encode("utf-8"))
+    # kit v10: emit() never raises (a cp1252 console gets "[ ]", pythonw prints nothing)
+    ew_lane._load("fleet_checklist", "ops/fleet_kit/fleet_checklist.py").emit(render_checklist(doc))
     return 0
 
 

@@ -1,4 +1,4 @@
-"""Fleet kit v9 is vendored byte-for-byte and the CLAUDE.md FLEET-COMMON block is
+"""Fleet kit v10 is vendored byte-for-byte and the CLAUDE.md FLEET-COMMON block is
 byte-identical. Never edit the kit locally; MAIN ships new versions."""
 
 import hashlib
@@ -22,14 +22,14 @@ def test_fleet_kit_conformance():
     assert _load().conformance(ROOT) == []
 
 
-def test_kit_is_v9_with_all_files():
+def test_kit_is_v10_with_all_files():
     import json
     man = json.loads((ROOT / "ops" / "fleet_kit" / "MANIFEST.json").read_text("ascii"))
-    assert man["version"] == 9
-    assert _load().KIT_VERSION == 9
+    assert man["version"] == 10
+    assert _load().KIT_VERSION == 10
     assert {"cli_display.json", "fleet_checklist.py", "fleet_done.py", "fleet_headless.py",
             "fleet_inbox.py", "fleet_lanes.py", "fleet_secrets.py", "fleet_statusline.js",
-            "fleet_subagent_status.js", "fleet_watch.py", "tokens.css", "tokens.json",
+            "fleet_subagent_first.py", "fleet_subagent_status.js", "fleet_watch.py", "tokens.css", "tokens.json",
             "FLEET-COMMON.md", "LICENSE", "NOTICE"} == set(man["files"])
     on_disk = {p.name for p in (ROOT / "ops" / "fleet_kit").iterdir() if p.is_file()}
     assert on_disk == set(man["files"]) | {"MANIFEST.json"}
@@ -77,6 +77,25 @@ def test_done_ritual_last_act_is_the_marker():
     # nothing but the chat line and safety rails follows the marker step
     assert "### 8." in text[:text.index(mark)] and "git push" not in tail
 
+
+def test_pretooluse_hook_runs_kit_subagent_first():
+    """Kit v10 item 2: the project settings wire the subagent-first hook exactly."""
+    import json
+    doc = json.loads((ROOT / ".claude" / "settings.json").read_text("ascii"))
+    want = {"matcher": "Bash|PowerShell|Read|Edit|Write|Grep|Glob|NotebookEdit|MultiEdit",
+            "hooks": [{"type": "command",
+                       "command": "python ops/fleet_kit/fleet_subagent_first.py",
+                       "timeout": 10}]}
+    assert want in doc["hooks"]["PreToolUse"]
+    assert (ROOT / "ops" / "fleet_kit" / "fleet_subagent_first.py").is_file()
+
+
+def test_done_ritual_is_dispatched_to_one_subagent():
+    """Kit v10 item 4: /done runs as ONE sub-agent; main relays its final line."""
+    text = (ROOT / ".claude" / "commands" / "done.md").read_text("ascii")
+    assert ("DISPATCH (kit v10):** the main session runs no tool for /done; it dispatches "
+            "the whole ritual to ONE background sub-agent and relays only that agent's "
+            "final line verbatim.") in text
 
 def test_shared_slots_governor_is_byte_identical():
     data = (ROOT / "ops" / "loop" / "slots.py").read_bytes()

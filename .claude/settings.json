@@ -52,6 +52,18 @@
      }
     ]
    }
+  ],
+  "PreToolUse": [
+   {
+    "matcher": "Bash|PowerShell|Read|Edit|Write|Grep|Glob|NotebookEdit|MultiEdit",
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python ops/fleet_kit/fleet_subagent_first.py",
+      "timeout": 10
+     }
+    ]
+   }
   ]
  }
 }
