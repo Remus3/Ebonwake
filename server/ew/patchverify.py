@@ -8,6 +8,12 @@ is `contradicted` when any `contradict` pattern matches, `confirmed` when every
 `expect` pattern matches (and at least one exists), else `silent`. An
 unverified row (`verified: false`) without a hint is `unchecked`, never guessed.
 
+Plan 087: the page text is folded to ASCII before matching (`fold`, table
+`data/patch_fold.json`: arrows -> `->`, dashes -> `-`, odd spaces, curly
+quotes, fullwidth percent, times sign; any other non-ASCII char -> space). A
+hint may carry `aliases` (max MAX_ALIASES ASCII names); the token `{name}` in
+an expect / contradict pattern expands to `(?:<row name>|<alias>...)`.
+
 Pure: no network, no clock, no file writes; `load` only reads the tracked data
 files. Verdicts are runtime state (`dataverdicts`); tracked data is never edited.
 """
@@ -19,10 +25,17 @@ import re
 from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
+FOLD_FILE = DATA_DIR / "patch_fold.json"
 PATCH_TITLE_RE = re.compile(r"^\[Updates\]\s*Patch Notes\b", re.IGNORECASE)
-HINT_KEYS = ("title", "expect", "contradict")
+HINT_KEYS = ("title", "expect", "contradict", "aliases")
+NAME_TOKEN = "{name}"
 MAX_PATTERNS = 4
-MAX_PATTERN = 200
+MAX_ALIASES = 4
+MAX_ALIAS = 60
+MAX_PATTERN = 300  # plan 087: band hints with an `old -> new` guard run past 200
+MAX_FOLD = 4
+_CP_RE = re.compile(r"^U\+[0-9A-F]{4,6}$")
+_fold_cache = {}
 MAX_EVIDENCE = 200
 VERDICTS = ("confirmed", "contradicted", "silent")
 _MONTHS = {m: n for n, m in enumerate(
@@ -30,6 +43,7 @@ _MONTHS = {m: n for n, m in enumerate(
 _TITLE_DATE_RE = re.compile(r"\b([A-Za-z]{3,9})\.?\s+([0-9]{1,2}),?\s+([0-9]{4})\b")
 _DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 _WS_RE = re.compile(r"\s+")
+_HWS_RE = re.compile(r"[ \t]{2,}|\t")
 
 
 def is_patch_title(title):
@@ -40,25 +54,82 @@ def _ascii(s):
     return isinstance(s, str) and all(32 <= ord(ch) < 127 for ch in s)
 
 
-def _compile(p, where):
+def validate_fold(doc):
+    """{code point int: ASCII replacement} from a parsed fold file, or ValueError."""
+    table = doc.get("fold") if isinstance(doc, dict) else None
+    if not isinstance(table, dict) or not table:
+        raise ValueError("fold table must be {note, fold: {\"U+XXXX\": ascii}}")
+    out = {}
+    for k, v in table.items():
+        if not (isinstance(k, str) and _CP_RE.match(k)):
+            raise ValueError(f"fold key {k!r} must be U+XXXX")
+        cp = int(k[2:], 16)
+        if cp < 128 or cp > 0x10FFFF:
+            raise ValueError(f"fold key {k} must be a non-ASCII code point")
+        if not (_ascii(v) and 0 < len(v) <= MAX_FOLD):
+            raise ValueError(f"fold target of {k} must be 1..{MAX_FOLD} printable ASCII")
+        out[cp] = v
+    return out
+
+
+def load_fold(path=FOLD_FILE):
+    """The validated fold table, read once per path; ValueError when bad."""
+    key = str(path)
+    if key not in _fold_cache:
+        try:
+            doc = json.loads(Path(path).read_text(encoding="ascii"))
+        except (OSError, ValueError) as e:
+            raise ValueError(f"fold table unreadable: {type(e).__name__}") from e
+        _fold_cache[key] = validate_fold(doc)
+    return _fold_cache[key]
+
+
+def fold(text, table=None):
+    """`text` with the fold table applied, any other non-ASCII char made a space
+    and runs of spaces / tabs collapsed to one (hints allow one space)."""
+    t = load_fold() if table is None else table
+    if not text.isascii():
+        text = "".join(ch if ord(ch) < 128 else t.get(ord(ch), " ") for ch in text)
+    return _HWS_RE.sub(" ", text)
+
+
+def _compile(p, where, name_alt=None):
     if not (_ascii(p) and 0 < len(p) <= MAX_PATTERN):
         raise ValueError(f"{where}: pattern must be 1..{MAX_PATTERN} printable ASCII")
+    if NAME_TOKEN in p:
+        if name_alt is None:
+            raise ValueError(f"{where}: {NAME_TOKEN} needs a row name")
+        p = p.replace(NAME_TOKEN, name_alt)
     try:
         return re.compile(p, re.IGNORECASE)
     except re.error as e:
         raise ValueError(f"{where}: bad regex: {e}") from None
 
 
-def compile_hint(h, where="verify"):
-    """{title, expect: [re], contradict: [re]} or ValueError."""
+def _name_alt(name, aliases, where):
+    if not isinstance(aliases, list) or len(aliases) > MAX_ALIASES:
+        raise ValueError(f"{where}.aliases: a list of at most {MAX_ALIASES} names")
+    for a in aliases:
+        if not (_ascii(a) and a.strip() and len(a) <= MAX_ALIAS):
+            raise ValueError(f"{where}.aliases: each 1..{MAX_ALIAS} printable ASCII")
+    names = ([name] if _ascii(name) and name.strip() else []) + aliases
+    if not names:
+        return None
+    return "(?:" + "|".join(re.escape(n) for n in names) + ")"
+
+
+def compile_hint(h, where="verify", name=None):
+    """{title, expect: [re], contradict: [re]} or ValueError. `name` is the
+    row's name, used with the hint's `aliases` for the `{name}` token."""
     if not isinstance(h, dict) or "title" not in h or not set(h) <= set(HINT_KEYS):
-        raise ValueError(f"{where}: verify must be {{title, expect, contradict}}")
+        raise ValueError(f"{where}: verify must be {{title, expect, contradict, aliases}}")
+    alt = _name_alt(name, h.get("aliases", []), where)
     out = {"title": _compile(h["title"], f"{where}.title")}
     for k in ("expect", "contradict"):
         ps = h.get(k, [])
         if not isinstance(ps, list) or len(ps) > MAX_PATTERNS:
             raise ValueError(f"{where}.{k}: a list of at most {MAX_PATTERNS} patterns")
-        out[k] = [_compile(p, f"{where}.{k}[{i}]") for i, p in enumerate(ps)]
+        out[k] = [_compile(p, f"{where}.{k}[{i}]", alt) for i, p in enumerate(ps)]
     if not out["expect"] and not out["contradict"]:
         raise ValueError(f"{where}: needs at least one expect or contradict pattern")
     return out
@@ -99,6 +170,7 @@ def load(data_dir=DATA_DIR):
     """{"hinted": {key: {"hint", "fp"}}, "unchecked": [key]} over every tracked
     data file; ValueError on a bad hint or an unreadable file."""
     root = Path(data_dir)
+    load_fold()  # a bad fold table is a load error too
     hinted, unchecked = {}, []
     for p in sorted(root.rglob("*.json")):
         file = p.relative_to(root).as_posix()
@@ -110,7 +182,8 @@ def load(data_dir=DATA_DIR):
             if "verify" in row:
                 if key in hinted:
                     raise ValueError(f"{key}: duplicate hinted row")
-                hinted[key] = {"hint": compile_hint(row["verify"], key), "fp": fingerprint(row)}
+                hinted[key] = {"hint": compile_hint(row["verify"], key, row.get("name")),
+                               "fp": fingerprint(row)}
             elif row.get("verified") is False:
                 unchecked.append(key)
     return {"hinted": hinted, "unchecked": sorted(set(unchecked))}
@@ -130,7 +203,12 @@ def _evidence(text, m):
 
 
 def check_row(text, hint):
-    """{"verdict", "evidence"} of one compiled hint over one page text."""
+    """{"verdict", "evidence"} of one compiled hint over one page text (folded
+    first; the evidence line comes from the folded text)."""
+    return _check_folded(fold(text), hint)
+
+
+def _check_folded(text, hint):
     for rx in hint["contradict"]:
         m = rx.search(text)
         if m is not None:
@@ -148,9 +226,10 @@ def check(text, title, hinted):
     out = {}
     if not isinstance(text, str) or not isinstance(title, str):
         return out
+    text, title = fold(text), fold(title)
     for key, h in hinted.items():
         if h["hint"]["title"].search(title):
-            out[key] = check_row(text, h["hint"])
+            out[key] = _check_folded(text, h["hint"])
     return out
 
 

@@ -15,6 +15,8 @@ import json
 import re
 from pathlib import Path
 
+from . import patchverify
+
 DATA_FILE = Path(__file__).resolve().parent / "data" / "brackets.json"
 TABLES = ("ap", "dp_dr", "dp_all_dr")
 FIELDS = {"source", "verified", "note", "rows"}
@@ -24,6 +26,12 @@ VALUE_MAX = 1000
 MAX_ROWS = 120
 MAX_TEXT = 200
 CLIFF_SPAN = 16
+ID_RE = re.compile(r"^[a-z0-9-]{1,40}$")
+LEVEL_KEYS = ("level_bonus", "level_gap_dr")  # plan 087, unverified, read by nothing yet
+LEVEL_BONUS_FIELDS = ("id", "level", "ap_vs_monsters", "monster_dr", "source", "verified")
+LEVEL_BONUS_INTS = {"level": (1, 99), "ap_vs_monsters": (0, VALUE_MAX), "monster_dr": (0, VALUE_MAX)}
+LEVEL_GAP_FIELDS = ("id", "dr_per_level", "max_levels", "source", "verified")
+LEVEL_GAP_INTS = {"dr_per_level": (0, VALUE_MAX), "max_levels": (1, 99)}
 
 
 def _is_int(v):
@@ -75,14 +83,46 @@ def validate_table(t):
             "note": _text(t["note"], "note", allow_empty=True), "rows": out}
 
 
+def _level_row(r, fields, ints):
+    """Plan 087: one unverified level-bonus / level-gap row; its patch-notes
+    hint is compiled here. Read by nothing else until a data pass adopts it."""
+    if not isinstance(r, dict) or set(r) - {"verify"} != set(fields):
+        raise ValueError(f"level rows must have exactly {', '.join(fields)} (+ optional verify)")
+    if not isinstance(r["id"], str) or not ID_RE.match(r["id"]):
+        raise ValueError("level row id must match ^[a-z0-9-]{1,40}$")
+    for k, (lo, hi) in ints.items():
+        if not _is_int(r[k]) or not lo <= r[k] <= hi:
+            raise ValueError(f"{r['id']}: {k} must be an int in {lo}..{hi}")
+    if not isinstance(r["verified"], bool):
+        raise ValueError(f"{r['id']}: verified must be true or false")
+    _text(r["source"], f"{r['id']}: source")
+    if "verify" in r:
+        patchverify.compile_hint(r["verify"], f"{r['id']}.verify")
+    return r["id"]
+
+
+def validate_level_rows(doc):
+    """Check the plan 087 `level_bonus` / `level_gap_dr` lists, or ValueError."""
+    ids = []
+    for key, fields, ints in (("level_bonus", LEVEL_BONUS_FIELDS, LEVEL_BONUS_INTS),
+                              ("level_gap_dr", LEVEL_GAP_FIELDS, LEVEL_GAP_INTS)):
+        rows = doc.get(key, [])
+        if not isinstance(rows, list) or len(rows) > MAX_ROWS:
+            raise ValueError(f"{key} must be a list of at most {MAX_ROWS} rows")
+        ids += [_level_row(r, fields, ints) for r in rows]
+    if len(ids) != len(set(ids)):
+        raise ValueError("level row ids must be unique")
+
+
 def load_tracked(path=DATA_FILE):
     """The tracked tables; ValueError on a missing or malformed file."""
     try:
         doc = json.loads(Path(path).read_text(encoding="ascii"))
     except (OSError, ValueError) as e:
         raise ValueError(f"bracket table: {e}"[:200]) from e
-    if not isinstance(doc, dict) or set(doc) != set(TABLES):
+    if not isinstance(doc, dict) or not set(TABLES) <= set(doc) <= set(TABLES) | set(LEVEL_KEYS):
         raise ValueError(f"bracket table must hold {', '.join(TABLES)}")
+    validate_level_rows(doc)
     return {name: validate_table(doc[name]) for name in TABLES}
 
 

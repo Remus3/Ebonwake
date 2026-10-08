@@ -61,3 +61,91 @@ research only, never fetched by EW at runtime. EW never edits tracked data
 on its own.
 
 Depends on: 085.
+
+## As-built deviations (build lane, self-adjudicated 2026-10-08)
+
+1. Fixture is `tests/fixtures/notices/patch-20261008-asia.html`, not `.txt`.
+   Decision: the real U+2192 / U+2019 / U+2013 / U+00A0 glyphs are written as
+   numeric character references and reach the test through
+   `eventnotices._lines` (the production page parser), which decodes them.
+   Alternatives: a raw UTF-8 `.txt` (breaks the ASCII-only rule and
+   `tests/test_ascii_lf.py`); `\u` escapes decoded by the test. Why: FLEET
+   item 8 is absolute, and the HTML path is the one real pages take. A test
+   asserts the decoded text holds the real glyphs. Reverses if: the ASCII rule
+   gains a fixture exemption.
+2. The 14 official bands live in a sibling key `kill_xp_cap_official` on the
+   epoch row, not inside `kill_xp_cap`. Decision: `levels.kill_cap_note` reads
+   `kill_xp_cap` first-match, so mixing the lists would change the shown cap
+   note for Lv 6-49 and 62-64 today; the plan says the new rows are read by
+   nothing else. `validate_epoch` validates the official list (ids, rising
+   bands, `cap_pct`, source, hint compiled) and copies neither it nor any
+   hint key into the epoch view (`kill_xp_cap` rows still surface only
+   `level_min / level_max / note`). The 4 old rows gained `id` (`cap-<lo>-<hi>`),
+   `verified: false`, a `verify` hint and `superseded_by` (ids in the official
+   list, checked). Hinted rows are keyed `xp_epochs.json#band-<lo>-<hi>` and
+   `#cap-<lo>-<hi>`. Alternatives: one list with a `kind` flag. Why: zero
+   behaviour change until a data pass adopts a confirmed band. Reverses if: a
+   data pass folds the confirmed table into `kill_xp_cap`.
+3. Old 62-75 row: contradicted by any `62 - 64 ... <n> %` (the split itself
+   proves the row wrong) or a `62 - 75` band with a value other than 0.01 %.
+   The other 3 old rows carry the same hint as their official twin, so they
+   come out `confirmed` with the fixture.
+4. `brackets.json` gains two top-level lists `level_bonus` (6 rows
+   `lv-bonus-70..75`, `ap_vs_monsters` = `monster_dr` = 3 x (lv - 69)) and
+   `level_gap_dr` (1 row, `dr_per_level` 3, `max_levels` 3), validated by
+   `brackets.validate_level_rows` inside `load_tracked` (which still returns
+   only the 3 bracket tables). The 6 level rows share one hint: the per-level
+   rule tied to "each / per level" plus the printed total sequence
+   `(3 / 6 / 9 / 12 / 15 / 18)` built from the stored totals (a test pins
+   that), and the level rows are title-gated to the 2026-10-08 notes like the
+   epoch (verifier round 1: an item line "+5 Extra AP Against Monsters" in a
+   later patch must not contradict them). Reverses if: the NA notes print a
+   per-level table, or a later patch changes the rule (re-hint then).
+5. `pearl-outfit-set` also gained an alias (`Pearl Outfit`) and `{name}`:
+   the official text writes "Pearl Outfit 4-part set effect", which the
+   085 `Pearl Outfit set` hint missed; the plan requires the three presets
+   to confirm. Its hint now needs `Combat EXP` between the name and the
+   value (round 1: "Pearl Outfit sale ... up to 30%" contradicted it). The
+   epoch contradict `maximum (?:character )?level` became
+   `max(?:imum)? character level` (the official text says "max character
+   level"; round 1: "max level of the Season Pass to 60" must not match);
+   the epoch expect already accepts `level: 70 -> 75` once folded, so it is
+   unchanged.
+6. `check` also folds the notice title; `load()` validates the fold table
+   (cached per path) so a broken table is a `dataverdicts` error, not a crash.
+   Aliases: max 4, each 1..60 printable ASCII; the row name joins the
+   alternation only when it is printable ASCII; `{name}` with neither name
+   nor alias is a load error. `xp_buffs.json` was re-laid one row per line
+   (values unchanged).
+7. Band hints use a digit-safe boundary `(?<![0-9])(?<![0-9]\.)` on both the
+   band and the value (so `0.25 %` never reads as `0.2 %`, `Lv. 41` never as
+   band 1) and a gap `[^\n%]{0,30}?` that stops at the first `%`, so a
+   one-line list `1-5 20 %, 6-10 18 %` checks each band against its own
+   value. Book hints guard `Large` with `(?<!Extra )`, and a value followed
+   by `at / for Lv <n>` with n != 66 is not the row's value (the rows hold
+   the Lv 66 figure; round 1); a book gap never crosses `Lv` (round 2: "Small
+   at Lv. 61: 0.5%" stays silent). Round 2: band and book hints read
+   `old -> new` (`->` / `=>` / `to`): an optional old value plus arrow may
+   precede the checked value, and a value followed by an arrow is never the
+   checked one, so "0.2% -> 0.5%" contradicts the 0.2 % row instead of
+   confirming it.
+9. `patchverify.MAX_PATTERN` 200 -> 300. Decision: the round-2 band hints
+   (digit-safe boundaries + old-value prefix + arrow guard; the 65+ band
+   spells its open end) run to ~235 chars. Alternatives: split a hint across
+   several expect patterns (all must match, so it cannot express an
+   alternative), drop the digit guards (reopens round-1 / round-2 false
+   verdicts). Why: the cap only bounds tracked, reviewed data. Reverses if: a
+   generic hint builder replaces hand-written patterns.
+10. `fold` also collapses runs of spaces / tabs to one space (line breaks
+    kept): round 3 showed an NBSP before an arrow folding to a second space,
+    which the one-space hint guards let through as a false confirm of the
+    old value. Regression cases in
+    `test_refute_r2_old_values_and_level_keyed_books`. Verifier:
+    refute-rounds 3/3. Adjudicator: accept with the round-3 fix, no round 4
+    (alternatives: leave WIP unmerged in `adjudicate`; round 4 forbidden by
+    order 7); why: the one round-3 defect is fixed at the root with a
+    regression test and plan 085 deviation 9 is the precedent. Reverses if:
+    another whitespace form is shown to split a hint (file a ROADMAP row).
+8. Fold table also maps U+FF5E / U+301C (fullwidth tilde, wave dash) to
+   `~` so a band written `1 ~ 5` in those glyphs still matches (round 1).
+   Reverses if: never; the table is data and only grows.

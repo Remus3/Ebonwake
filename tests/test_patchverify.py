@@ -463,3 +463,299 @@ def test_api_acceptance(srv, tmp_path):
                                     "url": eventnotices.detail_url(PATCH_NO)}
     assert (tmp_path / "data_verdicts.json").is_file()
     assert _digest(DATA) == before
+
+
+# --- plan 087: Unicode fold, name aliases, hints for the official numbers ------------------
+
+ASIA = "patch-20261008-asia.html"
+OLD_BAND = "xp_epochs.json#cap-62-75"
+BANDS = [(1, 5), (6, 10), (11, 15), (16, 20), (21, 25), (26, 30), (31, 35), (36, 40), (41, 47),
+         (48, 49), (50, 55), (56, 61), (62, 64), (65, 75)]
+NEW_BANDS = [f"xp_epochs.json#band-{lo}-{hi}" for lo, hi in BANDS]
+BOOKS = [f"xp_books.json#{s}" for s in ("small", "medium", "large", "xl")]
+PRESETS = [f"xp_buffs.json#{r}" for r in ("body-enhancement", "adventure-blessing",
+                                          "pearl-outfit-set")]
+LEVEL_ROWS = [f"brackets.json#lv-bonus-{lv}" for lv in range(70, 76)] + [
+    "brackets.json#level-gap-dr"]
+
+
+def _asia():
+    raw = (FIX / ASIA).read_text(encoding="ascii")
+    return "\n".join(eventnotices._lines(raw))
+
+
+def test_asia_fixture_holds_the_real_glyphs():
+    t = _asia()
+    for cp in (0x2192, 0x2019, 0x2013, 0x00A0):
+        assert chr(cp) in t or cp == 0x00A0  # the line parser may turn NBSP into a space
+    assert "Adventure" + chr(0x2019) + "s Boon" in t
+
+
+def test_fold_maps_the_table_and_blanks_other_non_ascii():
+    f = patchverify.fold
+    assert f("70 " + chr(0x2192) + " 75") == "70 -> 75"
+    for cp in (0x21D2, 0x2794, 0x25BA, 0x27A1):
+        assert f(chr(cp)) == "->"
+    assert f(chr(0x2013) + chr(0x2014) + chr(0x2212)) == "---"
+    assert f("a" + chr(0xA0) + chr(0x2009) + chr(0x202F) + "b") == "a b", "space runs collapse"
+    assert f(chr(0x2018) + chr(0x2019) + chr(0x201C) + chr(0x201D)) == "''\"\""
+    assert f("5" + chr(0xFF05) + " 2" + chr(0xD7)) == "5% 2x"
+    assert f("caf" + chr(0xE9) + chr(0x1F600) + "!") == "caf !"
+    plain = "Body Enhancement: 50% to 100%.\nnext"
+    assert f(plain) == plain, "ASCII text is matched exactly as before"
+    assert f("a  \t b\n\nc") == "a b\n\nc", "line breaks stay"
+
+
+def test_old_fixture_is_ascii_so_085_matching_is_unchanged():
+    assert patchverify.fold(_text()) == _text()
+
+
+def test_asia_fixture_confirms_epoch_presets_bands_books():
+    res = patchverify.check(_asia(), TITLE, patchverify.load()["hinted"])
+    for k in [EPOCH] + PRESETS + NEW_BANDS + BOOKS + LEVEL_ROWS:
+        assert res[k]["verdict"] == "confirmed", (k, res[k])
+    assert "level: 70 -> 75" in res[EPOCH]["evidence"]
+    assert res[BLESS]["evidence"] == "Adventure's Boon: Combat EXP 15% -> 30%"
+    assert res[OLD_BAND] == {"verdict": "contradicted", "evidence": "Lv. 62 - 64: 0.02%"}
+    assert [k for k, v in res.items() if v["verdict"] == "contradicted"] == [OLD_BAND]
+    for k in ("xp_epochs.json#cap-1-5", "xp_epochs.json#cap-50-55", "xp_epochs.json#cap-56-61"):
+        assert res[k]["verdict"] == "confirmed", k
+    for k, v in res.items():
+        assert all(32 <= ord(c) < 127 for c in v["evidence"] or "")
+
+
+def test_unfolded_asia_text_would_stay_silent():
+    """The plan 087 gap: without the fold the arrow and apostrophe never match."""
+    hinted = patchverify.load()["hinted"]
+    raw = _asia()
+    r = patchverify._check_folded(raw, hinted[EPOCH]["hint"])
+    assert r["verdict"] == "silent"
+    assert patchverify._check_folded(raw, hinted[BLESS]["hint"])["verdict"] == "silent"
+
+
+def test_band_hints_never_borrow_a_neighbour():
+    hinted = patchverify.load()["hinted"]
+    text = ("Lv. 41 - 47: 5%\nLv. 56 - 61: 0.25%\nLv. 62 or higher: 0.01%\n"
+            "Lv. 1 - 5 20 %, 6 - 10 17 %")
+    res = patchverify.check(text, TITLE, hinted)
+    assert res["xp_epochs.json#band-1-5"]["verdict"] == "confirmed"
+    assert res["xp_epochs.json#band-6-10"]["verdict"] == "contradicted"
+    assert res["xp_epochs.json#band-56-61"]["verdict"] == "contradicted", "0.25 is not 0.2"
+    assert res["xp_epochs.json#band-41-47"]["verdict"] == "confirmed"
+    for k in ("xp_epochs.json#band-11-15", "xp_epochs.json#band-65-75", OLD_BAND):
+        assert res[k]["verdict"] == "silent", k
+    books = patchverify.check("Combat Secret Book (Extra Large): 15%", TITLE, hinted)
+    assert books["xp_books.json#xl"]["verdict"] == "confirmed"
+    assert books["xp_books.json#large"]["verdict"] == "silent", "Extra Large is not Large"
+
+
+def test_refute_r1_no_false_verdicts_from_neighbouring_text():
+    hinted = patchverify.load()["hinted"]
+    lv = [k for k in LEVEL_ROWS if "lv-bonus" in k]
+    item = ("New accessory: +5 Extra AP Against Monsters, +3 Extra AP Against Monsters "
+            "and +3 Monster Damage Reduction.")
+    res = patchverify.check(item, TITLE, hinted)
+    assert {res[k]["verdict"] for k in lv} == {"silent"}, "an item line is not the level rule"
+    wrong = "From Lv. 70, each level grants +4 Extra AP Against Monsters."
+    assert {patchverify.check(wrong, TITLE, hinted)[k]["verdict"] for k in lv} == {"contradicted"}
+    assert lv[0] not in patchverify.check(wrong, "[Updates] Patch Notes - October 15, 2026", hinted)
+    raw = json.loads((DATA / "brackets.json").read_text(encoding="ascii"))["level_bonus"]
+    seq = " ?/ ?".join(str(r["ap_vs_monsters"]) for r in raw)
+    assert all(r["verify"]["expect"][1] == "\\(" + seq + "\\)" for r in raw), \
+        "the totals in the hint are the stored totals"
+    shop = "Pearl Outfit sale: discounts of up to 30%."
+    assert patchverify.check(shop, TITLE, hinted)["xp_buffs.json#pearl-outfit-set"]["verdict"] \
+        == "silent"
+    book = "Combat Secret Book (Small): 0.5% at Lv. 61, 0.2% at Lv. 66"
+    assert patchverify.check(book, TITLE, hinted)["xp_books.json#small"]["verdict"] == "silent"
+    assert patchverify.check("Combat Secret Book (Small): 0.5% at Lv. 66", TITLE, hinted)[
+        "xp_books.json#small"]["verdict"] == "contradicted"
+    season = "Increased the max level of the Season Pass to 60."
+    assert patchverify.check(season, TITLE, hinted)[EPOCH]["verdict"] == "silent"
+    wave = "Lv. 1 " + chr(0xFF5E) + " 5: 20%"
+    assert patchverify.check(wave, TITLE, hinted)["xp_epochs.json#band-1-5"]["verdict"] == "confirmed"
+
+
+@pytest.mark.parametrize("line, key, verdict", [
+    # refute r2 #1: the value before an arrow is the old value
+    ("Combat Secret Book (Small): 0.2% " + chr(0x2192) + " 0.5%", "xp_books.json#small", "contradicted"),
+    ("Combat Secret Book (Small): 0.5% -> 0.2%", "xp_books.json#small", "confirmed"),
+    ("Lv. 56 ~ 61: 0.2% -> 0.5%", "xp_epochs.json#band-56-61", "contradicted"),
+    ("Lv. 56 - 61: 0.5% to 0.2%", "xp_epochs.json#band-56-61", "confirmed"),
+    ("Lv. 56 - 61: 0.5% to 0.2%", "xp_epochs.json#cap-56-61", "confirmed"),
+    ("Lv. 62 - 75: 0.01% -> 0.02%", OLD_BAND, "contradicted"),
+    # refute r2 #2: a level named before the value is not the Lv 66 row
+    ("Combat Secret Book (Small) at Lv. 61: 0.5%", "xp_books.json#small", "silent"),
+    ("Combat Secret Book (Medium): 1%", "xp_books.json#medium", "confirmed"),
+    # refute r3: an NBSP before the arrow folds to a second space, collapsed
+    ("Lv. 56 - 61: 0.2% " + chr(0xA0) + chr(0x2192) + " 0.5%", "xp_epochs.json#band-56-61",
+     "contradicted"),
+    ("Combat Secret Book (Small): 0.5%  -> 0.2%", "xp_books.json#small", "confirmed"),
+])
+def test_refute_r2_old_values_and_level_keyed_books(line, key, verdict):
+    res = patchverify.check(line, TITLE, patchverify.load()["hinted"])
+    assert res[key]["verdict"] == verdict
+
+
+@pytest.mark.parametrize("doc, msg", [
+    ({"fold": {"2192": "->"}}, "U\\+XXXX"),
+    ({"fold": {"U+2192": chr(0x2192)}}, "printable ASCII"),
+    ({"fold": {"U+2192": ""}}, "printable ASCII"),
+    ({"fold": {"U+0041": "a"}}, "non-ASCII"),
+    ({"fold": {"u+2192": "->"}}, "U\\+XXXX"),
+    ({"fold": {}}, "fold table"),
+    ([], "fold table"),
+])
+def test_bad_fold_table_rejected(doc, msg):
+    with pytest.raises(ValueError, match=msg):
+        patchverify.validate_fold(doc)
+
+
+def test_fold_table_loads_once_and_unreadable_is_an_error(tmp_path):
+    t = patchverify.load_fold()
+    assert t[0x2192] == "->" and patchverify.load_fold() is t
+    p = tmp_path / "f.json"
+    p.write_text('{"fold": {"U+2192": "=>"}}', encoding="ascii")
+    assert patchverify.load_fold(p) == {0x2192: "=>"}
+    with pytest.raises(ValueError, match="unreadable"):
+        patchverify.load_fold(tmp_path / "missing.json")
+
+
+def test_name_token_expands_name_and_aliases():
+    h = patchverify.compile_hint({"title": "x", "expect": ["{name} up"]}, name="Foo")
+    assert h["expect"][0].pattern == "(?:Foo) up"
+    h = patchverify.compile_hint({"title": "x", "expect": ["{name}: 30%"],
+                                  "aliases": ["Adventure's Boon", "A.B"]}, name="Adventure Blessing")
+    rx = h["expect"][0]
+    assert rx.pattern == "(?:Adventure\\ Blessing|Adventure's\\ Boon|A\\.B): 30%"
+    assert rx.search("adventure's boon: 30%") and not rx.search("AxB: 30%")
+    plain = patchverify.compile_hint({"title": "x", "expect": ["Foo"], "aliases": ["Bar"]},
+                                     name="Foo")
+    assert plain["expect"][0].pattern == "Foo", "no {name}: compiled unchanged"
+
+
+@pytest.mark.parametrize("hint, name, msg", [
+    ({"title": "x", "expect": ["{name}"]}, None, "needs a row name"),
+    ({"title": "x", "expect": ["a"], "aliases": ["a"] * 5}, "n", "at most 4"),
+    ({"title": "x", "expect": ["a"], "aliases": ["caf" + chr(0xE9)]}, "n", "printable ASCII"),
+    ({"title": "x", "expect": ["a"], "aliases": "a"}, "n", "at most 4"),
+    ({"title": "x", "expect": ["a"], "aliases": [" "]}, "n", "printable ASCII"),
+])
+def test_bad_alias_rejected(hint, name, msg):
+    with pytest.raises(ValueError, match=msg):
+        patchverify.compile_hint(hint, name=name)
+
+
+def test_new_rows_load_and_their_loaders_compile_hints():
+    from server.ew import brackets, xpbooks
+    res = patchverify.load()
+    assert set(NEW_BANDS + BOOKS + LEVEL_ROWS + [OLD_BAND]) <= set(res["hinted"])
+    eps = levels.load_epochs()
+    ep = next(e for e in eps if e["id"] == "cap75-xp-rescale")
+    assert "kill_xp_cap_official" not in ep, "the official bands are read by nothing yet"
+    assert [set(c) for c in ep["kill_xp_cap"]] == [set(levels.CAP_FIELDS)] * 4
+    assert levels.kill_cap_note(ep, 63) == "per-kill XP cap ~0.01% of the level (buffs included), verify"
+    assert levels.kill_cap_note(ep, 30) is None
+    assert set(brackets.load_tracked()) == set(brackets.TABLES)
+    books = xpbooks.load_books()
+    assert set(books["sizes"]["small"]) == set(xpbooks.SIZE_FIELDS)
+    raw = json.loads((DATA / "brackets.json").read_text(encoding="ascii"))
+    assert [r["ap_vs_monsters"] for r in raw["level_bonus"]] == [3, 6, 9, 12, 15, 18]
+    assert raw["level_gap_dr"][0]["dr_per_level"] * raw["level_gap_dr"][0]["max_levels"] == 9
+
+
+def _epoch_row():
+    return json.loads((DATA / "xp_epochs.json").read_text(encoding="ascii"))[0]
+
+
+def test_loaders_reject_bad_hints_on_new_rows():
+    from server.ew import brackets, xpbooks
+    bad = {"title": "x", "expect": ["(unclosed"]}
+    row = _epoch_row()
+    row["kill_xp_cap_official"][0]["verify"] = bad
+    with pytest.raises(ValueError, match="bad regex"):
+        levels.validate_epoch(row, tracked=True)
+    row = _epoch_row()
+    row["kill_xp_cap"][3]["verify"] = bad
+    with pytest.raises(ValueError, match="bad regex"):
+        levels.validate_epoch(row, tracked=True)
+    row = _epoch_row()
+    row["kill_xp_cap"][3]["superseded_by"] = ["band-nope"]
+    with pytest.raises(ValueError, match="superseded_by"):
+        levels.validate_epoch(row, tracked=True)
+    row = _epoch_row()
+    row["kill_xp_cap_official"][1]["level_min"] = 1
+    with pytest.raises(ValueError, match="rising"):
+        levels.validate_epoch(row, tracked=True)
+    with pytest.raises(ValueError):
+        levels.validate_epoch({k: v for k, v in _epoch_row().items() if k != "kill_xp_cap"})
+    doc = json.loads((DATA / "brackets.json").read_text(encoding="ascii"))
+    doc["level_bonus"][0]["verify"] = bad
+    with pytest.raises(ValueError, match="bad regex"):
+        brackets.validate_level_rows(doc)
+    doc["level_bonus"][0].pop("verify")
+    doc["level_bonus"][1]["id"] = doc["level_bonus"][0]["id"]
+    with pytest.raises(ValueError, match="unique"):
+        brackets.validate_level_rows(doc)
+    books = json.loads((DATA / "xp_books.json").read_text(encoding="ascii"))
+    books["sizes"][0]["verify"] = bad
+    with pytest.raises(ValueError, match="bad regex"):
+        xpbooks.validate_books(books)
+
+
+def test_asia_verdicts_digest_and_loop_item(tmp_path):
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    import ew_loop
+    before = _digest(DATA)
+    path = tmp_path.joinpath(*ew_loop.VERDICTS_REL)
+    path.parent.mkdir(parents=True)
+    svc = dataverdicts.VerdictService(lambda: [_note(text=_asia())], path=path)
+    v = svc.view()["verdicts"]
+    for k in [EPOCH] + PRESETS + NEW_BANDS + BOOKS:
+        assert v[k]["verdict"] == "confirmed", k
+    assert v[OLD_BAND]["verdict"] == "contradicted"
+    r = _row(svc.signal())
+    assert r["level"] == "warn"
+    assert r["detail"] == "1 data row contradicted by patch notes 2026-10-08 - see System"
+    assert r["lines"] == [OLD_BAND + ": Lv. 62 - 64: 0.02%"]
+    items = ew_loop.data_items(tmp_path)
+    assert len(items) == 1 and OLD_BAND in items[0]["text"]
+    assert _digest(DATA) == before
+
+
+@pytest.fixture()
+def srv_asia(tmp_path):
+    cache = tmp_path / "cache"
+    net = Net()
+    net.page = (FIX / ASIA).read_bytes()
+    client = eventnotices.NoticeClient(fetch=net, clock=lambda: T0, cache_dir=cache)
+    client._download()
+
+    def no_net(url, timeout):
+        raise AssertionError("test touched the network")
+    client.fetch = no_net
+    s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
+                          sse_interval=0.05, market_seed=[], profile_cfg={},
+                          market_client=market.ArshaClient(fetch=no_net,
+                                                           cache_dir=tmp_path / "mcache"),
+                          leveling_clock=lambda: T0, config_path=tmp_path / "local.json",
+                          notice_client=client, notice_spawn=lambda fn: None)
+    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t.start()
+    yield s
+    s.shutdown()
+    s.server_close()
+
+
+def test_api_acceptance_asia(srv_asia, tmp_path):
+    before = _digest(DATA)
+    st, v = _get(srv_asia, "/api/data/verdicts")
+    assert st == 200
+    for k in [EPOCH] + PRESETS + NEW_BANDS + BOOKS:
+        assert v["verdicts"][k]["verdict"] == "confirmed", k
+    assert v["verdicts"][OLD_BAND]["verdict"] == "contradicted"
+    st, sig = _get(srv_asia, "/api/signals")
+    row = next(r for r in sig["rows"] if r["id"] == "data")
+    assert row["level"] == "warn" and len(row["lines"]) == 1
+    assert _digest(DATA) == before
