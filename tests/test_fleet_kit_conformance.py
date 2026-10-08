@@ -1,4 +1,4 @@
-"""Fleet kit v8 is vendored byte-for-byte and the CLAUDE.md FLEET-COMMON block is
+"""Fleet kit v9 is vendored byte-for-byte and the CLAUDE.md FLEET-COMMON block is
 byte-identical. Never edit the kit locally; MAIN ships new versions."""
 
 import hashlib
@@ -22,16 +22,60 @@ def test_fleet_kit_conformance():
     assert _load().conformance(ROOT) == []
 
 
-def test_kit_is_v8_with_all_files():
+def test_kit_is_v9_with_all_files():
     import json
     man = json.loads((ROOT / "ops" / "fleet_kit" / "MANIFEST.json").read_text("ascii"))
-    assert man["version"] == 8
-    assert _load().KIT_VERSION == 8
-    assert {"fleet_checklist.py", "fleet_headless.py", "fleet_inbox.py", "fleet_lanes.py",
-            "fleet_secrets.py", "fleet_watch.py", "tokens.css", "tokens.json",
+    assert man["version"] == 9
+    assert _load().KIT_VERSION == 9
+    assert {"cli_display.json", "fleet_checklist.py", "fleet_done.py", "fleet_headless.py",
+            "fleet_inbox.py", "fleet_lanes.py", "fleet_secrets.py", "fleet_statusline.js",
+            "fleet_subagent_status.js", "fleet_watch.py", "tokens.css", "tokens.json",
             "FLEET-COMMON.md", "LICENSE", "NOTICE"} == set(man["files"])
     on_disk = {p.name for p in (ROOT / "ops" / "fleet_kit").iterdir() if p.is_file()}
     assert on_disk == set(man["files"]) | {"MANIFEST.json"}
+
+
+def _settings_files():
+    return sorted((ROOT / ".claude").glob("settings*.json"))
+
+
+def _keys(node):
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield k
+            yield from _keys(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _keys(v)
+
+
+def test_no_tree_level_display_keys():
+    """Kit v9 item 15: display keys live only in the account settings."""
+    import json
+    forbidden = set(json.loads((ROOT / "ops" / "fleet_kit" / "cli_display.json")
+                               .read_text("ascii"))["tree_forbidden"])
+    for f in _settings_files():
+        found = forbidden & set(_keys(json.loads(f.read_text("utf-8"))))
+        assert not found, f"{f.name}: {sorted(found)}"
+
+
+def test_stop_hook_runs_kit_done_with_relative_path():
+    import json
+    doc = json.loads((ROOT / ".claude" / "settings.json").read_text("ascii"))
+    cmds = [h["command"] for g in doc["hooks"]["Stop"] for h in g["hooks"]]
+    assert "python ops/fleet_kit/fleet_done.py stop-hook" in cmds
+    assert all(":" not in c for c in cmds)  # no drive path
+
+
+def test_done_ritual_last_act_is_the_marker():
+    text = (ROOT / ".claude" / "commands" / "done.md").read_text("ascii")
+    mark = "python ops/fleet_kit/fleet_done.py mark --session <n> --status done"
+    assert mark in text
+    assert '--status failed --reason "<step>"' in text
+    tail = text[text.index(mark):]
+    assert "Done ritual complete, safe to clear" in tail
+    # nothing but the chat line and safety rails follows the marker step
+    assert "### 8." in text[:text.index(mark)] and "git push" not in tail
 
 
 def test_shared_slots_governor_is_byte_identical():

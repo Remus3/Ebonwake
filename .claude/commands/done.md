@@ -107,9 +107,21 @@ Overwrite the whole file, read it back (the read-back is the recorded act),
 commit it, push it (same batch if CI has not started, else one more small push
 is acceptable for the hand-off only).
 
-### 8. Final output - ONE line
+### 8. Done marker, then the final output - ONE line
 
-`Done ritual complete, safe to clear` - or `/done stopped: <reason>`. Nothing else.
+The LAST act of /done (kit v9, FLEET-COMMON item 15), after the commit and the
+hand-off are READ BACK and immediately before the chat line:
+
+    python ops/fleet_kit/fleet_done.py mark --session <n> --status done
+
+`<n>` is the `SESSION:` number this session worked under (the hand-off now
+carries n+1). Any step that stops /done still calls it, as its last act:
+
+    python ops/fleet_kit/fleet_done.py mark --session <n> --status failed --reason "<step>"
+
+Then print `Done ritual complete, safe to clear` - or `/done stopped: <reason>`.
+Nothing else. The project Stop hook (`fleet_done.py stop-hook`) turns the
+marker into the tab title; never run it by hand.
 
 ### Safety rails
 

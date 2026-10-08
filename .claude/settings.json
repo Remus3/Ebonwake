@@ -41,7 +41,17 @@
      }
     ]
    }
+  ],
+  "Stop": [
+   {
+    "hooks": [
+     {
+      "type": "command",
+      "command": "python ops/fleet_kit/fleet_done.py stop-hook",
+      "timeout": 10
+     }
+    ]
+   }
   ]
- },
- "spinnerTipsEnabled": false
+ }
 }
