@@ -225,3 +225,13 @@ responder task existed, none disabled.
 ## Order Nfa7953 - blocked items
 
 - Section 4 Scorecard before/after: BLOCKED - needs the scorecard v5.5.0 Linux binary downloaded into WSL (operator-approved download).
+
+## Order Na22de8 - blocked items
+
+Done in-lane: C: path inventory (inventory only, nothing changed) in
+`docs/research/0014-c-drive-path-inventory-2026-10-07.md`; the loop writes
+the ONE ANSWER (HOP 2) from it after merge.
+
+- Live read-back of tasks `\EbonwakeOps\LaneLoop` and `\Ebonwake`: BLOCKED - schtasks / `tools/loop_task.py status` outside this lane's allow list; rows inferred from the installer code.
+- Desktop shortcuts and EW env variable values: BLOCKED - Desktop folder and Env: provider outside this lane's allow list; rows inferred from code.
+- Main checkout `config/local.json` and `.git/worktrees/*/gitdir`: BLOCKED - main checkout outside this lane's read grant; worktree copy read instead.
