@@ -120,6 +120,10 @@
     ui.epoch.hidden = !ui.epoch.textContent;
     ui.cap.textContent = d.kill_xp_cap ? 'Lv ' + d.level + ': ' + d.kill_xp_cap : '';
     ui.cap.hidden = !d.kill_xp_cap;
+    // Plan 088: the grind session's zone already gives the per-kill cap unbuffed.
+    ui.zcap.textContent = C.zoneCapText(d.zone_cap);
+    ui.zcap.title = d.zone_cap ? d.zone_cap.zone_name + (d.zone_cap.source ? ' - ' + d.zone_cap.source : '') : '';
+    ui.zcap.hidden = !ui.zcap.textContent;
     // Plan 060: Combat Secret Books line + a second ETA (grind + weekly books).
     const bk = d.books;
     ui.books.textContent = bk ? C.booksLine(bk) + (bk.available && C.booksToNextText(bk) ? ' - ' + C.booksToNextText(bk) : '') : '';
@@ -519,6 +523,9 @@
     ui.cap = el('div', 'ew-muted ew-lnote', '');
     ui.cap.hidden = true;
     body.appendChild(ui.cap);
+    ui.zcap = el('div', 'ew-muted ew-lnote', '');
+    ui.zcap.hidden = true;
+    body.appendChild(ui.zcap);
     ui.books = el('div', 'ew-muted ew-lnote', '');
     ui.books.hidden = true;
     body.appendChild(ui.books);

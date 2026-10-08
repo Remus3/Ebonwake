@@ -19,6 +19,7 @@ countdown so the result only changes when the actions do; clients count
 
 import datetime as _dt
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -202,13 +203,34 @@ def from_today(view, now):
     return out
 
 
+XP_BUFF_NAME = re.compile(r"\b(?:xp|exp|experience|combat|hot\s*time)\b", re.IGNORECASE)
+
+
+def _xp_buff(b, presets=()):
+    """A grind buff that adds combat XP: it carries an xp_pct > 0, its name says
+    so (the seeded "XP scroll" / "Hot Time" have no xp_pct until typed), or it
+    is named like a plan 018 XP preset."""
+    b = _dict(b)
+    if _num(b.get("xp_pct")) and b["xp_pct"] > 0:
+        return True
+    name = b.get("name")
+    return isinstance(name, str) and (XP_BUFF_NAME.search(name) is not None
+                                      or name.strip().lower() in presets)
+
+
 def from_grind(view, now):
-    """Plan 005: an armed buff running out while a grind session is open."""
+    """Plan 005: an armed buff running out while a grind session is open. Plan
+    088: never an XP buff while the session's zone is cap-bound (`zone_cap_bound`:
+    the unbuffed kill already reaches the per-kill cap, XP buffs add nothing)."""
     view = _dict(view)
     if not isinstance(view.get("active"), dict):
         return []
     out = []
+    presets = {p["name"].strip().lower() for p in _list(view.get("xp_presets"))
+               if isinstance(_dict(p).get("name"), str)}
     for b in _list(view.get("buffs")):
+        if view.get("zone_cap_bound") is True and _xp_buff(b, presets):
+            continue
         ends = _parse_iso(_dict(b).get("ends"))
         if ends is not None and ends > now and isinstance(b.get("name"), str):
             out.append(_cand("buff", f"Re-arm {b['name']}", "buff ends during your grind session",
@@ -217,8 +239,11 @@ def from_grind(view, now):
 
 
 def hot_time(view, now):
-    """Plan 011 / 064: a Hot Time window live now, due its end."""
+    """Plan 011 / 064: a Hot Time window live now, due its end. Plan 088: not
+    while the grind session's zone is cap-bound (the XP bonus adds nothing)."""
     out = []
+    if _dict(_dict(view).get("zone_cap")).get("cap_bound") is True:
+        return out
     for a in _list(_dict(_dict(view).get("hot")).get("active")):
         a = _dict(a)
         if not _num(a.get("ends_in_s")) or a["ends_in_s"] <= 0:

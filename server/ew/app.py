@@ -8,7 +8,7 @@ assets, browser fallback),
 adds its `suggested` coupon block; plan 075 its `login_days` block + `login_mark` POST),
 /api/deadeye (plan 007; /api/deadeye/enhance GET plan 035; /api/deadeye/shopping GET plan 037;
 /api/deadeye/calc GET plan 055), /api/game (plan 008), /api/leveling (plan 011),
-/api/spots (plan 012, GET only), /api/bosses (plan 031; plan 072 adds its `drift`
+/api/spots (plan 012, GET only), /api/zones/xp (plan 088, GET only), /api/bosses (plan 031; plan 072 adds its `drift`
 block), /api/settings (plan 030), /api/pets
 (plan 043), /api/inventory (plan 045), /api/mounts (plan 044), /api/summary (plan 046),
 /api/onboarding (plan 051), /api/crafting (plan 054), /api/imperial (plan 053),
@@ -50,7 +50,7 @@ from . import (__version__, autotick, autowatch, bossdrift, bosses, context, cou
                ports,
                playsession, portraits, progress, prompts, settings, shopping, signals, single,
                spots, summary,
-               today, weekly, whatnow, xpbooks)
+               today, weekly, whatnow, xpbooks, zoneinfo)
 from .store import Store
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -372,11 +372,18 @@ class EWServer(ThreadingHTTPServer):
         # fields commit (undoable), the rest wait in the System review card.
         # Plan 066: + level / XP % samples, AP / AAP / DP, book-use suggestions,
         # silver/h over the plan 062 play session.
+        # Plan 088: Monster Zone Info reads -> per-zone kill EXP, kills to level,
+        # the in-game recommended level on spot rows and the cap-bound buff line.
+        self.zones = zoneinfo.ZoneXpService(
+            self.store, self.spots.table, state=self.leveling.xp_state,
+            active_spot=self._grind_spot_name, clock=grind_clock or time.time)
+        self.spots.zones = self.zones.by_spot
+        self.leveling.zone_here = self.zones.here
         self.ocr_auto = ocrauto.AutoOcr(
             self.store, self.game, self.ocr, self.grind,
             settings=self.fixed_settings, clock=grind_clock or time.time,
             on_change=self._ocr_auto_changed, leveling=self.leveling, progress=self.progress,
-            play=self.play.view, loot_target=self.grind.loot_target)
+            play=self.play.view, loot_target=self.grind.loot_target, zones=self.zones)
         # Plan 081: the running session's OCR loot counts prefill the loot form.
         self.grind.ocr_loot = self.ocr_auto.loot_prefill
         if isinstance(listeners, list):
@@ -427,7 +434,9 @@ class EWServer(ThreadingHTTPServer):
         # Plan 069: next best action over the views above; never fetches (market
         # prices come from the cache only, coupons / notices from the store).
         self.whatnow = whatnow.WhatNowService({
-            "bosses": self.bosses.view, "today": self.today_view, "grind": self.grind.view,
+            "bosses": self.bosses.view, "today": self.today_view,
+            "grind": lambda: dict(self.grind.view(),
+                                  zone_cap_bound=self.zones.cap_bound_here()),  # plan 088
             "leveling": self.leveling.view, "maint": self._maint_inputs,
             "events": self.events.view, "maint_digest": self.maintdigest.view,
             "market": self._market_alerts,
@@ -453,6 +462,15 @@ class EWServer(ThreadingHTTPServer):
         if game_poll:  # off by default so tests never probe processes; main() turns it on
             self.game.start()
             self.ocr_auto.start()
+
+    def _grind_spot_name(self):
+        """Plan 088: name of the running grind session's spot, or None."""
+        v = self.grind.view()
+        act = v.get("active")
+        if not isinstance(act, dict):
+            return None
+        return next((s["name"] for s in v.get("spots", []) if s.get("id") == act.get("spot")),
+                    None)
 
     # -- plan 079 override ledger --------------------------------------------------
 
@@ -914,6 +932,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, self.server.spots.view(parse_qs(query)))
             except ValueError as e:
                 return self._send(400, {"error": str(e)})
+        if path == "/api/zones/xp":
+            return self._send(200, self.server.zones.view())
         if path == "/api/settings":
             return self._send(200, self.server.settings.view())
         if path == "/api/pets":
