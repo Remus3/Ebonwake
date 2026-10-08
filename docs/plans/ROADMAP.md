@@ -235,3 +235,21 @@ the ONE ANSWER (HOP 2) from it after merge.
 - Live read-back of tasks `\EbonwakeOps\LaneLoop` and `\Ebonwake`: BLOCKED - schtasks / `tools/loop_task.py status` outside this lane's allow list; rows inferred from the installer code.
 - Desktop shortcuts and EW env variable values: BLOCKED - Desktop folder and Env: provider outside this lane's allow list; rows inferred from code.
 - Main checkout `config/local.json` and `.git/worktrees/*/gitdir`: BLOCKED - main checkout outside this lane's read grant; worktree copy read instead.
+
+## Order N67971f - blocked items
+
+Plan: `docs/plans/087-fleet-kit-v9-done-marker.md` (As-built deviations 1-7).
+
+ORDER OPEN: acceptance is not met until the main session does items 1, 2, 3, 5
+and 6. Merging lane-0 does not close it.
+
+Done in-lane: `.gitignore` names `ops/loop/control/session_done.json` and
+`ops/loop/control/session_done.seen` explicitly (already covered by
+`ops/loop/control/*`). Lane-1 / lane-2 HEADs (44d1006, e1d71be) have no
+commits outside main (read with `git log main..<sha>`).
+
+- Item 1 vendor kit v9 + re-embed FLEET-COMMON item 15 in CLAUDE.md: BLOCKED - kit bundle sits in the main checkout inbox, outside this lane's read grant; lane brief also forbids editing CLAUDE.md and `ops/fleet_kit/`. Main session vendors all 16 files in one commit and re-pins `tests/test_fleet_kit_conformance.py` to v9.
+- Item 2 /done last act `fleet_done.py mark`: BLOCKED - `.claude/commands/done.md` outside this lane's write grant; also needs item 1 first.
+- Item 3 Stop hook + remove `spinnerTipsEnabled` from `.claude/settings.json`: BLOCKED - `.claude/` outside this lane's write grant; the Stop hook must wait for item 1 (a missing script exits non-zero on Stop).
+- Item 5 MIG-1 worktree prune (`git worktree list` = 4 before): BLOCKED - `git -C` status of lane-1/2, `git worktree remove/prune` and Recycle Bin moves outside this lane's allow list; lane-0 is held by this lane and stays. Lane-1/2 locks read FREE, HEADs contain nothing unmerged; uncommitted state unread.
+- Item 6 deliver the 2230 ANSWER to ORDER 2155: BLOCKED - outbox outside this lane's read grant; the loop carries it in the HOP 2 ANSWER.
