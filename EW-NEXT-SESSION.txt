@@ -36,11 +36,12 @@ loop_items/*.json; adjudicate anything in adjudicate / merge-conflict /
 gave-up / failed-dirty.
 
 Carried forward (not acted on yet):
-- FIX (priority): official notice list parses to 0 since the site moved
-  list links to /News/Notice/Detail (research 0016). Root-cause TDD per
-  0016 Fix steps 1-4 in server/ew/eventnotices.py (_ListParser,
-  group_no_of) and server/ew/coupons.py; then confirm /api/data/verdicts
-  marks cap75-xp-rescale confirmed from patch notes 10678 (plan 018 check).
+- FIX (priority): patch notes never reach patchverify: the live notice
+  list title is bare 'Patch Notes - October 8, 2026' (no '[Updates]'), so
+  PATCH_TITLE_RE misses it and 10678 gets no Detail GET (research 0016,
+  section 'Post-merge live check'). Root-cause TDD with the live markup in
+  0016: accept the bare title, give the newest patch notes a Detail slot
+  first; then confirm /api/data/verdicts marks cap75-xp-rescale confirmed.
 - NOTE (operator order 2026-10-06): ZERO-TOUCH. EW self-adjusts from
   the live game; no required toggles or typed entry (a changed setting
   gets forgotten and skews output). Every new plan follows research 0010

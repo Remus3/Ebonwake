@@ -83,3 +83,25 @@ System Revamp":
    Why: `coupons.extract` keeps only coupon-mentioning notices, so 0 is a
    normal result there. Reverses if: a coupon miss is traced to a link-shape
    change again.
+
+## Post-merge live check (session 17, 10:58 UTC) - second defect
+
+After 0341fca, a forced fetch read 72 notices, with 10678 first. But no
+patch-notes text was cached (`eventnotices_patchnotes.json` absent) and
+`/api/data/verdicts` still shows 0 verdicts. The 5 cached Details were
+10563 / 10580 / 10609 / 10646 / 10663.
+
+Cause: the live list carries the bare title. The anchor markup is
+`<a href="https://www.naeu.playblackdesert.com/News/Notice/Detail?groupContentNo=10678&countryType=en-US" name="btnDetail">`
+... `<span class="title line_clamp">Patch Notes - October 8, 2026</span>`.
+Only the Detail page `<title>` has the prefix,
+`[Updates] Patch Notes - October 8, 2026 | Black Desert NA/EU`.
+`patchverify.PATCH_TITLE_RE` (`^\[Updates\]\s*Patch Notes\b`) therefore never
+matches a list title. The lane's fixture invented a `[Updates]` prefix
+(deviation 1) and missed this. The list `stamp` is also None.
+
+Fix: accept the bare `Patch Notes - <date>` title (optional `[Updates]`
+prefix) for both `is_patch_title` and the hint `title` match. Make sure the
+newest patch-notes notice gets a Detail GET within MAX_DETAILS ahead of older
+event notices. Use a fixture with the live markup above (bare title). Live
+read-back: `/api/data/verdicts` shows `cap75-xp-rescale` confirmed from 10678.
