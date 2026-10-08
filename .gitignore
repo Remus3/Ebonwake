@@ -17,6 +17,9 @@ ops/loop/control/*
 # kit v9 /done marker (fleet_done.py); already covered above, named explicitly
 ops/loop/control/session_done.json
 ops/loop/control/session_done.seen
+# kit v10 subagent-first hook mode + decision log; covered above, named explicitly
+ops/loop/control/subagent_first.mode
+ops/loop/control/subagent_first.jsonl
 logs/
 *.log
 
