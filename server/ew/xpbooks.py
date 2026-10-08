@@ -22,6 +22,7 @@ import threading
 import time
 from pathlib import Path
 
+from . import patchverify
 from .leveling import _is_int, _norm_pct, _ok_pct, eta_next_s
 from .levels import LEVEL_RANGE
 from .today import _iso, _parse_iso
@@ -62,8 +63,10 @@ def _reward(v, what, allow_null):
 
 
 def _size_row(r):
-    if not isinstance(r, dict) or set(r) != set(SIZE_FIELDS):
-        raise ValueError(f"book sizes must have exactly {', '.join(SIZE_FIELDS)}")
+    if not isinstance(r, dict) or set(r) - {"verify"} != set(SIZE_FIELDS):
+        raise ValueError(f"book sizes must have exactly {', '.join(SIZE_FIELDS)} (+ optional verify)")
+    if "verify" in r:  # plan 087 patch-notes hint, checked here, not copied
+        patchverify.compile_hint(r["verify"], f"{r.get('id')}.verify", r.get("name"))
     if r["id"] not in SIZES:
         raise ValueError(f"size id must be one of {', '.join(SIZES)}")
     raw = r["pct_at"]

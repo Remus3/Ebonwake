@@ -150,7 +150,7 @@ def _check_drop_row(r):
     if "note" in r and not levels._ok_text(r["note"], MAX_DROP_TEXT):
         raise ValueError(f"{r['id']}: bad note")
     if "verify" in r:
-        patchverify.compile_hint(r["verify"], f"{r['id']}.verify")
+        patchverify.compile_hint(r["verify"], f"{r['id']}.verify", r.get("name"))
 
 
 def load_drop_data(path=DROPS_FILE):

@@ -31,6 +31,8 @@ DEADLINE_FIELDS = ("id", "label", "needs_level", "enrol_by_utc", "quests_by_utc"
                    "verified")
 DEADLINE_OPTIONAL = ("note",)
 CAP_FIELDS = ("level_min", "level_max", "note")
+CAP_OPTIONAL = ("id", "verified", "verify", "superseded_by")  # plan 087 hint keys
+OFFICIAL_CAP_FIELDS = ("id", "level_min", "level_max", "cap_pct", "note", "source", "verified")
 PRESET_FIELDS = ("id", "name", "xp_pct", "pre_patch_xp_pct", "notes", "source", "verified")
 ID_RE = re.compile(r"^[a-z0-9-]{1,40}$")
 DATE_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
@@ -62,7 +64,7 @@ def validate_epoch(row, tracked=False):
     """Normalised copy of one epoch row, or ValueError. A tracked row may also
     carry `kill_xp_cap` [{level_min, level_max, note}] and a plan 085 `verify`
     hint (checked here, not copied); an operator row may not."""
-    extra = {"kill_xp_cap", "verify"} if tracked else set()
+    extra = {"kill_xp_cap", "kill_xp_cap_official", "verify"} if tracked else set()
     if not isinstance(row, dict) or not set(EPOCH_FIELDS) <= set(row) <= set(EPOCH_FIELDS) | extra:
         raise ValueError(f"epoch must be {{{', '.join(EPOCH_FIELDS)}}}")
     if not isinstance(row["id"], str) or not ID_RE.match(row["id"]):
@@ -84,18 +86,58 @@ def validate_epoch(row, tracked=False):
            "source": row["source"].strip(), "verified": row["verified"]}
     if "verify" in row:
         patchverify.compile_hint(row["verify"], f"{row['id']}.verify")
+    official = _official_bands(row) if "kill_xp_cap_official" in row else {}
     if "kill_xp_cap" in row:
         caps = row["kill_xp_cap"]
         if not isinstance(caps, list) or len(caps) > MAX_CAPS:
             raise ValueError(f"{row['id']}: kill_xp_cap must be a list of at most {MAX_CAPS}")
         for c in caps:
-            if (not isinstance(c, dict) or set(c) != set(CAP_FIELDS)
-                    or not _ok_int(c["level_min"], *LEVEL_RANGE)
-                    or not _ok_int(c["level_max"], *LEVEL_RANGE)
-                    or c["level_min"] > c["level_max"] or not _ok_text(c["note"], MAX_TEXT)):
-                raise ValueError(f"{row['id']}: kill_xp_cap rows must be "
-                                 f"{{{', '.join(CAP_FIELDS)}}} with a level band in range")
-        out["kill_xp_cap"] = [dict(c) for c in caps]
+            _cap_row(row["id"], c, CAP_FIELDS, CAP_OPTIONAL)
+            if any(s not in official for s in c.get("superseded_by", [])):
+                raise ValueError(f"{row['id']}: superseded_by must name kill_xp_cap_official ids")
+        out["kill_xp_cap"] = [{k: c[k] for k in CAP_FIELDS} for c in caps]
+    return out
+
+
+def _cap_row(rid, c, fields, optional):
+    """Check one per-kill cap band; plan 087 hint keys (id, verified, verify,
+    superseded_by) are checked, never copied."""
+    if (not isinstance(c, dict) or not set(fields) <= set(c) <= set(fields) | set(optional)
+            or not _ok_int(c["level_min"], *LEVEL_RANGE)
+            or not _ok_int(c["level_max"], *LEVEL_RANGE)
+            or c["level_min"] > c["level_max"] or not _ok_text(c["note"], MAX_TEXT)):
+        raise ValueError(f"{rid}: kill_xp_cap rows must be "
+                         f"{{{', '.join(fields)}}} with a level band in range")
+    if "id" in c and not (isinstance(c["id"], str) and ID_RE.match(c["id"])):
+        raise ValueError(f"{rid}: kill_xp_cap row id must match ^[a-z0-9-]{{1,40}}$")
+    if "verified" in c and not isinstance(c["verified"], bool):
+        raise ValueError(f"{rid}: kill_xp_cap verified must be true or false")
+    if "verify" in c:
+        if "id" not in c or "verified" not in c:
+            raise ValueError(f"{rid}: a hinted kill_xp_cap row needs id and verified")
+        patchverify.compile_hint(c["verify"], f"{c['id']}.verify")
+    sup = c.get("superseded_by", [])
+    if not isinstance(sup, list) or len(sup) > MAX_CAPS or not all(isinstance(s, str) for s in sup):
+        raise ValueError(f"{rid}: superseded_by must be a list of band ids")
+
+
+def _official_bands(row):
+    """Plan 087: the official per-kill cap table seeded unverified next to
+    kill_xp_cap; validated (hints compiled) but read by nothing else yet.
+    Returns {id: band}."""
+    bands = row["kill_xp_cap_official"]
+    if not isinstance(bands, list) or not 0 < len(bands) <= MAX_CAPS:
+        raise ValueError(f"{row['id']}: kill_xp_cap_official must be a list of 1..{MAX_CAPS}")
+    out, last = {}, 0
+    for b in bands:
+        _cap_row(row["id"], b, OFFICIAL_CAP_FIELDS, ("verify",))
+        pct = b["cap_pct"]
+        if isinstance(pct, bool) or not isinstance(pct, (int, float)) or not 0 < pct <= 100:
+            raise ValueError(f"{row['id']}: cap_pct must be a number in (0, 100]")
+        if not _ok_text(b["source"], MAX_TEXT) or b["id"] in out or b["level_min"] <= last:
+            raise ValueError(f"{row['id']}: official bands need a source, unique ids, "
+                             "rising levels")
+        out[b["id"]], last = b, b["level_max"]
     return out
 
 
@@ -238,7 +280,7 @@ def validate_preset(row):
     if not isinstance(row, dict) or set(row) - {"verify"} != set(PRESET_FIELDS):
         raise ValueError(f"preset must have exactly {', '.join(PRESET_FIELDS)} (+ optional verify)")
     if "verify" in row:  # plan 085 patch-notes hint
-        patchverify.compile_hint(row["verify"], f"{row.get('id')}.verify")
+        patchverify.compile_hint(row["verify"], f"{row.get('id')}.verify", row.get("name"))
     if not isinstance(row["id"], str) or not ID_RE.match(row["id"]):
         raise ValueError("preset id must match ^[a-z0-9-]{1,40}$")
     for k in ("name", "source"):

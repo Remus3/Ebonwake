@@ -28,8 +28,11 @@ def test_tracked_file_ascii_and_schema():
     raw.decode("ascii")
     assert b"\r" not in raw
     doc = json.loads(raw)
-    assert set(doc) == set(brackets.TABLES)
+    assert set(doc) == set(brackets.TABLES) | set(brackets.LEVEL_KEYS)  # plan 087 rows
     for name, t in doc.items():
+        if name in brackets.LEVEL_KEYS:
+            assert all(r["verified"] is False for r in t), name
+            continue
         assert t["source"].startswith("https://www.blackdesertfoundry.com/"), name
         assert t["verified"] == "2026-08-13", name
         assert isinstance(t["note"], str) and t["note"], name
