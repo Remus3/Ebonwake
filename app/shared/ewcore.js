@@ -2548,6 +2548,90 @@
     return typeof date === 'string' && ISO_DAY.test(date) ? { login_mark: { date: date, on: true } } : null;
   }
 
+  // ---- plan 095: event currency planner (server `currency` block, Today `event_rows`) ----
+
+  const CUR_NUM_MAX = 1e9;
+  function curNum(v) { return intIn(v, 0, CUR_NUM_MAX); }
+  function curText(s, n) { return typeof s === 'string' && s.length > 0 && s.length <= n; }
+
+  // `currency` ({events: [...]}) -> valid rows; wishlist / exchange junk rows dropped.
+  function currencyRows(block) {
+    const b = plainObject(block) ? block : {};
+    const out = [];
+    (Array.isArray(b.events) ? b.events : []).forEach(function (r) {
+      if (!plainObject(r) || typeof r.event !== 'string' || !/^[0-9]{1,9}$/.test(r.event)) return;
+      if (!curText(r.unit, 30) || !curText(r.currency, 120) || typeof r.ends !== 'string' ||
+        !/^\d{4}-\d{2}-\d{2}T/.test(r.ends)) return;
+      if (!['earned', 'guaranteed', 'wishlist_cost', 'shortfall'].every(function (k) { return curNum(r[k]); })) return;
+      const wish = (Array.isArray(r.wishlist) ? r.wishlist : []).filter(function (w) {
+        return plainObject(w) && curText(w.item, 120) && intIn(w.qty, 1, 999) && curNum(w.subtotal);
+      });
+      const exchange = (Array.isArray(r.exchange) ? r.exchange : []).filter(function (x) {
+        return plainObject(x) && curText(x.item, 120) && intIn(x.cost, 1, CUR_NUM_MAX) && intIn(x.limit, 1, 999);
+      });
+      out.push(Object.assign({}, r, { wishlist: wish, exchange: exchange,
+        earned_src: r.earned_src === 'typed' ? 'typed' : 'log' }));
+    });
+    return out;
+  }
+
+  // "Seals: 120 earned, 640 guaranteed by 11-05, wishlist 590 - covered"
+  // (mirrors server eventcurrency.label).
+  function currencyText(r) {
+    const unit = r.unit.charAt(0).toUpperCase() + r.unit.slice(1);
+    const have = r.earned_src === 'typed' ? r.earned + ' in hand (typed)' : r.earned + ' earned';
+    let out = unit + ': ' + have + ', ' + r.guaranteed + ' guaranteed by ' + r.ends.slice(5, 10);
+    if (r.wishlist_cost > 0) {
+      out += ', wishlist ' + r.wishlist_cost + ' - ' +
+        (r.shortfall > 0 ? r.shortfall + ' short - from drops' : 'covered');
+    }
+    return out;
+  }
+
+  // {cls, text} pill: covered / N short / no wishlist.
+  function currencyPill(r) {
+    if (!(r.wishlist_cost > 0)) return { cls: 'unknown', text: 'no wishlist' };
+    return r.shortfall > 0 ? { cls: 'warn', text: r.shortfall + ' short' } : { cls: 'ok', text: 'covered' };
+  }
+
+  // "Mythical Censer x2 (160) - use before 11-12"
+  function currencyWishText(w) {
+    return w.item + ' x' + w.qty + ' (' + w.subtotal + ')' + (curText(w.use_before, 40) ? ' - ' + w.use_before : '');
+  }
+
+  // Wishlist row -> POST /api/events body; qty 0 removes; null when out of 0..limit.
+  function currencyWishBody(event, x, qty) {
+    const n = typeof qty === 'string' && /^\d{1,3}$/.test(qty.trim()) ? Number(qty.trim()) : qty;
+    if (typeof event !== 'string' || !plainObject(x) || !curText(x.item, 120) || !intIn(n, 0, x.limit)) return null;
+    return { wish: { event: event, item: x.item, qty: n } };
+  }
+
+  // Typed balance -> POST body; '' clears it; null for junk.
+  function currencyBalanceBody(event, value) {
+    if (typeof event !== 'string') return null;
+    const v = typeof value === 'string' ? value.trim() : value;
+    if (v === '' || v === null) return { currency_balance: { event: event, value: null } };
+    const n = typeof v === 'string' && /^\d{1,7}$/.test(v) ? Number(v) : v;
+    return intIn(n, 0, 1e7) ? { currency_balance: { event: event, value: n } } : null;
+  }
+
+  // GET /api/today event_rows -> valid rows (weekly / once, inside the event window).
+  function eventGameRows(d) {
+    const raw = plainObject(d) && Array.isArray(d.event_rows) ? d.event_rows : [];
+    return raw.filter(function (r) {
+      return plainObject(r) && typeof r.key === 'string' && /^[0-9]{1,9}:[a-z0-9_-]{1,40}$/.test(r.key) &&
+        validTitle(r.name) && (r.kind === 'weekly' || r.kind === 'once') && curNum(r.amount) && curText(r.unit, 30);
+    }).map(function (r) {
+      return { key: r.key, name: r.name, kind: r.kind, done: r.done === true,
+        text: '+' + r.amount + ' ' + r.unit + (r.kind === 'once' ? ' (once)' : ' / week'),
+        reset: typeof r.next_reset === 'string' && Number.isFinite(Date.parse(r.next_reset)) ? Date.parse(r.next_reset) : null };
+    });
+  }
+
+  function eventTickBody(key, on) {
+    return typeof key === 'string' ? (on ? { event_tick: key } : { event_untick: key }) : null;
+  }
+
   // Candidate -> POST /api/events body (a plain coupon add), or null.
   function suggestAddBody(c) {
     if (!plainObject(c) || !validCode(c.code) || !validTitle(c.title)) return null;
@@ -7191,6 +7275,14 @@
     loginWeekendText: loginWeekendText,
     loginTrackBody: loginTrackBody,
     loginMarkBody: loginMarkBody,
+    currencyRows: currencyRows,
+    currencyText: currencyText,
+    currencyPill: currencyPill,
+    currencyWishText: currencyWishText,
+    currencyWishBody: currencyWishBody,
+    currencyBalanceBody: currencyBalanceBody,
+    eventGameRows: eventGameRows,
+    eventTickBody: eventTickBody,
     suggestAddBody: suggestAddBody,
     suggestStatus: suggestStatus,
     noticeRows: noticeRows,

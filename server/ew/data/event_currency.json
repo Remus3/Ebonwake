@@ -1,0 +1,37 @@
+{
+ "_doc": "Plan 095 event currency rules, keyed by official notice number (groupContentNo). Per event: {title, currency, unit (lowercase plural used in texts), url, read (YYYY-MM-DD the Detail page was read), verified, starts, ends (UTC ISO; 'before / after maintenance' edges resolved with the data/maintenance.json slot until an official page matches), note, sources: [{id, name, kind: daily_login | daily_minutes | weekly | once | drop, amount (null for drop), min_minutes (daily_minutes only), reset_rule (weekly only, plan 021 shape, default Thursday 00:00 UTC), window {from, to} (UTC dates inclusive, default the event span)}], exchange: [{item, cost, limit (per family), removed_at? (UTC ISO)}]}. Drops are never projected. verified stays false until an official page matches every row.",
+ "events": {
+  "10673": {
+   "title": "[EP. 1] Evil Stirs at Marni's Playground",
+   "currency": "Seals of Purification",
+   "unit": "seals",
+   "url": "https://www.naeu.playblackdesert.com/en-US/News/Detail?groupContentNo=10673",
+   "read": "2026-10-09",
+   "verified": false,
+   "starts": "2026-10-08T10:00:00+00:00",
+   "ends": "2026-11-05T07:00:00+00:00",
+   "note": "Detail page read 2026-10-09 (research 0017 section 2 F2). Exchange: 29 rows on the page; only the three 80-seal rows named in the research are seeded. Two exchange buffs are removed at the 11-12 maintenance; which rows was not recorded, so no removed_at is seeded.",
+   "sources": [
+    {"id": "login", "name": "Daily login challenge: log in", "kind": "daily_login", "amount": 20,
+     "window": {"from": "2026-10-09", "to": "2026-11-04"}},
+    {"id": "play60", "name": "Daily login challenge: 60 minutes played", "kind": "daily_minutes",
+     "amount": 20, "min_minutes": 60, "window": {"from": "2026-10-09", "to": "2026-11-04"}},
+    {"id": "quest1", "name": "Entry quest 1 (once per family)", "kind": "once", "amount": 10},
+    {"id": "quest2", "name": "Entry quest 2 (once per family)", "kind": "once", "amount": 10},
+    {"id": "quest3", "name": "Entry quest 3 (once per family)", "kind": "once", "amount": 10},
+    {"id": "game1", "name": "Weekly event game 1", "kind": "weekly", "amount": 40,
+     "reset_rule": {"every": "week", "weekday": 3, "at": "00:00"},
+     "window": {"from": "2026-10-08", "to": "2026-11-04"}},
+    {"id": "game2", "name": "Weekly event game 2", "kind": "weekly", "amount": 40,
+     "reset_rule": {"every": "week", "weekday": 3, "at": "00:00"},
+     "window": {"from": "2026-10-08", "to": "2026-11-04"}},
+    {"id": "drops", "name": "Field drops in the listed zones", "kind": "drop", "amount": null}
+   ],
+   "exchange": [
+    {"item": "Valks' Cry (+250)", "cost": 80, "limit": 1},
+    {"item": "Thankful Premium Outfit Box", "cost": 80, "limit": 1},
+    {"item": "Mythical Censer", "cost": 80, "limit": 2}
+   ]
+  }
+ }
+}

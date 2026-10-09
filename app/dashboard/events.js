@@ -485,7 +485,79 @@
     drawSuggested();
     drawNotices();
     drawEvents(list.filter(function (r) { return r.kind !== 'coupon'; }));
+    drawCurrency();
     drawSources();
+  }
+
+  // Plan 095: one row per currency event - "Seals: 120 earned, 640 guaranteed
+  // by 11-05, wishlist 590 - covered" + pill, the wishlist lines (buy-by), a
+  // wishlist row editor (qty 0 removes, capped at the exchange limit) and a
+  // typed "balance now" (until the event end).
+  function drawCurrency() {
+    const ui = S.ui;
+    const body = ui.currencyBody;
+    body.textContent = '';
+    const rows = C.currencyRows(S.data && S.data.currency);
+    const short = rows.filter(function (r) { return r.shortfall > 0; }).length;
+    ui.currencyPill.textContent = S.data ? (short ? short + ' short' : C.zeroPill(rows.length, 'event', 'events')) : '-';
+    ui.currencyPill.className = 'ew-pill ' + (short ? 'warn' : 'unknown');
+    if (!rows.length) { empty(body, 'No currency event running.'); return; }
+    const box = el('div', 'ew-list' + (S.err ? ' ew-stale' : ''));
+    rows.forEach(function (r) {
+      const row = el('div', 'ew-erow active');
+      const head = el('div', 'ew-ehead');
+      const t = el('span', 'ew-mname ew-gnum', C.currencyText(r));
+      t.title = r.currency + (r.verified === false ? ' (rules not yet verified against the notice)' : '');
+      head.appendChild(t);
+      const p = C.currencyPill(r);
+      head.appendChild(el('span', 'ew-pill ' + p.cls, p.text));
+      row.appendChild(head);
+      r.wishlist.forEach(function (w) {
+        row.appendChild(el('div', 'ew-mname ew-muted ew-gnum', C.currencyWishText(w)));
+      });
+      if (r.exchange.length) {
+        const ed = el('div', 'ew-ehead');
+        const sel = el('select');
+        r.exchange.forEach(function (x, n) {
+          const o = el('option', null, x.item + ' (' + x.cost + ', max ' + x.limit + ')');
+          o.value = String(n);
+          sel.appendChild(o);
+        });
+        ed.appendChild(sel);
+        const qty = el('input');
+        qty.type = 'number';
+        qty.min = '0';
+        qty.value = '1';
+        qty.title = 'quantity (0 removes it)';
+        ed.appendChild(qty);
+        const b = el('button', 'ew-btn ew-bbtn', 'set wish');
+        b.type = 'button';
+        b.addEventListener('click', function () {
+          const x = r.exchange[Number(sel.value)];
+          const bd = C.currencyWishBody(r.event, x, qty.value);
+          if (bd) send(bd, 'wishlist saved'); else msg('quantity must be 0..' + (x ? x.limit : '?'));
+        });
+        ed.appendChild(b);
+        row.appendChild(ed);
+      }
+      const bal = el('div', 'ew-ehead');
+      const v = el('input');
+      v.type = 'number';
+      v.min = '0';
+      v.placeholder = 'balance now';
+      v.title = 'typed ' + r.unit + ' in hand; replaces the logged count until the event ends (empty clears)';
+      bal.appendChild(v);
+      const bb = el('button', 'ew-btn ew-bbtn', 'set balance');
+      bb.type = 'button';
+      bb.addEventListener('click', function () {
+        const bd = C.currencyBalanceBody(r.event, v.value);
+        if (bd) send(bd, 'balance saved'); else msg('balance must be a whole number');
+      });
+      bal.appendChild(bb);
+      row.appendChild(bal);
+      box.appendChild(row);
+    });
+    body.appendChild(box);
   }
 
   // Every second: countdowns only; a status / soon change rebuilds the lists.
@@ -582,13 +654,15 @@
     const sg = card('Suggested coupons');
     const ev = card('Events and drops');
     if (window.EWOverrides) window.EWOverrides.mount(ev.card.querySelector('h2'), 'events'); // plan 079
+    const cur = card('Event currency'); // plan 095
     const sn = card('Suggested events');
     const src = card('Sources');
     src.pill.textContent = 'official';
     // Plan 078: the Add card goes last (lists first, typing is the fallback).
     [cp, sg, ev, sn, src, a].forEach(function (x) { panel.appendChild(x.card); });
+    panel.insertBefore(cur.card, sn.card); // plan 095: currency card right after Events
     S.ui = {
-      form: a.form, msg: a.msg, err: a.err,
+      form: a.form, msg: a.msg, err: a.err, currencyBody: cur.body, currencyPill: cur.pill,
       couponBody: cp.body, couponPill: cp.pill, suggestBody: sg.body, suggestPill: sg.pill,
       noticeBody: sn.body, noticePill: sn.pill,
       eventBody: ev.body, eventPill: ev.pill,

@@ -67,3 +67,58 @@ read, no client file, no packet, no input to the game window, no
 authenticated call; nothing is redeemed or bought by EW.
 
 Depends on: 064, 075, 021.
+
+## As-built deviations
+
+Adjudicated in-lane (build lane, 2026-10-09); refute-rounds recorded at merge.
+Tests: `tests/test_eventcurrency.py`, `app/test/eventcurrency.test.js`.
+
+1. Seed holds 3 of the 29 exchange rows and no `removed_at`. Decision: seed
+   only the three 80-seal rows research 0017 names (Valks' Cry +250 x1,
+   Thankful Premium Outfit Box x1, Mythical Censer x2); the page's other rows
+   and which two buffs go at the 11-12 maintenance were not recorded, and the
+   build lane had no permission to re-read the page. Provenance (`url`,
+   `read`) is per event, not per row (every row comes from the one Detail
+   page). Window edges "after / before maintenance" use the
+   `maintenance.json` slot (07:00 + 180 min UTC); `verified: false`.
+   Alternatives: guess the missing rows; per-row url. Why: no guessed data.
+   Reverses if: a session re-reads 10673 - add the rows, then verify.
+2. Notice suggestion path not built. Decision: no plan 064 parser change
+   ("<N> <currency>" lines + cost table -> suggested rule) in this build.
+   Alternatives: bump the Detail cache PARSE_V and add a suggest-only parser.
+   Why: it is suggest-only, outside the acceptance, and one event's text is
+   not enough to fit patterns to; the tracked JSON is the source today.
+   Reverses if: a second currency event lands - file a follow-up plan.
+3. `removed_at` warns whatever its date. Decision: a wishlist item with a
+   future `removed_at` gets "use before MM-DD" and a plan 074 digest row
+   (via the digest's `loss_rows`, so it shows from T-24 h of the
+   maintenance at that time and is ackable), not only when before the event
+   end. Why: the 10673 buffs are removed at 11-12, after the 11-05 end - the
+   plan's "before the event end" would never warn for the one known case.
+   Reverses if: never (a later removal is still a loss).
+4. Typed balance lives in `event_wishlist.balances` (`{value, set_at,
+   expires_at = event end}`), not the plan 079 ledger. Decision: shown on
+   /api/overrides as a derived typed row (like plan 081's) with its expiry;
+   cleared by typing an empty balance. Alternatives: a new ledger expiry
+   rule `until:event_end`. Why: the ledger's rules are fixed strings with no
+   per-key end; one event = one end. Reverses if: a second override kind
+   needs per-item ends - then add the ledger rule and migrate.
+5. Ticks. Weekly game and once-quest rows are ticked in the Today "This
+   week" card (POST /api/today `event_tick` / `event_untick`, store domain
+   `event_ticks`), shown only while the row's own window is open (weekly
+   games 10-08..11-04; once rows the event span). Never auto-ticked (plan
+   068 untouched). A weekly tick counts for the reset period it falls in.
+6. Projection details. Today counts as remaining until it qualifies (then
+   as earned); a weekly period that passed unticked is lost; a marked "I
+   logged in that day" date (plan 075) credits `daily_login` only (no
+   minutes known). `guaranteed` assumes the operator plays every remaining
+   day, per the plan's formula. Upcoming events (before `starts`) show with
+   everything remaining.
+7. What now uses source `event` (weight 0.5) for "Play 60 min today (+20
+   seals)", due the end of today's UTC date. Why: an event-specific action,
+   same family as plan 074's event-end row. Reverses if: it is outranked
+   when it matters - give it its own weight row.
+8. Progress file: the lane's permission scope covers only its worktree, so
+   `p095-build.json` was written under the worktree's gitignored
+   `ops/loop/control/progress/` (as plan 064 deviation 12). Reverses if: the
+   lane driver grants writes to the MAIN progress dir.
