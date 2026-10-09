@@ -664,8 +664,10 @@ def test_refute_r1_no_false_verdicts_from_neighbouring_text():
     assert lv[0] not in patchverify.check(wrong, "[Updates] Patch Notes - October 15, 2026", hinted)
     raw = json.loads((DATA / "brackets.json").read_text(encoding="ascii"))["level_bonus"]
     seq = " ?/ ?".join(str(r["ap_vs_monsters"]) for r in raw)
-    assert all(r["verify"]["expect"][1] == "\\(" + seq + "\\)" for r in raw), \
+    assert all(r["verify"]["expect"][1].startswith("(?:\\(" + seq + "\\)|") for r in raw), \
         "the totals in the hint are the stored totals"
+    assert all(f"{r['level']}\\s+{r['ap_vs_monsters']}\\s+{r['monster_dr']}(?![0-9])"
+               in r["verify"]["expect"][1] for r in raw), "the NA table row is the stored row"
     shop = "Pearl Outfit sale: discounts of up to 30%."
     assert patchverify.check(shop, TITLE, hinted)["xp_buffs.json#pearl-outfit-set"]["verdict"] \
         == "silent"
@@ -862,3 +864,63 @@ def test_api_acceptance_asia(srv_asia, tmp_path):
     row = next(r for r in sig["rows"] if r["id"] == "data")
     assert row["level"] == "warn" and len(row["lines"]) == 1
     assert _digest(DATA) == before
+
+
+# --- H0a5846: NA 10678 wording - tables render one cell per line -------------------------
+
+NA = "patch-20261008-na.html"
+CAPS_STATED = [f"xp_epochs.json#cap-{r}" for r in ("1-5", "50-55", "56-61")]
+DROPS = [f"drop_buffs.json#{r}" for r in ("item-collection-scroll", "adv-item-collection-scroll",
+                                          "ecology-knowledge", "agris-fever")]
+LV_HEAD = "Level\nExtra AP Against Monsters\nMonster Damage Reduction\n"
+
+
+def _na():
+    raw = (FIX / NA).read_text(encoding="ascii")
+    return "\n".join(eventnotices._lines(raw))
+
+
+def test_na_fixture_is_the_one_cell_per_line_shape():
+    t = patchverify.fold(_na())
+    assert "\n1~5\n20%\n" in t and "\n65 and above\n0.01%\n" in t
+    assert "\n75\n18\n18\n" in t and "Combat Secret Book (S)\n0.20%" in t
+
+
+def test_na_fixture_confirms_every_stated_row():
+    res = patchverify.check(_na(), TITLE, patchverify.load()["hinted"])
+    for k in LEVEL_ROWS + NEW_BANDS + BOOKS + PRESETS + CAPS_STATED:
+        assert res[k]["verdict"] == "confirmed", (k, res[k])
+    assert res[OLD_BAND] == {"verdict": "contradicted", "evidence": "62-64 0.02%"}
+    assert [k for k, v in res.items() if v["verdict"] == "contradicted"] == [OLD_BAND]
+    assert {res[k]["verdict"] for k in DROPS} == {"silent"}, "the notes never state them"
+    assert res["xp_epochs.json#band-65-75"]["evidence"] == "65 and above 0.01%"
+    assert res["xp_books.json#small"]["evidence"] == "Combat Secret Book (S) 0.20%"
+    assert res[BLESS]["evidence"].endswith("from 15% to 30%.")
+
+
+def test_na_table_rows_contradict_only_their_own_level():
+    hinted = patchverify.load()["hinted"]
+    res = patchverify.check(LV_HEAD + "70\n3\n3\n71\n7\n7\n72\n9\n9", TITLE, hinted)
+    assert res["brackets.json#lv-bonus-71"]["verdict"] == "contradicted"
+    for lv in (70, 72, 73):
+        assert res[f"brackets.json#lv-bonus-{lv}"]["verdict"] == "silent", lv
+    bare = patchverify.check("70\n3\n3\n71\n7\n7", TITLE, hinted)
+    assert {bare[k]["verdict"] for k in LEVEL_ROWS} == {"silent"}, "no header, no verdict"
+    lead = ("Extra AP Against Monsters +4 and Monster Damage Reduction +4 are gained from "
+            "level 70 and onwards.")
+    assert patchverify.check(lead, TITLE, hinted)["brackets.json#lv-bonus-70"]["verdict"] \
+        == "contradicted"
+    gap = ("For each level you are above a monster, you gain Monster Damage Reduction +2 "
+           "against that monster's attacks.")
+    assert patchverify.check(gap, TITLE, hinted)["brackets.json#level-gap-dr"]["verdict"] \
+        == "contradicted"
+
+
+def test_na_buff_lines_cross_a_comma_and_a_non_numeric_to():
+    hinted = patchverify.load()["hinted"]
+    line = ("Increased the Combat/Skill EXP gain from the Adventure's Boon buff obtainable by "
+            "talking to NPCs or at Campsites, from 15% to 25%.")
+    assert patchverify.check(line, TITLE, hinted)[BLESS]["verdict"] == "contradicted"
+    pearl = "Increased the bonus Combat EXP for equipping 4 parts of a Pearl Outfit from 10% to 40%."
+    assert patchverify.check(pearl, TITLE, hinted)["xp_buffs.json#pearl-outfit-set"][
+        "verdict"] == "contradicted"

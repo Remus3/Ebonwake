@@ -149,3 +149,32 @@ Depends on: 085.
 8. Fold table also maps U+FF5E / U+301C (fullwidth tilde, wave dash) to
    `~` so a band written `1 ~ 5` in those glyphs still matches (round 1).
    Reverses if: never; the table is data and only grows.
+11. Hint tuning against the live NA page 10678 (lane H0a5846, re-run of
+    H1c02d2, which ended no-change with no reason). Cause of the 36 `silent`
+    rows: the Asia fixture's wording was reconstructed, the NA page differs.
+    Its tables render one cell per line (`1~5\n20%`, `70\n3\n3`), which every
+    `[^\n%]` band / book gap refused; books are labelled `(S)/(M)/(L)/(XL)`
+    with `0.20%` / `7.50%`; the level bonus reads `Extra AP Against Monsters
+    +3 and Monster Damage Reduction +3 are gained from level 70` plus a table;
+    the gap DR reads `For each level you are above a monster ... +3` / `level
+    difference of up to 3`; buff lines carry a comma and a non-numeric `to`
+    (`talking to NPCs`); the Pearl line puts `Combat EXP` before the name.
+    Decision: hints only (no data value, no code): band / cap / book gaps
+    become `[^%]` (still stop at the first percent, so no neighbour can be
+    borrowed); book labels and values take the NA spellings; lv-bonus and
+    gap-DR expects become `(?:<Asia wording>|<NA wording>)` with the NA table
+    row anchored on the table header (`<lv>\s+<ap>\s+<dr>`) and a matching
+    per-row contradict; buff gaps drop `,` and only stop at a numeric `to`;
+    Pearl takes both word orders. Result on 10678: 32 confirmed,
+    `cap-62-75` contradicted (`62-64 0.02%` - the notes split that coarse,
+    superseded row, which its own guard was written to catch), the 4
+    drop_buffs rows stay silent (the page never states them). Older pages
+    10599 / 10621: no verdict change. Fixture
+    `tests/fixtures/notices/patch-20261008-na.html` is cut from the live
+    Detail markup (one robots-allowed GET): verbatim lines with trailing
+    blanks trimmed, non-ASCII as numeric character references. Alternatives:
+    code-side "table join" in `fold` (changes every hint's line semantics,
+    out of scope "hints only"); NA-only patterns (breaks the Asia fixture
+    tests). Why: smallest change, both wordings covered, regressions pinned
+    in the H0a5846 tests. Reverses if: a later NA page renders the tables
+    inline again and a hint goes silent (re-tune, file a ROADMAP row).
