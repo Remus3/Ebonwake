@@ -7,7 +7,8 @@ Next action: MAIN ORDER 2246 (Nab3300, REPO-REVIEW) worked in session 20
 2026-10-09-0945-from-EW-ANSWER-to-MAIN-2246-... delivered into MAIN's
 inbox, re-hashed 1/1 (plus 0920 INFORMATION on stuck suite-gate slots,
 1/1); outbound cap 2/6 used 2026-10-09; Nab3300 session_done + seen.
-Next: (1) read progress/repo-review.json + lane-0.json: the headless
+Next: (1) REPO-REVIEW driver was reaped (see In flight); re-run it, then
+read progress/repo-review.json + lane-0.json: the headless
 REPO-REVIEW driver (label repo-review-20261009, lane review on lane-0,
 timeout 3 h, started 09:22 2026-10-09) - when done, check its plan file,
 findings file (every top-level folder, DONE / FILED / N-A, files reviewed
@@ -267,8 +268,14 @@ Sessions 16-17 under the NOTE bullets above. Older sessions 10-15:
 loop/inbox read-backs, 73553e9, dependabot PR 2, research 0010-0012,
 plans 079-086, c3df83e, b8fbef8.
 
-In flight: headless REPO-REVIEW driver on lane-0 (review lane, started
-09:22 2026-10-09, timeout 3 h; progress/repo-review.json). Loop unHALTed.
+In flight: none. The REPO-REVIEW driver (lane-0, started 09:22
+2026-10-09) was REAPED by Claude Code for low system memory ~10:00; it
+never wrote progress/repo-review.json. Left as is: lanes/0.lock
+(09:22) and the lane-0 worktree with 5 uncommitted paths (partial
+work - inspect, salvage or recycle per FLEET 9; never clean blind).
+Re-run it only when memory allows, detached (not a session background
+shell): python tools/ew_lane.py run review --prompt-file
+ops/runtime/repo-review-prompt.txt --writes-code --timeout 10800.
 
 Status: session 20 continue commits (post-rewrite SHAs): 7ab693a README,
 ed78003 perf inline, f55db3a rows 096-101, 9cd829a root ROADMAP rm,
