@@ -4,13 +4,17 @@
     ew_loop.py tick [--dry-run] [--no-push]   one self-monitoring, idempotent pass
     ew_loop.py checklist                      print the last tick's checklist
     ew_loop.py lane <ID>                      (internal) run one dispatched item
+    ew_loop.py session                        orders routed to the session (plan 091)
+    ew_loop.py session-done <ID> [--commit S] the session marks a routed order done
 
 One tick, under ops/loop/control/loop.lock (fleet_watch.watch_lock):
   a. HALT file -> status "halted", exit 0. A busy lock -> exit 0, nothing written.
   b. Inbox (config loop.inbox_dir / loop.outbox_dir): new notes by mtime through
      fleet_watch.run_source (baseline first), then kit v8 fleet_inbox (FLEET
      item 14): classify() free; skip / ack = a seen-ledger line, no note;
-     ORDER / FIX / RULING escalate to a lane item, answered after merge; else
+     ORDER / FIX / RULING escalate to a lane item, answered after merge (plan
+     091: one naming ops/fleet_kit/, .claude/, CLAUDE.md or a kit version goes
+     to the session instead, answered after `session-done`); else
      ONE triage spawn (TRIAGE_SPAWN: sonnet, low, bare; kind triage). Answers
      to one destination go in ONE batch note, HOP lines, OutboundCap (6 a
      day). No governor slot (kit ruling: acknowledgements stay outside).
@@ -541,6 +545,21 @@ def order_id(name):
     return "N" + hashlib.sha1(name.encode("utf-8")).hexdigest()[:6]
 
 
+# plan 091: lane briefs forbid ops/fleet_kit/ and CLAUDE.md and lanes have no
+# .claude/ write grant, so an ORDER naming one of them is blocked by
+# construction; it goes to the interactive session instead of a lane.
+SESSION_TARGETS = (("ops/fleet_kit/", re.compile(r"(?<![\w.])ops[\\/]fleet_kit\b|"
+                                                  r"\bkit[ _-]?v\d+\b", re.I)),
+                   (".claude/", re.compile(r"(?<![\w.])\.claude[\\/]")),
+                   ("CLAUDE.md", re.compile(r"(?<![\w.])CLAUDE\.md(?![\w.])")))
+
+
+def session_paths(name, text):
+    """The protected targets an order note (name + body) touches, fixed order."""
+    blob = f"{name}\n{text or ''}"
+    return [t for t, rx in SESSION_TARGETS if rx.search(blob)]
+
+
 def order_prompt(order):
     return ("You are an Ebonwake (EW) build lane in a detached git worktree. Read "
             "CLAUDE.md first. Carry out the channel ORDER note below in THIS tree. Do "
@@ -577,6 +596,40 @@ class Items:
             if isinstance(rec, dict) and rec.get("id"):
                 out[rec["id"]] = rec
         return out
+
+
+def queued_orders(root):
+    doc = read_json(Path(root) / ORDERS_REL, {}) or {}
+    return [o for o in doc.get("orders", []) if isinstance(o, dict) and o.get("id")]
+
+
+def session_orders(root):
+    """Plan 091: queued orders routed to the session and not yet marked done,
+    each with its "needs" targets."""
+    items = Items(root)
+    out = []
+    for o in queued_orders(root):
+        hits = session_paths(o.get("note", ""), o.get("text", ""))
+        if hits and not (items.get(o["id"]) or {}).get("session_done"):
+            out.append(dict(o, needs=hits))
+    return out
+
+
+def session_done(root, oid, commit=None, clock=time.time):
+    """Plan 091: the session marks a routed order done; the next tick answers
+    it. None for an id that is not a queued order. A second call keeps the
+    first record (idempotent)."""
+    order = next((o for o in queued_orders(root) if o["id"] == oid), None)
+    if order is None:
+        return None
+    items = Items(root)
+    rec = items.get(oid) or {}
+    if rec.get("session_done"):
+        return rec
+    rec.update(id=oid, kind="order", title=order.get("title", ""), note=order.get("note"),
+               state="merged", verdict="session", session_done=True,
+               commit=ascii_text(commit or "none", 80), finished=iso(clock()))
+    return items.put(rec)
 
 
 def dispatchable(rec, open_ids=()):
@@ -954,7 +1007,10 @@ class Tick:
         (one note, HOP incoming + 1, counted by OutboundCap) once it is done."""
         oid = order_id(name)
         rec = self.items.get(oid)
-        if not rec or rec.get("state") not in DONE_STATES + ("adjudicate",):
+        # plan 091: a session-routed order closes only on the session's mark
+        done = (bool(rec) and bool(rec.get("session_done"))) if session_paths(name, text) \
+            else bool(rec) and rec.get("state") in DONE_STATES + ("adjudicate",)
+        if not done:
             self.queue_order(oid, name, text)
             self.awaiting += 1
             return False  # answered after the lane item is done
@@ -986,8 +1042,7 @@ class Tick:
         return True
 
     def orders(self):
-        doc = read_json(self.root / ORDERS_REL, {}) or {}
-        return [o for o in doc.get("orders", []) if isinstance(o, dict) and o.get("id")]
+        return queued_orders(self.root)
 
     def queue_order(self, oid, name, text):
         if self.dry or any(o["id"] == oid for o in self.orders()):
@@ -1457,13 +1512,23 @@ class Tick:
                     rec.get("kind") == "resolve"
                     and rec.get("state") in ("refused", "lost", "paused")))]
         resolving = {w["id"] for w in work}
-        work += [{"id": o["id"], "kind": "order", "title": o["title"], "note": o["note"],
-                  "label": f"order {o['id']}: {o['title']}", "prompt": order_prompt(o)}
-                 for o in self.orders() if o["id"] not in resolving]
+        skipped = []
+        for o in self.orders():
+            if o["id"] in resolving:
+                continue
+            hits = session_paths(o["note"], o.get("text", ""))
+            if hits:  # plan 091: never a lane item; the session carries it out
+                if not (self.items.get(o["id"]) or {}).get("session_done"):
+                    skipped.append({"id": o["id"], "text": o["title"], "skip": "session",
+                                    "reason": "session: needs " + ", ".join(hits)})
+                continue
+            work.append({"id": o["id"], "kind": "order", "title": o["title"],
+                         "note": o["note"], "label": f"order {o['id']}: {o['title']}",
+                         "prompt": order_prompt(o)})
         # plan 019: a row whose plan doc depends on an open row waits (skipped)
         row_open = {r["id"]: r["open"] for r in rows}
         self.open_ids = {iid for iid, is_open in row_open.items() if is_open}
-        skipped, waiting = [], {}
+        waiting = {}
         for r in open_rows:
             if r["id"] in resolving:
                 continue
@@ -1840,7 +1905,20 @@ def main(argv=None):
     sub.add_parser("checklist")
     ln = sub.add_parser("lane")
     ln.add_argument("item")
+    sub.add_parser("session", help="plan 091: orders routed to the session")
+    sd = sub.add_parser("session-done", help="plan 091: mark a routed order done")
+    sd.add_argument("item")
+    sd.add_argument("--commit")
     a = ap.parse_args(argv)
+    if a.cmd == "session":
+        rows = [f"{o['id']} {o.get('note', '')} needs: {', '.join(o['needs'])}"
+                for o in session_orders(ROOT)]
+        print(ascii_text("\n".join(rows) or "none"))
+        return 0
+    if a.cmd == "session-done":
+        rec = session_done(ROOT, a.item, a.commit)
+        print(f"{a.item}: {'session-done' if rec else 'not a queued order'}")
+        return 0 if rec else 2
     if a.cmd == "tick":
         doc = tick(a.dry_run, a.no_push)
         print(f"loop: {doc.get('state')}")
