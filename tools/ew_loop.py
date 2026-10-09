@@ -41,7 +41,10 @@ One tick, under ops/loop/control/loop.lock (fleet_watch.watch_lock):
      official patch notes, so a lane edits the tracked file.
   e. Idle (nothing open, nothing in flight): one deep-dive lane per day.
   f. Spawning stops at RUNS_CAP - 3 and during a usage-limit backoff
-     (ops/loop/control/backoff.json, 30 min doubling, cap 6 h).
+     (ops/loop/control/backoff.json, 30 min doubling, cap 6 h). Plan 100: the
+     run count is max(headless_budget.json, headless_usage.jsonl) in the
+     window (tools/usage_ledger.py); each tick first labels kind-less usage
+     rows kind build.
   g. inbox_status.json (kit write_status, next_tick) and
      ops/loop/control/progress/loop.json with a "checklist" array (FLEET item
      13 d: remaining tasks as kit rows {id, task, state, eta_s}, at most 20;
@@ -79,6 +82,7 @@ OUTBOX_REL = "moon_sync_outbox"
 sys.path.insert(0, str(ROOT / "tools"))
 import eta  # noqa: E402
 import ew_lane  # noqa: E402
+import usage_ledger  # noqa: E402
 
 CODE = "EW"
 CONTROL_REL = Path("ops/loop/control")
@@ -1077,7 +1081,9 @@ class Deps:
         self.kit, self.watch = k, fw
         self.inbox = ew_lane._load("fleet_inbox", "ops/fleet_kit/fleet_inbox.py")
         self.checklist = ew_lane._load("fleet_checklist", "ops/fleet_kit/fleet_checklist.py")
-        self.budget = k.RunBudget(self.root / k.BUDGET_REL)
+        # plan 100: the governor counts max(budget file, usage log) runs
+        self.budget = usage_ledger.UsageBudget(k.RunBudget(self.root / k.BUDGET_REL),
+                                               self.root / k.USAGE_REL)
         self.spawn = k.spawn
         self.should_skip = k.should_skip
         self.pick_effort = k.pick_effort
@@ -2318,6 +2324,10 @@ class Tick:
         bad_hooks = hooks_path_problem(self.root, self.d.git)
         if bad_hooks:
             self.step(bad_hooks)
+        if not self.dry:  # plan 100: label pre-kit-v8 usage rows kind build
+            n = usage_ledger.backfill_kind(self.root / self.d.kit.USAGE_REL)
+            if n:
+                self.step(f"usage rows backfilled kind build: {n}")
         self.reap_lost()
         if not self.blocked():
             self.inbox()
