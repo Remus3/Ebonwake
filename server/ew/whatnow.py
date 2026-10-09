@@ -3,7 +3,7 @@
 Pure inference over views EW already serves (bosses 031, resets 021, grind
 buffs 005, Hot Time 011 / 064, maintenance 059 / 064, coupons 006, dice 056,
 market alerts 002, level deadlines 024, OCR review 063, login days 075,
-reward claim windows 086) plus an injected
+reward claim windows 086, event currency 095) plus an injected
 clock; nothing reads the game. Each adapter turns one view into candidates
 {source, text, why, due, left_s}; `rank` scores them
 
@@ -369,6 +369,24 @@ def login_days(view, now):
     return out
 
 
+def event_currency(view, now):
+    """Plan 095: today's minutes-played currency row unmet while the event
+    wishlist is short, due the end of today's UTC date."""
+    out = []
+    end = _dt.datetime.combine(now.astimezone(_UTC).date() + _dt.timedelta(days=1),
+                               _dt.time(0), _UTC)
+    for r in _list(_dict(view).get("events")):
+        r = _dict(r)
+        p = _dict(r.get("play_today"))
+        if not (_num(r.get("shortfall")) and r["shortfall"] > 0 and _num(p.get("min_minutes"))
+                and _num(p.get("amount")) and isinstance(r.get("unit"), str)):
+            continue
+        text = f"Play {p['min_minutes']} min today (+{p['amount']} {r['unit']})"
+        why = f"{r['unit']} wishlist {r['shortfall']} short"
+        out.append(_cand("event", _clip(text), why, end, now))
+    return out
+
+
 def maint_loss(view, now):
     """Plan 074: one candidate per unacked loss warning of the before-maintenance
     digest, due its maintenance start."""
@@ -439,6 +457,7 @@ ADAPTERS = {
     "market": [market_alerts],
     "ocr": [ocr_review],
     "logins": [login_days],
+    "currency": [event_currency],
 }
 
 

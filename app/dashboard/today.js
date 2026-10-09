@@ -340,14 +340,47 @@
     else if (!plan.rows.length) hint = 'No weekly content data.';
     setText(f.note, hint);
     const rows = S.data ? plan.rows : [];
+    const evRows = S.data ? C.eventGameRows(S.data) : []; // plan 095: event window only
     f.list.className = 'ew-list' + (S.err ? ' ew-stale' : '');
-    f.list.hidden = !rows.length;
-    C.reconcile(f.list, rows.map(function (r) { return { r: r, busy: !!S.weekBusy }; }),
-      function (d) { return d.r.id; }, weekRow);
-    rows.forEach(function (r, i) {
+    f.list.hidden = !rows.length && !evRows.length;
+    const all = rows.concat(evRows);
+    C.reconcile(f.list, rows.map(function (r) { return { r: r, busy: !!S.weekBusy }; }).concat(
+      evRows.map(function (e) { return { e: e, busy: !!S.weekBusy }; })),
+    function (d) { return d.e ? 'ev:' + d.e.key : d.r.id; },
+    function (d) { return d.e ? eventGameRow(d) : weekRow(d); });
+    all.forEach(function (r, i) {
       const n = f.list.children[i];
-      if (n && n.ewReset) n.ewReset.textContent = 'resets in ' + C.fmtDuration(r.reset - now);
+      if (n && n.ewReset && r.reset !== null) n.ewReset.textContent = 'resets in ' + C.fmtDuration(r.reset - now);
     });
+  }
+
+  // Plan 095: an event currency weekly game / once-per-family quest; the operator
+  // ticks it (never inferred). d = { e, busy }.
+  function eventGameRow(d) {
+    const e = d.e;
+    const row = el('div', 'ew-trow ew-wrow' + (e.done ? ' done' : ''));
+    const lab = el('label', 'ew-tlabel');
+    const cb = el('input');
+    cb.type = 'checkbox';
+    cb.checked = e.done;
+    cb.disabled = d.busy;
+    cb.addEventListener('change', function () {
+      if (S.weekBusy) return;
+      S.weekBusy = true;
+      send(C.eventTickBody(e.key, !e.done), e.name + (e.done ? ' unticked' : ' ticked')).then(function () {
+        S.weekBusy = false;
+        draw();
+      });
+    });
+    lab.appendChild(cb);
+    lab.appendChild(el('span', 'ew-mname', e.name));
+    row.appendChild(lab);
+    row.appendChild(el('span', 'ew-pill unknown', e.text));
+    if (e.reset !== null) {
+      row.ewReset = el('span', 'ew-muted ew-tdays', '');
+      row.appendChild(row.ewReset);
+    }
+    return row;
   }
 
   function draw() {

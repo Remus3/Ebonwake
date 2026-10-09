@@ -5,7 +5,9 @@ Routes: /api/health, /api/version (fleet P0-5), /api/state, /events (SSE),
 assets, browser fallback),
 /api/market/{watch,item,hot} (plan 002), /api/market/search (plan 028), /api/today (plan 003),
 /api/progress (plan 004), /api/grind (plan 005), /api/events (plan 006; plan 014
-adds its `suggested` coupon block; plan 075 its `login_days` block + `login_mark` POST),
+adds its `suggested` coupon block; plan 075 its `login_days` block + `login_mark` POST;
+plan 095 its `currency` block + `wish` / `currency_balance` POSTs and GET
+/api/events/currency; POST /api/today `event_tick` / `event_untick`),
 /api/deadeye (plan 007; /api/deadeye/enhance GET plan 035; /api/deadeye/shopping GET plan 037;
 /api/deadeye/calc GET plan 055), /api/game (plan 008), /api/leveling (plan 011),
 /api/spots (plan 012, GET only), /api/zones/xp (plan 088, GET only), /api/bosses (plan 031; plan 072 adds its `drift`
@@ -44,7 +46,7 @@ from urllib.parse import parse_qs
 
 from . import (__version__, autotick, autowatch, bossdrift, bosses, context, coupons, crafting,
                dataverdicts, deadeye,
-               derived, detect, enhance, eventnotices, events, gamewatch, grind, imperial, inventory, itemnames,
+               derived, detect, enhance, eventcurrency, eventnotices, events, gamewatch, grind, imperial, inventory, itemnames,
                leveling, logindays, maint, maintdigest, market, mounts, ocr, ocrauto, onboarding, overrides,
                pets,
                ports,
@@ -269,8 +271,9 @@ class EWServer(ThreadingHTTPServer):
         self.grind.verdict = self.verdicts.verdict
         # Plan 074: before-maintenance digest - loss sentences from the cached
         # maintenance notices + what ends at the next maintenance; never fetches.
+        # Plan 095: + a buy-by line per wishlist item removed at a later maintenance.
         self.maintdigest = maintdigest.DigestService(
-            self.store, loss_rows=self.notices.loss_rows,
+            self.store, loss_rows=lambda: self.notices.loss_rows() + self.currency.loss_rows(),
             items=lambda: self.events.view()["items"],
             hot=lambda: self.leveling.view()["hot_auto"],
             weekly=lambda: self.leveling.view()["hot_windows"],
@@ -352,6 +355,9 @@ class EWServer(ThreadingHTTPServer):
             reset_at=today.next_daily_reset, hot=self.leveling.hot_active)
         # Plan 075: logged-in minutes per UTC date -> qualifying login days per event.
         self.logindays = logindays.LoginDays(self.store, clock=events_clock or time.time)
+        # Plan 095: guaranteed event currency by the event end vs the exchange wishlist.
+        self.currency = eventcurrency.CurrencyService(
+            self.store, clock=events_clock or time.time, history=self.logindays.history)
         listeners = getattr(self.game, "listeners", None)
         if isinstance(listeners, list):
             listeners.append(self.summary.on_game)
@@ -441,7 +447,8 @@ class EWServer(ThreadingHTTPServer):
             "events": self.events.view, "maint_digest": self.maintdigest.view,
             "market": self._market_alerts,
             "ocr": lambda: self.ocr_auto_out(self.ocr_auto.view()),  # plan 070 gate
-            "logins": lambda: self.login_days(self.events.view()["items"])},  # plan 075
+            "logins": lambda: self.login_days(self.events.view()["items"]),  # plan 075
+            "currency": self.currency.view},  # plan 095
             clock=today_clock or time.time)
         # Plan 073: per-signal liveness over local state only (never fetches or polls).
         self.signals = signals.SignalService({
@@ -626,6 +633,15 @@ class EWServer(ThreadingHTTPServer):
             for r in rows:
                 out.append(dict(r, source="typed", expires_at=None, expires_in_s=None,
                                 clearable=False))
+        # Plan 095: a typed event currency balance, expiring at the event end.
+        try:
+            rows = self.currency.typed_overrides()
+        except Exception:  # noqa: BLE001 - a service fault lists nothing
+            rows = []
+        for r in rows:
+            exp = overrides._ts(r["expires_at"])
+            out.append(dict(r, source="typed", clearable=False,
+                            expires_in_s=None if exp is None else max(0, int(exp - now))))
         for w in self.market.watchlist.items():
             if w.get("auto") is True or (w.get("below") is None and w.get("above") is None):
                 continue
@@ -728,7 +744,8 @@ class EWServer(ThreadingHTTPServer):
         sug_ev = dict(sug_ev, candidates=self.prompts.keep(
             "event_suggestion", sug_ev.get("candidates"), lambda c: str(c["group_no"])))
         return dict(out, suggested=sug, suggested_events=sug_ev,
-                    login_days=self.login_days(out.get("items")))
+                    login_days=self.login_days(out.get("items")),
+                    currency=self.currency.view())  # plan 095
 
     def login_days(self, items):
         """Plan 075 `login_days` block: tracked rows + notice rule suggestions
@@ -787,7 +804,8 @@ class EWServer(ThreadingHTTPServer):
             self.autotick.evaluate()
             body = self.today.view()
         return dict(self.autotick.decorate(body),
-                    weekly_plan=self.weekly.view(), dice=self.dice.status())
+                    weekly_plan=self.weekly.view(), dice=self.dice.status(),
+                    event_rows=self.currency.today_rows())  # plan 095
 
     def bosses_view(self, body=None, refresh=False):
         """GET /api/bosses: plan 031 table + loot ticks + plan 068 `suggested` +
@@ -900,6 +918,8 @@ class Handler(BaseHTTPRequestHandler):
             sug = self.server.coupons.view(refresh=True)
             return self._send(200, self.server.events_out(self.server.events.view(), sug,
                                                           sug_ev))
+        if path == "/api/events/currency":  # plan 095
+            return self._send(200, self.server.currency.view())
         if path == "/api/deadeye":
             return self._send(200, self.server.deadeye.view())
         if path == "/api/deadeye/enhance":
@@ -996,11 +1016,15 @@ class Handler(BaseHTTPRequestHandler):
         return {"watch": wl.add(body["add"]) if "add" in body else wl.remove(body["remove"])}
 
     def _post_today(self, body):
-        ops = {"tick", "untick", "add", "remove", "move", "weekly_tick", "weekly_untick"}
+        ops = {"tick", "untick", "add", "remove", "move", "weekly_tick", "weekly_untick",
+               "event_tick", "event_untick"}
         if len(body) != 1 or not (ops & set(body)):
-            raise ValueError("body must be one of "
-                             "{tick|untick|add|remove|move|weekly_tick|weekly_untick: ...}")
+            raise ValueError("body must be one of {tick|untick|add|remove|move|weekly_tick|"
+                             "weekly_untick|event_tick|event_untick: ...}")
         (op, arg), = body.items()
+        if op.startswith("event_"):  # plan 095: event currency weekly / once rows
+            getattr(self.server.currency, op[len("event_"):])(arg)
+            return self.server.today_view()
         if op.startswith("weekly_"):  # plan 033
             getattr(self.server.weekly, op[len("weekly_"):])(arg)
             return self.server.today_view()
@@ -1035,12 +1059,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post_events(self, body):
         ops = {"add", "edit", "done", "delete", "purge_expired", "dismiss_notice",
-               "undo_notice", "login_mark", "claimed"}
+               "undo_notice", "login_mark", "claimed", "wish", "currency_balance"}
         if len(body) != 1 or not (ops & set(body)):
             raise ValueError("body must be one of {add|edit|done|delete|purge_expired|"
-                             "dismiss_notice|undo_notice|login_mark|claimed: ...}")
+                             "dismiss_notice|undo_notice|login_mark|claimed|wish|"
+                             "currency_balance: ...}")
         (op, arg), = body.items()
-        if op == "claimed":  # plan 086: rewards claimed in game -> hide the claim window
+        if op in ("wish", "currency_balance"):  # plan 095: wishlist row / typed balance
+            getattr(self.server.currency, "wish" if op == "wish" else "balance")(arg)
+            sug_ev = self.server.notices.view(refresh=False)
+            out = self.server.events.view()
+        elif op == "claimed":  # plan 086: rewards claimed in game -> hide the claim window
             sug_ev = self.server.notices.view(refresh=False)
             out = self.server.notices.claimed(arg)
         elif op == "login_mark":  # plan 075: "I logged in that day" (operator data)
