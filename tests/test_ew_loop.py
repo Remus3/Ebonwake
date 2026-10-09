@@ -953,7 +953,12 @@ def test_loop_gates_run_exactly_what_ci_runs(tmp_path):
     assert len(ran) == len(want)
     for argv, cmd in zip(ran, want):
         words = cmd.split()
-        if words[0] == "python":
+        if words[0] == "python" and ew_loop._whole_suite(words):
+            # kit v12: the whole suite runs through fleet_suite_gate.py
+            i = argv.index("--")
+            assert argv[0] == ew_loop._python() and "fleet_suite_gate.py" in argv[1]
+            assert argv[i + 1] == ew_loop._python() and argv[i + 2:] == words[1:]
+        elif words[0] == "python":
             assert argv[0] == ew_loop._python() and argv[1:] == words[1:]
         elif words[0] == "npm":
             assert Path(argv[0]).stem == "npm" and argv[1:] == words[1:]

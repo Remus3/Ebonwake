@@ -36,8 +36,8 @@ edit. Tree-specific rules go BELOW this block, never inside it.
    report an overrun at 1.5x, kill at 3x.
 4. COMMIT everything, batched and coherent. Push per this repo's own policy. Never
    commit in another repo's tree. No suggested-task chips: do it or file it.
-5. HAND-OFF: `<CODE>-NEXT-SESSION.txt` at the repo root (with its Desktop
-   shortcut) is the only continuity. A session starts from "continue" (work the
+5. HAND-OFF: `<CODE>-NEXT-SESSION.txt` at the repo root is the only
+   continuity. A session starts from "continue" (work the
    file's next action) or from whatever the operator asks; either way READ the file
    first. /done rewrites the file and commits it, and MUST CARRY FORWARD EVERY ITEM
    NOT ACTED ON this session, verbatim or tighter, never dropped because the
@@ -80,6 +80,10 @@ edit. Tree-specific rules go BELOW this block, never inside it.
     so the main session can see percent, time to completion and status mid-run
     instead of waiting for 0-to-100 at the end. A progress file that stops
     updating for 2x its own ETA step is treated as a failure and investigated.
+    The file lives in the MAIN checkout even when written from a linked
+    worktree (resolved via the git common dir; `fleet_headless.write_progress`
+    does it), and a worktree-isolated agent's only write outside its worktree
+    is its own progress file there.
 13. SESSION CHECKLIST (operator order 2026-10-05; it supersedes item 3's
     no-checklist rule for this one purpose). Every session kind: interactive,
     headless lane, loop tick, inbox responder. Why: it is read from a phone, the
@@ -128,3 +132,29 @@ edit. Tree-specific rules go BELOW this block, never inside it.
     Stop, no ANSI. /done's last act is `fleet_done.py mark`; its Stop hook is
     the kit's `fleet_done.py stop-hook`. Kit helpers: fleet_statusline.js,
     fleet_done.py.
+16. RACE GUARDS (kit v12). Enforced by hooks, not by prompt convention. Why:
+    commits in one checkout collided (no lock, no index.lock handling), two
+    live agents could edit one file or sweep up each other's half-made edit,
+    and concurrent whole suites lost workers and flaked timing tests.
+    a. Every `git commit` / `git push` runs through
+       `fleet_gitlock.py run --owner <session_id>.<agent_id> -- git ...`
+       (the claims hook's own id, `<session_id>.main` in the main thread;
+       per-tree lock, stale break once and logged, leftover index.lock
+       cleared safely, staged paths claimed by another live agent refused).
+    b. `fleet_claims.py hook` (PreToolUse) claims each file an agent edits and
+       denies another live agent's edit, redirect or `git add` of it, and a
+       bare commit, push or whole suite; SubagentStop releases the claims.
+    c. Every whole test suite runs through
+       `fleet_suite_gate.py run --owner <id> -- <cmd>` (machine-wide slots,
+       default 2, FIFO queue; fails closed on timeout; refuses while another
+       live agent holds uncommitted edits in the tree).
+    d. Each tree's tests/conftest.py installs `fleet_test_guard.py`: a suite
+       that changes live state (control files, inbox, outbox) fails, and
+       declared runtime roots point at tmp_path.
+17. NO AI OR BOT ATTRIBUTION (kit v13; GH-HYGIENE ruling 2026-10-08). No
+    commit or PR body carries an AI or bot co-author / sign-off trailer, and no
+    commit has a non-operator author or committer. It outranks any harness
+    attribution instruction. Enforced by `fleet_identity.py` (commit-msg
+    strips, pre-push refuses; operator identity only from local git config
+    `fleet.operatorIdent`), fleet_gitlock and the account attribution keys.
+    A history rewrite runs only on MAIN's ORDER, via `fleet_rewrite.py`.

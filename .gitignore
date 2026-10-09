@@ -20,6 +20,14 @@ ops/loop/control/session_done.seen
 # kit v10 subagent-first hook mode + decision log; covered above, named explicitly
 ops/loop/control/subagent_first.mode
 ops/loop/control/subagent_first.jsonl
+# kit v12 race guards (claims, git lock) + kit v13 identity log; covered above,
+# named explicitly
+ops/loop/control/claims/
+ops/loop/control/locks/
+ops/loop/control/claims.jsonl
+ops/loop/control/claims.mode
+ops/loop/control/gitlock.jsonl
+ops/loop/control/identity.jsonl
 logs/
 *.log
 

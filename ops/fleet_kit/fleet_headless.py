@@ -72,6 +72,37 @@ v10 (backward compatible; every new parameter is optional):
 - status task names are the MAIN 0915 basic set only (TASKS; CS 1234);
 - a command-line entry: `python fleet_headless.py spawn ...` (CS 0224).
 
+v11:
+- the command line gains ONE pass-through, `--permission-mode MODE`, its
+  value limited to the CLI's own modes (PERMISSION_MODES), mapped to
+  extra=("--permission-mode", MODE) and screened by check_door like any
+  extra (ruling R2). There is no generic --extra on the command line;
+- a governor SlotTimeout is reported as a fixed kit message built from
+  numbers, never str(exc) (CS 1623 item 6).
+
+v12 (race guards, FLEET-COMMON 16; ruling 2026-10-08 lane-progress-location):
+- main_checkout(path): the tree's MAIN working tree for path, resolved
+  file-only from a linked worktree's .git file (identical to
+  fleet_lanes.main_tree, kept import-free of it);
+- write_progress() always writes to main_checkout(root)/ops/loop/control/
+  progress/<task>.json, so a caller passing its worktree cwd lands in the main
+  checkout; the returned doc carries "path" (the file written; not on disk);
+- sibling kit files fleet_gitlock.py, fleet_claims.py, fleet_suite_gate.py and
+  fleet_test_guard.py (this file's other API is unchanged by them).
+
+v13 (KIT-13 defects; GH-HYGIENE ruling 2026-10-08):
+- write_progress() is atomic per call AND per task: every write goes to its
+  own temp file (<task>.json.<pid>.<thread>.<random>.tmp, never shared by two
+  writers, even two threads of one process), is moved over <task>.json with
+  os.replace, then READ BACK; a lost or torn write is retried, and a write
+  that cannot be confirmed raises instead of passing silently;
+- `python fleet_headless.py progress --root R --task T --pct P --step S
+  --eta-s E --status running|done|failed` writes one progress file from the
+  command line, so an agent never needs a helper script of its own (two
+  agents sharing one helper script lost intermediate writes);
+- sibling kit files fleet_identity.py (FLEET-COMMON 17) and
+  fleet_rewrite.py (the operator-gated history rewrite helper).
+
 Pure stdlib. No machine path, account id or repo name appears in this file.
 """
 
@@ -88,7 +119,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-KIT_VERSION = 10
+KIT_VERSION = 13
 VAR = "CLAUDE_HEADLESS_BASE_URL"
 RUNS_CAP = 120
 WINDOW_S = 86400
@@ -557,23 +588,43 @@ class RunBudget:
 
 # ---------------------------------------------------------------- status/usage
 
-def _atomic_write(path, text):
+def _tmp_name(path):
+    """A temp name no other writer (process or thread) can share (v13)."""
+    import threading
+    return path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}."
+                          f"{os.urandom(4).hex()}.tmp")
+
+
+def _atomic_write(path, text, verify=False):
+    """temp + os.replace; with verify=True the target is read back and the
+    write retried until it holds `text` (v13, progress files)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    try:
-        tmp.write_text(text, encoding="ascii", newline="\n")
-        for attempt in range(ATOMIC_TRIES):
-            try:
-                tmp.replace(path)
+    want = text.encode("ascii")
+    for _round in range(ATOMIC_TRIES if verify else 1):
+        tmp = _tmp_name(path)
+        try:
+            tmp.write_text(text, encoding="ascii", newline="\n")
+            for attempt in range(ATOMIC_TRIES):
+                try:
+                    tmp.replace(path)
+                    break
+                except PermissionError:  # Windows: a reader holds the target briefly
+                    if attempt == ATOMIC_TRIES - 1:
+                        raise
+                    time.sleep(0.05 * (attempt + 1))
+        finally:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
+        if not verify:
+            return
+        try:
+            if path.read_bytes() == want:
                 return
-            except PermissionError:  # Windows: a reader holds the target briefly
-                if attempt == ATOMIC_TRIES - 1:
-                    raise
-                time.sleep(0.05 * (attempt + 1))
-    finally:
-        with contextlib.suppress(OSError):
-            tmp.unlink()
+        except OSError:
+            pass
+        time.sleep(0.05)
+    raise OSError(f"progress write to {path.name} could not be confirmed")
 
 
 def _iso(epoch):
@@ -625,10 +676,30 @@ def _checklist_rows(checklist):
     return rows
 
 
+def main_checkout(path):
+    """The MAIN working tree for path, even when path is a linked worktree: its
+    .git is then a FILE `gitdir: <main>/.git/worktrees/<name>` (absolute, or
+    relative to path). Anything else answers path itself. File-only."""
+    path = Path(path).resolve()
+    dotgit = path / ".git"
+    try:
+        raw = dotgit.read_text(encoding="utf-8").strip() if dotgit.is_file() else ""
+    except OSError:
+        raw = ""
+    if raw.startswith("gitdir:"):
+        gitdir = Path(raw.split(":", 1)[1].strip())
+        gitdir = (gitdir if gitdir.is_absolute() else path / gitdir).resolve()
+        if gitdir.parent.name == "worktrees":
+            return gitdir.parents[2]
+    return path
+
+
 def write_progress(root, task, pct, step, eta_s, status, clock=time.time, checklist=None):
     """FLEET-COMMON item 12: ops/loop/control/progress/<task>.json with
     {task, pct, step, eta_s, status: running|done|failed, updated}, plus
-    "checklist" (item 13 d, remaining tasks) when one is passed."""
+    "checklist" (item 13 d, remaining tasks) when one is passed. v12: in the
+    MAIN checkout of root even when root is a linked worktree; the returned
+    doc adds "path", the file written (the file itself does not carry it)."""
     if not isinstance(task, str) or not _TASK.match(task):
         raise ValueError(f"task name {task!r} must be a plain file stem")
     if status not in PROGRESS_STATES:
@@ -638,8 +709,9 @@ def write_progress(root, task, pct, step, eta_s, status, clock=time.time, checkl
            "status": status, "updated": _iso(clock())}
     if checklist is not None:
         doc["checklist"] = _checklist_rows(checklist)
-    _atomic_write(Path(root) / PROGRESS_REL / (task + ".json"), json.dumps(doc))
-    return doc
+    path = main_checkout(root) / PROGRESS_REL / (task + ".json")
+    _atomic_write(path, json.dumps(doc), verify=True)
+    return dict(doc, path=str(path))
 
 
 def run_kind(note, kind=None):
@@ -885,6 +957,14 @@ def _finish(root, code, budget, line):
     _status_quietly(root, code, "idle", "Idle", budget, time.time())
 
 
+def _secs(value):
+    """A timeout rendered from numbers only for a Refused message; anything
+    that is not a number reads 'the default wait'."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return "the default wait"
+    return f"{value:g}s"
+
+
 def spawn(root, code, prompt, note="", writes_code=False, bare=False,
           rules_file=None, timeout=3600, extra=(), run=None,
           url_source=base_url, connect=socket.create_connection,
@@ -939,9 +1019,9 @@ def spawn(root, code, prompt, note="", writes_code=False, bare=False,
     with contextlib.ExitStack() as slot_stack:
         try:
             slot = slot_stack.enter_context(slot_cm)
-        except _lanes().SlotTimeout as exc:
+        except _lanes().SlotTimeout:
             _status_quietly(root, code, "backoff", "Backing Off", budget)
-            raise Refused(str(exc)) from None
+            raise Refused(f"no governor slot within {_secs(governor_timeout)}") from None
         return _spawn_slotted(root, code, prompt, note, bare, budget, run, url, argv,
                               model, effort, cwd, stdin, timeout, log_path,
                               return_stderr, slot, kind, stdin_data)
@@ -1017,11 +1097,13 @@ def _spawn_slotted(root, code, prompt, note, bare, budget, run, url, argv, model
 # ---------------------------------------------------------------- CLI (v10)
 
 CLI_OK, CLI_USAGE, CLI_REFUSED, CLI_TIMEOUT = 0, 2, 3, 4
+PERMISSION_MODES = ("acceptEdits", "bypassPermissions", "default", "dontAsk", "plan")
 
 
 def main(argv=None, spawn_fn=None, stdin=None, stdout=None):
     """`python fleet_headless.py spawn --root R --code C --note N [options]`
-    for callers that are not Python (CS 0224). The prompt comes from
+    for callers that are not Python (CS 0224). v11: --permission-mode MODE
+    (one of PERMISSION_MODES) is the only pass-through flag. The prompt comes from
     --prompt-file, else stdin. Prints the usage line as one JSON line. Exit
     0 ran, 2 bad arguments, 3 Refused, 4 timeout. Every fleet rule applies
     exactly as for spawn(); no flag or variable bypasses the proxy or the door."""
@@ -1040,11 +1122,28 @@ def main(argv=None, spawn_fn=None, stdin=None, stdout=None):
     sp.add_argument("--cwd")
     sp.add_argument("--floors-in-hooks", action="store_true")
     sp.add_argument("--prompt-file")
+    sp.add_argument("--permission-mode", choices=PERMISSION_MODES)
+    pp = sub.add_parser("progress")
+    pp.add_argument("--root", required=True)
+    pp.add_argument("--task", required=True)
+    pp.add_argument("--pct", type=int, required=True)
+    pp.add_argument("--step", required=True)
+    pp.add_argument("--eta-s", type=int)
+    pp.add_argument("--status", choices=PROGRESS_STATES, required=True)
     try:
         args = ap.parse_args(argv)
     except SystemExit:
         return CLI_USAGE
     out = stdout or sys.stdout
+    if args.cmd == "progress":
+        try:
+            doc = write_progress(args.root, args.task, args.pct, args.step, args.eta_s,
+                                 args.status)
+        except (ValueError, OSError) as exc:
+            print(json.dumps({"error": exc.__class__.__name__}), file=out)
+            return CLI_USAGE
+        print(json.dumps(doc), file=out)
+        return CLI_OK
     if not args.note.strip():
         print(json.dumps({"error": "empty --note"}), file=out)
         return CLI_USAGE
@@ -1064,7 +1163,8 @@ def main(argv=None, spawn_fn=None, stdin=None, stdout=None):
             args.root, args.code, prompt, note=args.note, writes_code=args.writes_code,
             timeout=args.timeout, cwd=args.cwd, stdin=len(prompt) > ARGV_PROMPT_MAX,
             model=args.model, effort=args.effort, floors_in_hooks=args.floors_in_hooks,
-            kind=args.kind)
+            kind=args.kind,
+            extra=("--permission-mode", args.permission_mode) if args.permission_mode else ())
     except Refused as exc:
         print(json.dumps({"refused": str(exc)}), file=out)
         return CLI_REFUSED

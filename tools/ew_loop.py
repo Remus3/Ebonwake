@@ -15,7 +15,8 @@ One tick, under ops/loop/control/loop.lock (fleet_watch.watch_lock):
      ORDER / FIX / RULING escalate to a lane item, answered after merge (plan
      091: one naming ops/fleet_kit/, .claude/, CLAUDE.md or a kit version goes
      to the session instead, answered after `session-done`); else
-     ONE triage spawn (TRIAGE_SPAWN: sonnet, low, bare; kind triage). Answers
+     ONE triage spawn (kit v11 triage_spawn_kwargs(FLOORS_IN_HOOKS=False):
+     sonnet, low, bare; kind triage). Answers
      to one destination go in ONE batch note, HOP lines, OutboundCap (6 a
      day). No governor slot (kit ruling: acknowledgements stay outside).
   d. Finished lane worktrees (before c, so a dirty worktree never blocks a
@@ -448,7 +449,10 @@ def next_number(root, rel, pattern, width):
 # ---------------------------------------------------------------- prompts
 
 GATES = ("Gates before you finish (exactly what ci runs): `python -m ruff check server "
-         "tools tests`, `python -m pytest -q` and `npm test --prefix app` green; every authored file ASCII + LF; no absolute machine path, drive "
+         "tools tests`, `python -m pytest -q` and `npm test --prefix app` green (run the "
+         "whole pytest suite through `python ops/fleet_kit/fleet_suite_gate.py run --owner "
+         "<your owner id> -- python -m pytest -q`; the claims hook denies a bare whole "
+         "suite and its reason names your owner id); every authored file ASCII + LF; no absolute machine path, drive "
          "letter, account id or email in a tracked file. Game ToS floor in CLAUDE.md "
          "is absolute (no game memory, injection, packets, client files or input to "
          "the game window; read-only GETs; robots.txt respected). Do NOT commit, do "
@@ -649,6 +653,31 @@ def dispatchable(rec, open_ids=()):
 
 # ---------------------------------------------------------------- dependencies
 
+# Kit v11 ruling R1 + EW adjudication D3 (2026-10-08): EW's safety floors (Game
+# ToS) live in prompts and code, not hooks, so triage runs bare. Reverses if a
+# floor moves into a hook.
+FLOORS_IN_HOOKS = False
+
+
+def triage_spawn_kwargs(fi):
+    """spawn() keywords for ONE triage run (kit v11+ fleet_inbox)."""
+    return fi.triage_spawn_kwargs(FLOORS_IN_HOOKS)
+
+
+# Kit v12 race guards (FLEET-COMMON 16): every commit / push takes the tree's
+# git lock; every whole pytest suite holds a machine-wide suite-gate slot.
+LOOP_OWNER = "ew-loop.main"
+SUITE_GATE_REL = Path("ops/fleet_kit/fleet_suite_gate.py")
+
+
+def _owner():
+    return os.environ.get("FLEET_CLAIM_OWNER") or LOOP_OWNER
+
+
+def _gitlock():
+    return ew_lane._load("fleet_gitlock", "ops/fleet_kit/fleet_gitlock.py")
+
+
 def _python():
     p = Path(sys.executable)
     alt = p.with_name("python.exe") if p.name.lower() == "pythonw.exe" else p
@@ -660,10 +689,23 @@ def _pythonw():
     return str(p if p.exists() else sys.executable)
 
 
-def _git(args, cwd, input=None):
+def _git_run(args, cwd, input=None):
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
     return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True,
                           input=input, env=env, timeout=600, creationflags=_NO_WINDOW)
+
+
+def _git(args, cwd, input=None, lock=None):
+    """git; a commit or push runs under the tree's kit v12 git lock."""
+    if not args or args[0] not in ("commit", "push"):
+        return _git_run(args, cwd, input)
+    lock = lock or _gitlock().git_lock
+    try:
+        with lock(cwd, _owner(), args[0]):
+            return _git_run(args, cwd, input)
+    except Exception as exc:  # lock timeout / refusal: report as a failed git call
+        return subprocess.CompletedProcess(["git", *args], 3, "",
+                                           f"git lock: {type(exc).__name__}: {exc}")
 
 
 CI_WORKFLOW_REL = Path(".github/workflows/ci.yml")
@@ -715,12 +757,22 @@ def _shell_operator(cmd):
     return None
 
 
+def _whole_suite(argv):
+    """True for a pytest run that names no test FILE (the kit's whole suite)."""
+    if "pytest" not in argv:
+        return False
+    rest = argv[argv.index("pytest") + 1:]
+    return not any(a.endswith(".py") or "::" in a for a in rest)
+
+
 def _gate_argv(cmd):
     argv = shlex.split(cmd)
     if argv[0] == "python":
         argv[0] = _python()
     elif argv[0] == "npm" and sys.platform == "win32":
         argv[0] = "npm.cmd"
+    if _whole_suite(argv):
+        argv = [_python(), str(ROOT / SUITE_GATE_REL), "run", "--owner", _owner(), "--", *argv]
     return argv
 
 
@@ -964,7 +1016,7 @@ class Tick:
             self.paused += 1
             return False
         line = self.spawn(self.fi.triage_prompt(name, text[:NOTE_MAX]), note=name,
-                          writes_code=False, kind="triage", **self.fi.TRIAGE_SPAWN)
+                          writes_code=False, kind="triage", **triage_spawn_kwargs(self.fi))
         if not line or line.get("rc") != 0 or line.get("result") is None:
             return False
         verdict, body = self.fi.parse_verdict(ascii_text(line["result"]))

@@ -1,6 +1,9 @@
 #!/bin/sh
 # EW policy: no Co-Authored-By trailer. Strip it silently.
+# Kit v13 (FLEET-COMMON 17): fleet_identity strips every AI / bot attribution line.
 MSG="$1"
 TMP="$MSG.ew.tmp"
 grep -v -i '^Co-Authored-By:' "$MSG" > "$TMP" && mv "$TMP" "$MSG"
+ROOT="$(git rev-parse --show-toplevel)"
+python "$ROOT/ops/fleet_kit/fleet_identity.py" commit-msg "$1" || true
 exit 0

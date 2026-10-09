@@ -26,7 +26,10 @@ run finishes the remaining steps and repeats nothing destructive.
   into the hand-off. /done runs unprompted once no checklist task remains.
 
 - `git -C <repo> status -s` - identify this session's files.
-- `python tools/eta.py run pytest -- python -m pytest -q` (records its own time).
+- `python tools/eta.py run pytest -- python ops/fleet_kit/fleet_suite_gate.py run --owner <id> -- python -m pytest -q`
+  (records its own time; kit v12: the whole suite runs through the suite gate,
+  `<id>` = this agent's claims owner id `<session_id>.<agent_id>`, which the
+  claims hook's deny reason names).
 - `python tools/eta.py run nodetest -- npm test --prefix app`.
 - `python tools/leak_sweep.py --tree` - must print no HALT. A DEGRADED banner is
   expected without `config/leak_needles.json`; with it, the sweep must be ARMED.
@@ -40,9 +43,13 @@ run finishes the remaining steps and repeats nothing destructive.
   `*.key`, `*.pem`, anything under `ops/runtime/`, or anything that looks like a
   credential. Secrets live in user env vars only (standing order 12).
 - Stage named files only (`git add <files>`), never `git add -A`.
+- Commit through the kit v12 git lock:
+  `python ops/fleet_kit/fleet_gitlock.py run --owner <id> -- git commit ...`
+  (a bare `git commit` is denied by the claims hook).
 - One commit per coherent theme; body records adjudicated decisions
   (decision / alternatives / why) and `refute-rounds: N/3` per reviewed item.
-- No `Co-Authored-By` trailer (the commit-msg hook strips it).
+- No `Co-Authored-By` trailer and no AI / bot attribution line of any kind
+  (FLEET-COMMON 17; the commit-msg hook strips them, pre-push refuses).
 - Hook failure: fix, new commit. Never `--amend`, never `--no-verify`.
 - Lane worktrees: merge each finished lane branch into main here (fast-forward or
   a merge commit), then reset the lane branch to main. Unfinished lanes stay on
@@ -50,8 +57,9 @@ run finishes the remaining steps and repeats nothing destructive.
 
 ### 2. Push (one push per batch)
 
-- `git -C <repo> log @{u}.. --oneline`; if non-empty, `git push origin main`.
-- The pre-push hook runs the leak sweep over the pushed range; a HALT means fix
+- `git -C <repo> log @{u}.. --oneline`; if non-empty,
+  `python ops/fleet_kit/fleet_gitlock.py run --owner <id> -- git push origin main`.
+- The pre-push hook runs the kit v13 identity gate and the leak sweep over the pushed range; a HALT means fix
   the bytes (never print the matched text), re-commit, re-push.
 - Record the push range in the hand-off. Push failure: `/done stopped: push failed - <cause>`.
 - Note the CI run id: `gh run list --branch main --limit 1`. Do not block on it.
