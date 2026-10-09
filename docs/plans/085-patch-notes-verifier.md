@@ -132,3 +132,21 @@ Depends on: 064, 073.
     so a bad regex fails its own loader too. Other data files get the key
     when their rows are first hinted. Reverses if: a generic schema layer
     lands.
+12. First contradicted-row fix (work item Dd505bd, 2026-10-08): the official
+    NA notes (group 10678, "62-64 0.02%" / "65 and above 0.01%") contradict
+    `xp_epochs.json#cap-62-75` (0.01 %). Decision: the row is split into
+    `cap-62-64` (0.02 %) and `cap-65-75` (0.01 %), `verified: true`, each with
+    its official twin's hint and `superseded_by` (`band-62-64` /
+    `band-65-75`); the note names "NA patch notes 2026-10-08". `kill_xp_cap`
+    rows hold `verified` as a bool (`levels._cap_row`), so the date lives in
+    the note, not the field; a hint is regex only (no URL key), so the source
+    is the note text plus the page the verdict carries. The plan 087 tests
+    that pinned the contradiction keep the old row as a test-only legacy copy
+    of the data dir (`_legacy_data`), so contradicted -> digest -> loop item
+    stays covered while tracked data now comes out all `confirmed`.
+    Alternatives: narrow the id-stable row to 62-64 only (leaves Lv 65-75
+    with no cap note); keep id `cap-62-75` with new values (id lies about its
+    band); add a `verified_date` key (schema change for one row). Why:
+    smallest change matching the official table, ids keep the `cap-<lo>-<hi>`
+    rule. Reverses if: a data pass folds `kill_xp_cap_official` into
+    `kill_xp_cap` (plan 087 deviation 2), retiring these rows.

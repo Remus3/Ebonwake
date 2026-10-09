@@ -572,6 +572,35 @@ def test_live_bare_title_list_reads_10678_first_and_confirms_cap75(tmp_path):
 
 ASIA = "patch-20261008-asia.html"
 OLD_BAND = "xp_epochs.json#cap-62-75"
+# Dd505bd: the tracked 62-75 row was split into cap-62-64 / cap-65-75 after the NA
+# 2026-10-08 notes contradicted it; the legacy row lives on here so the
+# contradicted -> digest -> loop work item path stays pinned.
+SPLIT_BANDS = ["xp_epochs.json#cap-62-64", "xp_epochs.json#cap-65-75"]
+LEGACY_ROW = {
+    "level_min": 62, "level_max": 75, "id": "cap-62-75", "verified": False,
+    "note": "per-kill XP cap ~0.01% of the level (buffs included), verify",
+    "superseded_by": ["band-62-64", "band-65-75"],
+    "verify": {"title": "^\\[Updates\\] Patch Notes\\b",
+               "expect": ["(?<![0-9])(?<![0-9]\\.)62 ?(?:-|~|to) ?(?:Lv\\.? ?)?75(?![0-9])[^%]{0,30}?"
+                          "(?:[0-9.]{1,7} ?% ?(?:->|=>|to\\b) ?)?(?<![0-9.])0\\.01 ?%"
+                          "(?! ?(?:->|=>|to\\b))"],
+               "contradict": ["(?<![0-9])(?<![0-9]\\.)62 ?(?:-|~|to) ?(?:Lv\\.? ?)?64(?![0-9])[^%]{0,30}?"
+                              "(?<![0-9.])[0-9]{1,3}(?:\\.[0-9]{1,3})? ?%",
+                              "(?<![0-9])(?<![0-9]\\.)62 ?(?:-|~|to) ?(?:Lv\\.? ?)?75(?![0-9])[^%]{0,30}?"
+                              "(?:[0-9.]{1,7} ?% ?(?:->|=>|to\\b) ?)?(?<![0-9.])(?!0\\.01 ?%)"
+                              "[0-9]{1,3}(?:\\.[0-9]{1,3})? ?%(?! ?(?:->|=>|to\\b))"]}}
+
+
+def _legacy_data(tmp_path):
+    """A copy of the tracked data with the pre-Dd505bd 62-75 row in place of the split."""
+    d = tmp_path / "legacy_data"
+    shutil.copytree(DATA, d)
+    p = d / "xp_epochs.json"
+    doc = json.loads(p.read_text(encoding="ascii"))
+    caps = doc[0]["kill_xp_cap"]
+    caps[:] = [c for c in caps if c.get("id") not in ("cap-62-64", "cap-65-75")] + [LEGACY_ROW]
+    p.write_text(json.dumps(doc), encoding="ascii", newline="\n")
+    return d
 BANDS = [(1, 5), (6, 10), (11, 15), (16, 20), (21, 25), (26, 30), (31, 35), (36, 40), (41, 47),
          (48, 49), (50, 55), (56, 61), (62, 64), (65, 75)]
 NEW_BANDS = [f"xp_epochs.json#band-{lo}-{hi}" for lo, hi in BANDS]
@@ -613,18 +642,21 @@ def test_old_fixture_is_ascii_so_085_matching_is_unchanged():
     assert patchverify.fold(_text()) == _text()
 
 
-def test_asia_fixture_confirms_epoch_presets_bands_books():
+def test_asia_fixture_confirms_epoch_presets_bands_books(tmp_path):
     res = patchverify.check(_asia(), TITLE, patchverify.load()["hinted"])
-    for k in [EPOCH] + PRESETS + NEW_BANDS + BOOKS + LEVEL_ROWS:
+    for k in [EPOCH] + PRESETS + NEW_BANDS + BOOKS + LEVEL_ROWS + SPLIT_BANDS:
         assert res[k]["verdict"] == "confirmed", (k, res[k])
     assert "level: 70 -> 75" in res[EPOCH]["evidence"]
     assert res[BLESS]["evidence"] == "Adventure's Boon: Combat EXP 15% -> 30%"
-    assert res[OLD_BAND] == {"verdict": "contradicted", "evidence": "Lv. 62 - 64: 0.02%"}
-    assert [k for k, v in res.items() if v["verdict"] == "contradicted"] == [OLD_BAND]
+    assert OLD_BAND not in res
+    assert [k for k, v in res.items() if v["verdict"] == "contradicted"] == []
     for k in ("xp_epochs.json#cap-1-5", "xp_epochs.json#cap-50-55", "xp_epochs.json#cap-56-61"):
         assert res[k]["verdict"] == "confirmed", k
     for k, v in res.items():
         assert all(32 <= ord(c) < 127 for c in v["evidence"] or "")
+    old = patchverify.check(_asia(), TITLE, patchverify.load(_legacy_data(tmp_path))["hinted"])
+    assert old[OLD_BAND] == {"verdict": "contradicted", "evidence": "Lv. 62 - 64: 0.02%"}
+    assert [k for k, v in old.items() if v["verdict"] == "contradicted"] == [OLD_BAND]
 
 
 def test_unfolded_asia_text_would_stay_silent():
@@ -645,7 +677,7 @@ def test_band_hints_never_borrow_a_neighbour():
     assert res["xp_epochs.json#band-6-10"]["verdict"] == "contradicted"
     assert res["xp_epochs.json#band-56-61"]["verdict"] == "contradicted", "0.25 is not 0.2"
     assert res["xp_epochs.json#band-41-47"]["verdict"] == "confirmed"
-    for k in ("xp_epochs.json#band-11-15", "xp_epochs.json#band-65-75", OLD_BAND):
+    for k in ["xp_epochs.json#band-11-15", "xp_epochs.json#band-65-75"] + SPLIT_BANDS:
         assert res[k]["verdict"] == "silent", k
     books = patchverify.check("Combat Secret Book (Extra Large): 15%", TITLE, hinted)
     assert books["xp_books.json#xl"]["verdict"] == "confirmed"
@@ -688,7 +720,8 @@ def test_refute_r1_no_false_verdicts_from_neighbouring_text():
     ("Lv. 56 ~ 61: 0.2% -> 0.5%", "xp_epochs.json#band-56-61", "contradicted"),
     ("Lv. 56 - 61: 0.5% to 0.2%", "xp_epochs.json#band-56-61", "confirmed"),
     ("Lv. 56 - 61: 0.5% to 0.2%", "xp_epochs.json#cap-56-61", "confirmed"),
-    ("Lv. 62 - 75: 0.01% -> 0.02%", OLD_BAND, "contradicted"),
+    ("Lv. 62 - 64: 0.01% -> 0.02%", SPLIT_BANDS[0], "confirmed"),
+    ("Lv. 62 - 64: 0.02% -> 0.01%", SPLIT_BANDS[0], "contradicted"),
     # refute r2 #2: a level named before the value is not the Lv 66 row
     ("Combat Secret Book (Small) at Lv. 61: 0.5%", "xp_books.json#small", "silent"),
     ("Combat Secret Book (Medium): 1%", "xp_books.json#medium", "confirmed"),
@@ -754,12 +787,16 @@ def test_bad_alias_rejected(hint, name, msg):
 def test_new_rows_load_and_their_loaders_compile_hints():
     from server.ew import brackets, xpbooks
     res = patchverify.load()
-    assert set(NEW_BANDS + BOOKS + LEVEL_ROWS + [OLD_BAND]) <= set(res["hinted"])
+    assert set(NEW_BANDS + BOOKS + LEVEL_ROWS + SPLIT_BANDS) <= set(res["hinted"])
+    assert OLD_BAND not in res["hinted"]
     eps = levels.load_epochs()
     ep = next(e for e in eps if e["id"] == "cap75-xp-rescale")
     assert "kill_xp_cap_official" not in ep, "the official bands are read by nothing yet"
-    assert [set(c) for c in ep["kill_xp_cap"]] == [set(levels.CAP_FIELDS)] * 4
-    assert levels.kill_cap_note(ep, 63) == "per-kill XP cap ~0.01% of the level (buffs included), verify"
+    assert [set(c) for c in ep["kill_xp_cap"]] == [set(levels.CAP_FIELDS)] * 5
+    assert levels.kill_cap_note(ep, 63) == ("per-kill XP cap 0.02% of the level (buffs included), "
+                                            "NA patch notes 2026-10-08")
+    assert levels.kill_cap_note(ep, 70) == ("per-kill XP cap 0.01% of the level (buffs included), "
+                                            "NA patch notes 2026-10-08")
     assert levels.kill_cap_note(ep, 30) is None
     assert set(brackets.load_tracked()) == set(brackets.TABLES)
     books = xpbooks.load_books()
@@ -815,7 +852,8 @@ def test_asia_verdicts_digest_and_loop_item(tmp_path):
     before = _digest(DATA)
     path = tmp_path.joinpath(*ew_loop.VERDICTS_REL)
     path.parent.mkdir(parents=True)
-    svc = dataverdicts.VerdictService(lambda: [_note(text=_asia())], path=path)
+    svc = dataverdicts.VerdictService(lambda: [_note(text=_asia())], path=path,
+                                      data_dir=_legacy_data(tmp_path))
     v = svc.view()["verdicts"]
     for k in [EPOCH] + PRESETS + NEW_BANDS + BOOKS:
         assert v[k]["verdict"] == "confirmed", k
@@ -857,12 +895,12 @@ def test_api_acceptance_asia(srv_asia, tmp_path):
     before = _digest(DATA)
     st, v = _get(srv_asia, "/api/data/verdicts")
     assert st == 200
-    for k in [EPOCH] + PRESETS + NEW_BANDS + BOOKS:
+    for k in [EPOCH] + PRESETS + NEW_BANDS + BOOKS + SPLIT_BANDS:
         assert v["verdicts"][k]["verdict"] == "confirmed", k
-    assert v["verdicts"][OLD_BAND]["verdict"] == "contradicted"
+    assert OLD_BAND not in v["verdicts"], "Dd505bd: the 62-75 row was split"
     st, sig = _get(srv_asia, "/api/signals")
     row = next(r for r in sig["rows"] if r["id"] == "data")
-    assert row["level"] == "warn" and len(row["lines"]) == 1
+    assert row["level"] == "ok" and row["lines"] == []
     assert _digest(DATA) == before
 
 
@@ -886,12 +924,16 @@ def test_na_fixture_is_the_one_cell_per_line_shape():
     assert "\n75\n18\n18\n" in t and "Combat Secret Book (S)\n0.20%" in t
 
 
-def test_na_fixture_confirms_every_stated_row():
+def test_na_fixture_confirms_every_stated_row(tmp_path):
     res = patchverify.check(_na(), TITLE, patchverify.load()["hinted"])
-    for k in LEVEL_ROWS + NEW_BANDS + BOOKS + PRESETS + CAPS_STATED:
+    for k in LEVEL_ROWS + NEW_BANDS + BOOKS + PRESETS + CAPS_STATED + SPLIT_BANDS:
         assert res[k]["verdict"] == "confirmed", (k, res[k])
-    assert res[OLD_BAND] == {"verdict": "contradicted", "evidence": "62-64 0.02%"}
-    assert [k for k, v in res.items() if v["verdict"] == "contradicted"] == [OLD_BAND]
+    assert res[SPLIT_BANDS[0]]["evidence"] == "62-64 0.02%"
+    assert res[SPLIT_BANDS[1]]["evidence"] == "65 and above 0.01%"
+    assert [k for k, v in res.items() if v["verdict"] == "contradicted"] == []
+    old = patchverify.check(_na(), TITLE, patchverify.load(_legacy_data(tmp_path))["hinted"])
+    assert old[OLD_BAND] == {"verdict": "contradicted", "evidence": "62-64 0.02%"}
+    assert [k for k, v in old.items() if v["verdict"] == "contradicted"] == [OLD_BAND]
     assert {res[k]["verdict"] for k in DROPS} == {"silent"}, "the notes never state them"
     assert res["xp_epochs.json#band-65-75"]["evidence"] == "65 and above 0.01%"
     assert res["xp_books.json#small"]["evidence"] == "Combat Secret Book (S) 0.20%"
