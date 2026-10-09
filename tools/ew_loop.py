@@ -43,6 +43,10 @@ One tick, under ops/loop/control/loop.lock (fleet_watch.watch_lock):
      "fire" = this tick's run count, the item-13 session number).
   Push (unless --no-push): main clean, gates green, leak_sweep --pre-push
   clean, local main ahead of origin/main; at most one push per tick.
+  Plan 096: every gate call goes through Tick.gate - one authoritative run per
+  tree state (verdicts cached by git tree id in gate_verdicts.json); a merge
+  that only adds the ROADMAP flip carries the lane tree's verdict to main, so
+  push does not re-gate it. The verifier runs no pytest.
 
 Every side effect goes through Deps, so tests never spawn, never touch a git
 remote and never call schtasks. Paths are resolved at run time.
@@ -56,8 +60,10 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -80,6 +86,14 @@ ORDERS_REL = CONTROL_REL / "loop_orders.json"
 LEGACY_LEDGER_REL = CONTROL_REL / "inbox_ledger.jsonl"  # pre-kit-v8 shim (deviation 13)
 DELIVERY_REL = CONTROL_REL / "delivery.jsonl"  # plan 093: one line per destination copy
 NOTE_STAMP = "%Y-%m-%d-%H%M"  # the fleet's dashed note stamp (kit batch_note)
+# Plan 096 (perf 2.1): one authoritative gate run per tree state. Verdicts are
+# cached by the git tree of the gated working tree; a red one only for
+# RED_TTL_S (a flake clears), an infrastructure red (suite-gate refusal or slot
+# timeout, subprocess timeout / OSError, no ci workflow) never.
+GATE_CACHE_REL = CONTROL_REL / "gate_verdicts.json"
+GATE_CACHE_MAX = 200
+RED_TTL_S = 2 * 3600
+INFRA_RX = re.compile(r"SUITE-GATE:|TimeoutExpired|OSError|SubprocessError|fail closed")
 # Responder diet (operator 2026-10-05) + kit v8 item 14: an ORDER / FIX /
 # RULING note escalates to a lane work item (a lane does the work, the loop
 # answers after merge); any other note is classified for free and only what
@@ -131,8 +145,10 @@ SKIP_TAGS = (("operator", re.compile(r"^(OPERATOR\b|.*\(physical\))|\bphysical\b
              ("info", re.compile(r"^(NOTE|INFO)\s*[:(]", re.I)))
 STOP = {"the", "and", "for", "from", "with", "per", "via", "tab", "new", "plan", "into",
         "by", "of", "a", "an", "to", "in", "on", "vs"}
+# Plan 096: no pytest - the loop's cached gate run on the same tree is the
+# authoritative whole suite; the verifier reviews, it does not re-gate.
 VERIFY_EXTRA = ("--allowedTools",
-                "Bash(git diff:*),Bash(git status:*),Bash(python -m pytest:*),"
+                "Bash(git diff:*),Bash(git status:*),"
                 "Bash(npm test:*),Bash(node --test:*),Bash(python tools/leak_sweep.py:*)")
 DEEP_EXTRA = ("--permission-mode", "acceptEdits", "--allowedTools",
               ew_lane.CODE_EXTRA[3] + ",WebFetch,WebSearch")
@@ -455,11 +471,15 @@ def next_number(root, rel, pattern, width):
 
 # ---------------------------------------------------------------- prompts
 
-GATES = ("Gates before you finish (exactly what ci runs): `python -m ruff check server "
-         "tools tests`, `python -m pytest -q` and `npm test --prefix app` green (run the "
-         "whole pytest suite through `python ops/fleet_kit/fleet_suite_gate.py run --owner "
-         "<your owner id> -- python -m pytest -q`; the claims hook denies a bare whole "
-         "suite and its reason names your owner id); every authored file ASCII + LF; no absolute machine path, drive "
+# Plan 096: producers run touched tests only; the loop runs the authoritative
+# ci gates (whole suite included) once on the finished tree.
+GATES = ("Gates before you finish: `python -m ruff check server tools tests` green, "
+         "the test files your change touched or added green (targeted, e.g. `python -m "
+         "pytest -q tests/test_x.py`), and `npm test --prefix app` green if you changed "
+         "app/. Do NOT run the whole pytest suite: the loop runs the authoritative ci "
+         "gates (ruff, whole pytest suite, npm test) once on your finished tree and "
+         "sends any failure back to you. Every authored file ASCII + LF "
+         "(tests/test_ascii_lf.py); no absolute machine path, drive "
          "letter, account id or email in a tracked file. Game ToS floor in CLAUDE.md "
          "is absolute (no game memory, injection, packets, client files or input to "
          "the game window; read-only GETs; robots.txt respected). Do NOT commit, do "
@@ -509,11 +529,16 @@ def deep_dive_prompt(root, date, max_plans, today_titles):
             "Write no code. " + GATES.format(task="deep-dive"))
 
 
-def verify_prompt(item, rnd):
+def verify_prompt(item, rnd, tree=None):
+    """Plan 096: the loop's ci gates already ran green on exactly this tree;
+    the verifier reviews and does not re-run pytest (VERIFY_EXTRA has none)."""
+    on = f" (tree {tree[:12]})" if tree else ""
     return (f"You are the EW review-lane verifier, refute round {rnd}/{MAX_ROUNDS}. This "
             f"worktree's uncommitted diff (git status, git diff HEAD) implements: "
-            f"{item['label']}. Read-only: never edit. Re-run the gates, check the plan's "
-            "acceptance, the Game ToS floor in CLAUDE.md, ASCII + LF, and no machine "
+            f"{item['label']}. Read-only: never edit. The loop's authoritative ci gates "
+            f"(ruff, whole pytest suite, npm test) ran green on exactly this tree{on}: "
+            "do not re-run pytest. Check the diff against the plan's acceptance and its "
+            "tests, the Game ToS floor in CLAUDE.md, ASCII + LF, and no machine "
             "path. End with exactly one line 'VERDICT: PASS' or 'VERDICT: FAIL', then "
             "numbered findings for a FAIL.")
 
@@ -834,6 +859,101 @@ def _leak_pre_push(cwd, ref_line):
     return r.returncode == 0
 
 
+def tree_key(cwd):
+    """Plan 096: the git tree id of cwd's working tree as `git add -A` would
+    stage it (the gate cache key). Clean: HEAD^{tree}. Dirty: write-tree over
+    a TEMPORARY copy of the index, so the real index and files are never
+    touched. Ignored files are not tree state. None when cwd is not a work
+    tree root or git fails (the gates then run uncached)."""
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+
+    def run(args, extra=None):
+        return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True,
+                              env=dict(env, **(extra or {})), timeout=600,
+                              creationflags=_NO_WINDOW)
+
+    def out(r):
+        return r.stdout.strip() if r.returncode == 0 else ""
+
+    try:
+        top = out(run(["rev-parse", "--show-toplevel"]))
+        if not top or _norm_path(Path(top)) != _norm_path(cwd):
+            return None
+        st = run(["status", "--porcelain"])
+        if st.returncode != 0:
+            return None
+        if not st.stdout.strip():
+            return out(run(["rev-parse", "HEAD^{tree}"])) or None
+        idx = Path(out(run(["rev-parse", "--git-path", "index"])) or "index")
+        idx = idx if idx.is_absolute() else Path(cwd) / idx
+        with tempfile.TemporaryDirectory(prefix="ew-gate-") as td:
+            tmp = {"GIT_INDEX_FILE": str(Path(td) / "index")}
+            if idx.is_file():
+                shutil.copyfile(idx, tmp["GIT_INDEX_FILE"])
+            elif run(["read-tree", "HEAD"], tmp).returncode != 0:
+                return None
+            if run(["add", "-A"], tmp).returncode != 0:
+                return None
+            return out(run(["write-tree"], tmp)) or None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+class GateCache:
+    """Plan 096: gate verdicts by tree id, ops/loop/control/gate_verdicts.json
+    in the main checkout, newest GATE_CACHE_MAX kept. Written only under the
+    tick's loop lock."""
+
+    def __init__(self, root):
+        self.path = Path(root) / GATE_CACHE_REL
+
+    def _trees(self):
+        doc = read_json(self.path, {})
+        trees = doc.get("trees") if isinstance(doc, dict) else None
+        return dict(trees) if isinstance(trees, dict) else {}
+
+    def get(self, key, now):
+        """The usable entry for key: green, or red younger than RED_TTL_S."""
+        e = self._trees().get(key) if key else None
+        if not isinstance(e, dict) or not isinstance(e.get("ok"), bool):
+            return None
+        if not e["ok"]:
+            ts = epoch_of(e.get("ts"))
+            if ts is None or now - ts > RED_TTL_S:
+                return None
+        return e
+
+    def put(self, key, ok, detail, where, now, via=None):
+        trees = self._trees()
+        trees.pop(key, None)  # re-insert: dict order is recency
+        e = {"ok": bool(ok), "detail": ascii_text(detail or "", 300), "ts": iso(now),
+             "where": ascii_text(where, 80)}
+        if via:
+            e["via"] = via
+        trees[key] = e
+        keep = dict(list(trees.items())[-GATE_CACHE_MAX:])
+        atomic_write(self.path, json.dumps({"trees": keep}, indent=1))
+        return e
+
+    def carry(self, src, dst, git, cwd, now):
+        """Record dst green on src's green verdict when the two trees differ
+        only in the ROADMAP (the loop's own row flip at merge). True if
+        dst is green afterwards."""
+        e = self.get(src, now) if src and dst else None
+        if not e or not e["ok"]:
+            return False
+        if src == dst:
+            return True
+        r = git(["diff", "--name-only", src, dst], cwd)
+        if r.returncode != 0:
+            return False
+        names = {n.strip() for n in (r.stdout or "").splitlines() if n.strip()}
+        if not names <= {ROADMAP_REL.as_posix()}:
+            return False
+        self.put(dst, True, e.get("detail"), "carry", now, via=src)
+        return True
+
+
 def _launch(root, iid, popen=subprocess.Popen):
     """Start the lane worker detached. It breaks away from the Task Scheduler
     job when the job allows it, so the tick's end never ends the lane."""
@@ -869,6 +989,7 @@ class Deps:
         self.launch = lambda iid: _launch(self.root, iid)
         self.git = _git
         self.gates = _gates
+        self.tree_key = tree_key  # plan 096: gate cache key
         self.leak_pre_push = _leak_pre_push
         self.estimate = eta.estimate
         self.record = eta.record
@@ -936,6 +1057,26 @@ class Tick:
                                        clock=deps.clock)
         self.awaiting = self.capped = self.paused = 0
         self.open_ids = set()  # open ROADMAP row ids, set by work_list()
+        self.last_tree = None  # plan 096: tree id of the last gate() call
+
+    # -- plan 096: one authoritative gate run per tree state
+    def gate(self, cwd):
+        """(ok, detail) of the ci gates on cwd's tree, from the verdict cache
+        when this exact tree was gated; else one run, recorded when the tree
+        did not change under it and the verdict is not an infrastructure red."""
+        now = self.d.clock()
+        key = self.d.tree_key(cwd)
+        self.last_tree = key
+        cache = GateCache(self.root)
+        e = cache.get(key, now) if key else None
+        if e:
+            self.step(f"gates cached {'green' if e['ok'] else 'red'} {key[:12]}")
+            return e["ok"], e.get("detail") or ""
+        ok, detail = self.d.gates(cwd)
+        if key and not self.dry and (ok or not INFRA_RX.search(detail or "")) \
+                and self.d.tree_key(cwd) == key:
+            cache.put(key, ok, detail, Path(cwd).name, self.d.clock())
+        return ok, detail
 
     # -- gates on spawning (item f)
     def blocked(self):
@@ -1270,13 +1411,14 @@ class Tick:
             return
         rounds = rec.get("rounds", 0)
         while True:
-            ok, detail = self.d.gates(wt)
+            ok, detail = self.gate(wt)
             findings = [] if ok else ["gates failed: " + detail]
             findings += self.extra_checks(rec, wt)
             if not findings and rounds < MAX_ROUNDS:  # never a round 4 (rule 7)
                 if self.blocked():
                     return  # retry next tick
-                line = self.spawn(verify_prompt(rec, rounds + 1), note=f"lane-review-{rec['id']}",
+                line = self.spawn(verify_prompt(rec, rounds + 1, self.last_tree),
+                                  note=f"lane-review-{rec['id']}",
                                   writes_code=False, cwd=wt, extra=VERIFY_EXTRA, kind="build",
                                   governor="queued", governor_timeout=GATE_TIMEOUT_S,
                                   timeout=GATE_TIMEOUT_S)
@@ -1587,7 +1729,21 @@ class Tick:
                 rec["merged_at"] = iso(self.d.clock())
             self.drop_keep(rec)
             self.step(f"{rec['id']}: merged")
+            self.carry_verdict(rec, main)
         self.items.put(rec)
+
+    def carry_verdict(self, rec, main):
+        """Plan 096: main's new tree inherits the lane tree's green verdict
+        when the merge added only the ROADMAP row flip (main had not moved),
+        so push() does not gate the same code twice."""
+        g = self.d.git
+        src = g(["rev-parse", f"{rec['commit']}^{{tree}}"], main)
+        dst = g(["rev-parse", "HEAD^{tree}"], main)
+        if src.returncode or dst.returncode:
+            return
+        src, dst = src.stdout.strip(), dst.stdout.strip()
+        if src != dst and GateCache(self.root).carry(src, dst, g, main, self.d.clock()):
+            self.step(f"{rec['id']}: gate verdict carried to main {dst[:12]}")
 
     def keep(self, rec):
         """Plan 058 step 1: point refs/ew/keep/<id> at the unmerged commit in
@@ -1848,7 +2004,7 @@ class Tick:
         ahead = g(["rev-list", "--count", "origin/main..main"], main).stdout.strip()
         if not ahead.isdigit() or int(ahead) == 0:
             return
-        ok, detail = self.d.gates(main)
+        ok, detail = self.gate(main)  # plan 096: an already gated tree is not re-run
         if not ok:
             self.step("push skipped: gates red on main")
             return
