@@ -6,7 +6,7 @@
 
 **A Black Desert Online companion that never touches the game.**
 
-[![CI: pytest + node --test + leak sweep](https://img.shields.io/badge/CI-pytest%20%2B%20node%20--test%20%2B%20leak%20sweep-informational)](.github/workflows/ci.yml)
+[![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](.github/workflows/ci.yml)
 [![Node 20+](https://img.shields.io/badge/node-20%2B-green)](app/package.json)
@@ -17,11 +17,8 @@ overlay for one Black Desert Online player, fed by a small local server on
 `127.0.0.1`. It runs beside the game, not inside it.
 
 > **ToS safety, in one line: Ebonwake does no memory reading, no injection and
-> no input automation - ever.** It never reads or writes game memory, never
-> loads anything into the game process, never hooks rendering, never touches
-> packets or client files, and never sends a single key or click to the game
-> window. The overlay is an ordinary window of its own that ignores the mouse.
-> See [What it never does](#what-it-never-does).
+> no input automation - ever.** See [What it never does](#what-it-never-does)
+> and [`docs/research/0001-bdo-data-and-tos.md`](docs/research/0001-bdo-data-and-tos.md).
 
 ![Ebonwake dashboard, Market tab: a watchlist row, item detail, add/edit form and a hot list of Central Market prices](docs/assets/dashboard-market.png)
 
@@ -85,7 +82,7 @@ low-level keyboard hooks. Run the game borderless or windowed. Long form:
 ## Quick start
 
 ```
-git clone <this repository's URL> Ebonwake
+git clone <https URL from this page's Code button> Ebonwake
 cd Ebonwake
 python tools/install_hooks.py      # once: wires the tracked git hooks
 python -m server.ew                # local server on 127.0.0.1:8940
@@ -145,9 +142,10 @@ verifier before any done-claim, and a leak sweep on every commit and push.
 
 ## Status
 
-Plans 001-011 are done (skeleton, market, today, progress, grind, events,
-deadeye, game-state watch, OCR, packaging, leveling tracker). Plans 012-014 are
-open: grind-spot recommender, season-pass objectives, coupon check. See
+Shipped: every tab above plus the overlay, game-state watch, screenshot OCR,
+official-notice import, world bosses, enhancement / market / grind planners and
+a start-on-login package. Open: the self-running work loop (built; scheduled
+task read-back pending). The open-work queue is
 [`docs/plans/ROADMAP.md`](docs/plans/ROADMAP.md). There is no packaged release
 yet; run from a clone.
 
