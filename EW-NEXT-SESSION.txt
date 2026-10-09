@@ -1,31 +1,42 @@
 EW NEXT SESSION
 ---------------
-SESSION: 19
+SESSION: 20
 
-Next action: adjudicate N94ff08 (kit v10 order, state adjudicate after
-refute 3/3; WIP commit 0bbc472 in lane-1 worktree, unmerged). Run the
-adjudicator, merge 0bbc472 onto main if it rules accept (verify v10
-MANIFEST + tests/test_fleet_kit_conformance.py + hook in log mode), mark
-the item merged, push, then send ONE follow-up ANSWER to MAIN (HOP 2)
-with manifest sha256, conformance result, hook mode, and the proxy
-no-restart-on-failure mention. The 16:04 v10 ANSWER already went out
-marked UNVERIFIED/pending. Then watch the loop pick up the patchverify
-re-run below; read back /api/data/verdicts after it merges (restart the
-server on the merge first; server still on 24171e7).
+Next action: finish order Nf0e1ea (MAIN ORDER kit v11, note
+2026-10-08-1840-from-MAIN-ORDER-to-EW-FLEET-KIT-v11-supersedes-v10-anchored-
+hook-permission-mode-triage-kwargs-ONE-ANSWER.md). Read
+ops/loop/control/loop_items/Nf0e1ea.json first. At 20:28 it was kind
+resolve, lane build (lane-0), state dispatched, keep ref
+refs/ew/keep/Nf0e1ea = 930fe43 (plan 092 + tools/ew_loop.py
+triage_spawn_kwargs fallback + tests; refute round 1 FAIL: v11 NOT
+vendored, conformance not re-pinned - the lane brief forbids
+ops/fleet_kit/, CLAUDE.md, .claude/, it was dispatched before 091
+merged). If it reaches adjudicate / partial / merged-partial: run the
+adjudicator, then in the MAIN checkout do the v11 vendoring the same way
+as v10 (verify bundle hashes vs the order, vendor into ops/fleet_kit/,
+re-embed FLEET-COMMON, re-pin tests/test_fleet_kit_conformance.py to v11,
+wire hook verbatim from the bundle, keep subagent_first.mode = log), gates,
+push, then ONE ANSWER HOP 2 to MAIN. If the loop merged it complete:
+verify ops/fleet_kit/MANIFEST.json version 11 and conformance green.
+Outbound cap: 5/6 used on 2026-10-08 (resets per local day).
 
 Carried forward (not acted on yet):
-- NOTE: session 18 (2026-10-08): second-account headless proxy (port
-  3456, CLAUDE_HEADLESS_BASE_URL) was down from ~07:04; every lane refused
-  "proxy unreachable: TimeoutError" and N94ff08 / N19178f / H1c02d2 went
-  gave-up. Proxy task RC-TeamClaudeProxy is logon-trigger only, no
-  restart-on-failure. Recovery: `schtasks /run /tn RC-TeamClaudeProxy`
-  (not edited), probe 3456 listening, reset gave-up loop_items to state
-  refused / attempts 0, fire \EbonwakeOps\LaneLoop. Done 14:22, read back:
-  3456 listening, fire 289 dispatched all three. Mention the missing
-  restart-on-failure to MAIN in EW's next batched ANSWER (not yet sent).
-- NOTE: session 18 read back 18:23: N19178f merged 2eb1a54 (ci 37834429133
-  + codeql success), ANSWER HOP 2 20261008-1449 in moon_sync_outbox.
-  H1c02d2 no-change (re-queued below with new text).
+- Subagent-first hook in LOG mode since 2026-10-08; session 19 =
+  interactive session 1 of 3. Session 19 logged 19 would-deny / 53 allow
+  rows in ops/loop/control/subagent_first.jsonl - review whether any was
+  undispatchable. Deny target 2026-10-11 after 3 interactive sessions with
+  no undispatchable would-deny row; then write `deny` into
+  ops/loop/control/subagent_first.mode and say so in the next batched note
+  to MAIN.
+- Patchverify checked_at: every /api/data/verdicts checked_at still read
+  2026-10-08T11:35:22Z after merge 4979187 + server restart. Check whether
+  the patchverify recompute refreshes checked_at (stale verdict cache vs
+  only the timestamp not updated); fix with a failing test first.
+- NOTE: xp_epochs cap-62-75 reads contradicted, which is intended (the
+  notes split it into band-62-64 / band-65-75, both confirmed). Loop item
+  Dd505bd (data lane, lane-1, dispatched 20:26) was spawned on that verdict
+  and is editing the row; after it merges, check it did not undo the band
+  split, restart the server on the merge, read back verdicts.
 - NOTE: session 17 (2026-10-08): old C: checkout + C: ew-worktrees sent to
   the Recycle Bin after the reference check (tasks / shortcuts / env /
   worktrees clean); Test-Path both False read back. Desktop Ebonwake.lnk
@@ -42,15 +53,6 @@ Carried forward (not acted on yet):
   links moved to /News/Notice/Detail (H29230b, 0341fca) and bare list titles
   without [Updates] (H184b9e, 24171e7). To force a notice re-read: set
   eventnotices_attempt.json at=0 AND eventnotices_list.json fetched_at=0.
-- Patchverify hint tuning (re-run; first lane H1c02d2 ended no-change
-  with no reason recorded): 36 hinted rows read `silent` against 10678
-  although the notes state the Lv 70-75 +3/level AP/DR bonus (brackets
-  lv-bonus-70..75) and the per-kill EXP cap table (xp_epochs cap-*). Check
-  each hint's expect patterns against the cached patch-notes text (folded)
-  and fix the hints so stated rows read confirmed; data rows stay unedited
-  except the hints. If truly no change is needed, write the one-line why
-  into docs/research. Lane fixtures must be cut from live markup, never
-  invented (0016 deviation 1 missed the bare title).
 - NOTE: repo moved itself to drive E: on 2026-10-08 (operator order,
   same folder name; robocopy 7021/7021 files, git status clean, fsck ok,
   HEAD equal). Loop task, logon task, both Desktop shortcuts and the
@@ -202,33 +204,54 @@ Carried forward (not acted on yet):
 - NOTE: a plain `git pull` merge message carries the repo URL, which the
   pre-push leak sweep refuses; merge origin/main with an explicit -m.
 
-Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew, HALT absent.
-State: ops/loop/control/loop_items/*.json, progress/loop.json,
-progress/lane-<i>.json, inbox_status.json. Merge-stuck items are fixed by
-a session agent (merge refs/ew/keep/<id> onto main, keep both sides, mark
-item merged, delete keep ref, push). Restart: stop the server pid from
-/api/version, then `python tools/launch.py --server-only`. Proxy probe:
-netstat for :3456 LISTENING.
+Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew, HALT absent, task
+Ready, last result 0. State: ops/loop/control/loop_items/*.json,
+progress/loop.json, progress/lane-<i>.json, inbox_status.json.
+Merge-stuck items are fixed by a session agent (merge refs/ew/keep/<id>
+onto main, keep both sides, mark item merged, delete keep ref, push).
+Restart: stop the server pid from /api/version, then `python
+tools/launch.py --server-only`. Proxy probe: netstat for :3456 LISTENING.
+Memory is tight on the box: Claude Code reaped a background watcher
+~19:45 2026-10-08 for low system memory; run suites sequentially.
 
-Acceptance: N94ff08 merged and v10 conformance green with the follow-up
-ANSWER in moon_sync_outbox; patchverify rows read confirmed or a recorded
-why; nothing in adjudicate / merge-conflict / gave-up / failed-dirty.
+Acceptance: Nf0e1ea closed with v11 vendored, conformance pinned to v11 and
+green, hook still log, ONE ANSWER HOP 2 in moon_sync_outbox; Dd505bd merged
+without undoing the band split (band rows read confirmed); nothing in adjudicate /
+merge-conflict / gave-up / failed-dirty.
 
-Do NOT redo: session 18: proxy restart + gave-up reset (NOTE above);
-N19178f ewst teardown merged 2eb1a54 and answered. Sessions 16-17 work
-listed under the NOTE bullets above (recycle, salvage refs, 087/088,
-notice fixes). Older sessions 10-15: loop/inbox read-backs, 73553e9,
-dependabot PR 2, research 0010-0012, plans 079-086, c3df83e, b8fbef8.
+Do NOT redo: session 19: N94ff08 kit v10 adjudicated (decision: merge
+0bbc472 as partial, then F1-F7 in one main-checkout commit; alts
+accept-as-is / reject-redo in lane; why: lane brief forbade
+ops/fleet_kit/, CLAUDE.md, .claude/ edits and could not read the bundle;
+refute-rounds 3/3) - merged 126cfc7, fixes 92801b4 (v10 17/17 hashes,
+FLEET-COMMON re-embedded, conformance re-pinned, subagent_first.mode=log,
+PreToolUse hook, done.md dispatch, emit()); CI 37861072763 + codeql
+37861072741 success; ANSWER HOP 2
+moon_sync_outbox/20261008-1848-from-EW-ANSWER-re-...-v10... (supersedes
+16:04; carries the proxy no-restart-on-failure mention and the routing
+defect). Session-18 proxy restart-on-failure mention: SENT in that 1848
+ANSWER. Plan 091 merged by loop 2c07b79. Patchverify re-run H0a5846
+merged 4979187 (verifier PASS); server restarted on 4979187, /api/version
+read back; verdicts 37 hinted rows = 32 confirmed, 4 silent (drop_buffs
+adv-item-collection-scroll, agris-fever, ecology-knowledge,
+item-collection-scroll - expected per plan 087, the page never states
+them), 1 contradicted (cap-62-75, above); lv-bonus-70..75 all confirmed.
+Plan 090 marked done in place. Session 18: proxy restart + gave-up reset;
+N19178f merged 2eb1a54 and answered (ANSWER HOP 2 20261008-1449).
+Sessions 16-17 under the NOTE bullets above. Older sessions 10-15:
+loop/inbox read-backs, 73553e9, dependabot PR 2, research 0010-0012,
+plans 079-086, c3df83e, b8fbef8.
 
-In flight: none. Lanes 0/1/2 finished (progress/lane-0..2.json status
-done 14:27 / 14:35 / 14:28); lane-1 worktree holds N94ff08 WIP (do not
-reset it before the adjudicator rules). Loop fire 301 idle, deep-dive
-done today.
+In flight: Nf0e1ea resolve, lane-0 (build), progress/lane-0.json +
+progress/pNf0e1ea-resolve.json, dispatched 20:26, ETA ~14m. Dd505bd
+data fix, lane-1 (data), progress/lane-1.json, dispatched 20:26, ETA
+~21m. Lane-2 idle (done 19:22).
 
-Status: session 18 made no code changes; hand-off commit only. Loop
-pushed 9ed2bbf + 2eb1a54 (ci 37834429133, codeql 37834429001 success).
-Gates (session 18 /done): pytest ok, node 699 pass 0 fail, leak ARMED
-(19). Headless runs 35/120 per 24 h. Server on 24171e7, /api/version ok.
-Session jsonl < 2 MB.
+Status: session 19 commits: 126cfc7 + 92801b4 (kit v10), plus this
+hand-off commit. Loop pushed 4 commits at fire 304 (19:39): d4c3308,
+2c07b79, a7ea26b, 4979187; ci 37865894958 + codeql 37865894961 success.
+Gates (session 19 /done): pytest ok (229 s), node 699 pass 0 fail, leak
+ARMED (19). Server on 4979187, /api/version read back. Session jsonl
+< 2 MB (largest 1.97 MB).
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.

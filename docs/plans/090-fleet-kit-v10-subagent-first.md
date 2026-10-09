@@ -1,9 +1,9 @@
 # Plan 090 - Fleet kit v10: subagent-first hook, headless and inbox fixes
 
-Status: partial (lane-1, order N94ff08). ORDER NOT CLOSED: acceptance is not met
-until the main session does items 1, 2, 3, 4 and 5. Merging this lane does not
-close the order, and no closing ANSWER goes out on this lane's merge alone. See
-ROADMAP "Order N94ff08 - blocked items".
+Status: done 2026-10-08 (session 19). Lane-1 WIP 0bbc472 merged as a partial
+(126cfc7), then items 1-6 closed in the main checkout (92801b4); adjudicated,
+refute-rounds 3/3. See ROADMAP "Order N94ff08 - closed". The original lane
+status follows for the record: partial (lane-1), items 1-5 waited on a session.
 
 Order items:
 
