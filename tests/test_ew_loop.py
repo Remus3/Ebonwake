@@ -86,6 +86,12 @@ def deps(root, **over):
     base.update(over)
     d = ew_loop.Deps(root, **base)
     d.seen = seen
+    # plan 098: the detached review / push workers run inline in tests (same
+    # process, same deps), so a tick's observable end state is unchanged
+    if "launch_review" not in over:
+        d.launch_review = lambda iid: ew_loop.review_worker(iid, deps=d) or 4243
+    if "launch_push" not in over:
+        d.launch_push = lambda: ew_loop.push_worker(deps=d) or 4244
     return d
 
 
@@ -1351,7 +1357,10 @@ def marker(tree, updated, status="blocked", needs=("013",)):
 def finish(root):
     d = deps(root, git=real_git, lane_state=lambda: ALL_RUNNING)
     doc = ew_loop.tick(deps=d, no_push=True)
-    return ew_loop.Items(root).get("012"), doc
+    rec = ew_loop.Items(root).get("012")
+    # plan 098: the review worker's steps land in the record, not the tick log
+    doc["log"] = doc["log"] + rec.get("review_log", [])
+    return rec, doc
 
 
 def test_fresh_blocked_marker_sets_blocked_not_no_change(tmp_path):
@@ -2145,3 +2154,167 @@ def test_tick_logs_a_bad_hooks_path_without_failing(tmp_path):
     doc = ew_loop.tick(deps=deps(root, git=git), no_push=True)
     assert doc.get("state") != "busy"
     assert any("hooksPath" in line for line in progress(root)["log"])
+
+
+# ---------------------------------------------------------------- plan 098: detached review worker
+
+def _recorder(seen, key, pid=5150):
+    def launch(*args):
+        seen.setdefault(key, []).append(args[0] if args else None)
+        return pid
+    return launch
+
+
+def _all_running():
+    return [{"index": i, "state": "RUNNING", "lane": n}
+            for i, n in enumerate(("build", "data", "review"))]
+
+
+def test_tick_launches_a_review_worker_and_runs_no_gate_or_spawn(tmp_path):
+    root, wt = git_world(tmp_path)
+    seen, gated = {}, []
+    sp = FakeSpawn()
+    d = deps(root, spawn=sp, git=real_git, lane_state=_all_running,
+             gates=lambda cwd: gated.append(cwd) or (True, "green"),
+             launch_review=_recorder(seen, "review"))
+    doc = ew_loop.tick(deps=d, no_push=True)
+    assert seen["review"] == ["012"] and gated == [] and sp.calls == []
+    rec = ew_loop.Items(root).get("012")
+    assert rec["state"] == "ran" and rec["review_launch"]
+    assert any(r["id"] == "012" and r["state"] == "reviewing" for r in doc["checklist"])
+    assert isinstance(doc["tick_s"], (int, float))
+    ew_loop.tick(deps=d, no_push=True)  # worker in flight (startup grace): no relaunch
+    assert seen["review"] == ["012"]
+
+
+def test_two_finished_items_are_reviewed_in_parallel(tmp_path):
+    root, wt = git_world(tmp_path)
+    ew_loop.Items(root).put({"id": "013", "kind": "plan", "title": "t", "label": "plan 013: t",
+                             "state": "committed", "worktree": str(wt), "commit": "abc",
+                             "lane": "data", "rounds": 0})
+    seen = {}
+    d = deps(root, git=real_git, lane_state=_all_running, launch_review=_recorder(seen, "review"))
+    ew_loop.tick(deps=d, no_push=True)
+    assert sorted(seen["review"]) == ["012", "013"]
+
+
+def test_ran_item_waits_while_spawning_is_blocked(tmp_path):
+    root, wt = git_world(tmp_path)
+    ew_loop.backoff_hit(root, 1_790_000_000.0, "usage limit")
+    seen = {}
+    d = deps(root, git=real_git, lane_state=_all_running, launch_review=_recorder(seen, "review"))
+    ew_loop.tick(deps=d, no_push=True)
+    assert "review" not in seen and "review_launch" not in ew_loop.Items(root).get("012")
+
+
+def test_dead_review_worker_is_relaunched_then_parked_at_the_cap(tmp_path):
+    root, wt = git_world(tmp_path)
+    items = ew_loop.Items(root)
+    rec = items.get("012")
+    rec.update(review_launch=ew_loop.iso(1_790_000_000.0), worker_pid=999)
+    items.put(rec)
+    seen = {}
+    d = deps(root, git=real_git, lane_state=_all_running, pid_alive=lambda pid: pid != 999,
+             launch_review=_recorder(seen, "review"))
+    ew_loop.tick(deps=d, no_push=True)
+    rec = items.get("012")
+    assert seen["review"] == ["012"] and rec["review_crashes"] == 1
+    assert "worker_pid" not in rec
+    rec["worker_pid"] = 999  # the relaunched worker died too
+    items.put(rec)
+    ew_loop.tick(deps=d, no_push=True)
+    rec = items.get("012")
+    assert seen["review"] == ["012"] and rec["review_crashes"] == ew_loop.MAX_ATTEMPTS
+    # parked: retry_refused salvages the dirty worktree as an unmerged WIP
+    assert rec["state"] in ("failed-dirty", "failed") and "review worker" in rec["error"]
+    assert "review_launch" not in rec
+
+
+def test_review_worker_that_never_started_counts_as_a_crash(tmp_path):
+    root, wt = git_world(tmp_path)
+    items = ew_loop.Items(root)
+    rec = items.get("012")
+    rec["review_launch"] = ew_loop.iso(1_790_000_000.0 - ew_loop.REVIEW_START_S - 1)
+    items.put(rec)
+    seen = {}
+    d = deps(root, git=real_git, lane_state=_all_running, launch_review=_recorder(seen, "review"))
+    ew_loop.tick(deps=d, no_push=True)
+    assert seen["review"] == ["012"] and items.get("012")["review_crashes"] == 1
+
+
+def test_review_worker_processes_its_item_and_clears_its_markers(tmp_path):
+    root, wt = git_world(tmp_path)
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: PASS"}])
+    d = deps(root, spawn=sp, git=real_git, lane_state=_all_running)
+    assert ew_loop.review_worker("012", deps=d) == 0
+    rec = ew_loop.Items(root).get("012")
+    assert rec["state"] == "merged" and "worker_pid" not in rec and "review_launch" not in rec
+    assert any("merged" in line for line in rec["review_log"])
+    assert "loop-review" in d.seen["record"]
+    assert ew_loop.review_worker("012", deps=d) == 0  # not ran / committed: no-op
+    assert len(sp.calls) == 1
+
+
+def test_review_worker_refuses_an_item_another_live_worker_holds(tmp_path):
+    root, wt = git_world(tmp_path)
+    items = ew_loop.Items(root)
+    rec = items.get("012")
+    rec["worker_pid"] = os.getpid() + 1
+    items.put(rec)
+    sp = FakeSpawn()
+    d = deps(root, spawn=sp, git=real_git, pid_alive=lambda pid: True)
+    assert ew_loop.review_worker("012", deps=d) == 0
+    assert sp.calls == [] and items.get("012")["worker_pid"] == os.getpid() + 1
+
+
+def test_busy_merge_lock_defers_the_merge(tmp_path):
+    root, wt = git_world(tmp_path)
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: PASS"}])
+    real_lock = ew_loop._load_watch().watch_lock
+
+    @contextlib.contextmanager
+    def lock(path):
+        if Path(path).name == "merge.lock":
+            raise d.watch.LockBusy("held")
+        with real_lock(path):
+            yield
+
+    d = deps(root, spawn=sp, git=real_git, lane_state=_all_running, lock=lock)
+    ew_loop.tick(deps=d, no_push=True)
+    rec = ew_loop.Items(root).get("012")
+    assert rec["state"] == "committed" and not (root / "feature.txt").exists()
+    d.lock = real_lock
+    ew_loop.tick(deps=d, no_push=True)
+    assert ew_loop.Items(root).get("012")["state"] == "merged"
+
+
+def test_tick_launches_one_push_worker_when_main_is_ahead(tmp_path):
+    root = make_root(tmp_path, roadmap="", handoff="")
+    seen = {}
+    gated = []
+    d = deps(root, git=FakeGit(), launch_push=_recorder(seen, "push"),
+             gates=lambda cwd: gated.append(cwd) or (True, "green"))
+    ew_loop.tick(deps=d)
+    assert seen["push"] == [None] and gated == []  # the tick never gates main
+    ew_loop.tick(deps=d)  # launched, not started yet: no second worker
+    assert seen["push"] == [None]
+    for kw, g in (({"no_push": True}, FakeGit()), ({}, FakeGit(ahead="0"))):
+        (root / ew_loop.PUSH_WORKER_REL).unlink(missing_ok=True)
+        seen.clear()
+        ew_loop.tick(deps=deps(root, git=g, launch_push=_recorder(seen, "push")), **kw)
+        assert "push" not in seen
+
+
+def test_launch_review_and_push_argv(tmp_path):
+    argvs = []
+
+    class P:
+        pid = 9
+
+    def popen(argv, creationflags=0, **kw):
+        argvs.append(argv)
+        return P()
+
+    assert ew_loop._launch(tmp_path, "012", popen=popen, cmd="review") == 9
+    assert ew_loop._launch(tmp_path, None, popen=popen, cmd="push") == 9
+    assert argvs[0][-2:] == ["review", "012"] and argvs[1][-1] == "push"
