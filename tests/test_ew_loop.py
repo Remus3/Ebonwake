@@ -11,9 +11,16 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 import ew_loop  # noqa: E402
+
+# Plan 097: most tests here build a real git world under tmp_path; the
+# module is one git unit (--dist loadfile keeps it on one worker). Tests over
+# about 1.5 s are also marked slow.
+pytestmark = pytest.mark.git
 
 ROADMAP = """# Ebonwake roadmap
 
@@ -706,6 +713,7 @@ def test_refute_rounds_cap_at_three_then_adjudicate_unmerged(tmp_path):
     assert "refute-rounds: 3/3" in git(root, "log", "-1", "--format=%B", rec["commit"])
 
 
+@pytest.mark.slow
 def test_red_gates_after_three_rounds_keep_wip_unmerged(tmp_path):
     root, wt = git_world(tmp_path)
     sp = FakeSpawn()
@@ -985,6 +993,7 @@ def test_checklist_eta_is_lane_median_less_elapsed(tmp_path):
     assert "lane-data-code" in kinds and "loop-review" not in kinds
 
 
+@pytest.mark.slow
 def test_verifier_crash_is_counted_then_adjudicated(tmp_path):
     root, wt = git_world(tmp_path)
     crash = {"rc": 1, "error": "exit 1", "result": "boom"}
@@ -1051,7 +1060,9 @@ def _ci_tree(tmp_path, text=None):
     return tmp_path
 
 
-def test_loop_gates_run_exactly_what_ci_runs(tmp_path):
+def test_loop_gates_run_exactly_what_ci_runs(tmp_path, monkeypatch):
+    # plan 097: xdist args are covered by tests/test_tiers.py; serial here
+    monkeypatch.setattr(ew_loop, "_xdist_available", lambda: False)
     cwd, ran = _ci_tree(tmp_path), []
 
     def run(argv, cwd):
@@ -1177,6 +1188,7 @@ def test_lane_commit_never_flips_roadmap_merge_does(tmp_path):
     assert git(root, "status", "--porcelain") == ""
 
 
+@pytest.mark.slow
 def test_parallel_lanes_flipping_adjacent_rows_both_merge(tmp_path):
     # the Nfa7953 / 013 / 014 shape: two lanes from one base, adjacent ROADMAP rows
     def a(wt):
@@ -1198,6 +1210,7 @@ def test_parallel_lanes_flipping_adjacent_rows_both_merge(tmp_path):
     assert git(root, "status", "--porcelain") == ""
 
 
+@pytest.mark.slow
 def test_real_code_conflict_still_aborts_cleanly(tmp_path):
     root = _two_lane_world(tmp_path, lambda wt: (wt / "f.txt").write_text("a\n"),
                            lambda wt: (wt / "f.txt").write_text("b\n"))
@@ -1384,6 +1397,7 @@ def test_worktree_marker_is_preferred_over_main_checkout(tmp_path):
     assert rec2["state"] == "blocked" and rec2["needs"] == ["014"]
 
 
+@pytest.mark.slow
 def test_malformed_markers_are_plain_no_change_with_a_step_line(tmp_path):
     cases = [{"updated": ew_loop.iso(T0 - 60), "needs": None},
              {"updated": ew_loop.iso(T0 - 60), "needs": ("13", "abc")},
@@ -1507,6 +1521,7 @@ def test_no_change_with_dependency_still_open_is_reconsidered_later(tmp_path):
     assert "rearmed" not in items.get("012") and d.seen["launch"] == ["013"]
 
 
+@pytest.mark.slow
 def test_merge_records_merged_at_only_when_it_flips_and_succeeds(tmp_path):
     root, wt = git_world(tmp_path)
     sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: PASS"}])
@@ -1732,6 +1747,7 @@ def keep_refs(root):
     return git(root, "for-each-ref", "--format=%(refname) %(objectname)", "refs/ew/keep")
 
 
+@pytest.mark.slow
 def test_conflict_keeps_the_lane_commit_under_a_ref(tmp_path):
     root, items = _conflict_world(tmp_path)
     rec = items.get("013")
@@ -1740,6 +1756,7 @@ def test_conflict_keeps_the_lane_commit_under_a_ref(tmp_path):
     assert items.get("012")["state"] == "merged"
 
 
+@pytest.mark.slow
 def test_roadmap_only_conflict_never_keeps_a_ref(tmp_path):
     def a(wt):
         (wt / "a.txt").write_text("a\n")
@@ -1757,6 +1774,7 @@ def test_roadmap_only_conflict_never_keeps_a_ref(tmp_path):
     assert all(r.get("kind") != "resolve" for r in ew_loop.Items(root).all().values())
 
 
+@pytest.mark.slow
 def test_next_tick_dispatches_a_resolve_lane_first(tmp_path):
     root, items = _conflict_world(tmp_path)
     rm = root / "docs/plans/ROADMAP.md"
@@ -1810,6 +1828,7 @@ def _review(root, verdicts=1):
                                     for i, n in enumerate(("build", "data", "review"))])
 
 
+@pytest.mark.slow
 def test_resolve_lane_merges_through_the_normal_path_and_drops_the_ref(tmp_path):
     root, items = _conflict_world(tmp_path)
     kept = items.get("013")["commit"]
@@ -1827,6 +1846,7 @@ def test_resolve_lane_merges_through_the_normal_path_and_drops_the_ref(tmp_path)
     assert git(root, "status", "--porcelain") == ""
 
 
+@pytest.mark.slow
 def test_second_conflict_reenters_resolve_then_caps(tmp_path):
     root, items = _conflict_world(tmp_path)
     ew_loop.tick(deps=_free(root, tmp_path), no_push=True)
@@ -1848,6 +1868,7 @@ def test_second_conflict_reenters_resolve_then_caps(tmp_path):
     assert row["state"] == "merge-conflict"
 
 
+@pytest.mark.slow
 def test_lost_resolve_lane_is_redispatched_as_resolve(tmp_path):
     root, items = _conflict_world(tmp_path)
     ew_loop.tick(deps=_free(root, tmp_path), no_push=True)
@@ -1859,6 +1880,7 @@ def test_lost_resolve_lane_is_redispatched_as_resolve(tmp_path):
     assert rec["attempts"] == 2 and "refs/ew/keep/013" in rec["prompt"]
 
 
+@pytest.mark.slow
 def test_hand_merged_conflict_settles_as_merged_and_drops_the_ref(tmp_path):
     root, items = _conflict_world(tmp_path)
     git(root, "merge", "-q", "--no-ff", "-X", "theirs", "-m", "by hand",
@@ -1869,6 +1891,7 @@ def test_hand_merged_conflict_settles_as_merged_and_drops_the_ref(tmp_path):
     assert "013" not in d.seen["launch"]
 
 
+@pytest.mark.slow
 def test_legacy_conflict_without_a_ref_gets_one(tmp_path):
     root, items = _conflict_world(tmp_path)
     rec = items.get("013")
@@ -1959,6 +1982,7 @@ def test_main_hook_refused_merge_is_parked_without_resolve_runs(tmp_path):
     assert ew_loop.Items(root).get("012")["state"] == "merge-refused"
 
 
+@pytest.mark.slow
 def test_pre_fix_failed_dirty_record_is_retried(tmp_path):
     # backfill: the 031 shape - failed-dirty, verdict PASS, work staged, no counters
     root, wt = git_world(tmp_path)
@@ -1975,6 +1999,7 @@ def test_pre_fix_failed_dirty_record_is_retried(tmp_path):
     assert "refute-rounds: 0/3" in git(root, "log", "-1", "--format=%B", rec["commit"])
 
 
+@pytest.mark.slow
 def test_refused_commit_of_red_work_is_kept_unmerged_and_frees_the_lane(tmp_path):
     root, wt = git_world(tmp_path)
     d = deps(root, git=_refusing_git(wt, {"on": True}), gates=lambda cwd: (False, "red"),
@@ -1992,6 +2017,7 @@ def test_refused_commit_of_red_work_is_kept_unmerged_and_frees_the_lane(tmp_path
     assert ew_loop.Items(root).get("012")["state"] == "failed"
 
 
+@pytest.mark.slow
 def test_dirty_failed_dirty_lane_zero_no_longer_wedges_dispatch(tmp_path):
     # the stall: lane-0 held a failed-dirty item's staged work, the kit claims
     # the lowest index, so free_lanes() gave 0 slots and every tick read idle

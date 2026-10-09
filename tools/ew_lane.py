@@ -38,7 +38,7 @@ SEED_CONFIG = ("config/leak_needles.json", "config/local.json")
 CODE_EXTRA = ("--permission-mode", "acceptEdits", "--allowedTools",
               "Bash(python -m pytest:*),Bash(npm test:*),Bash(node --test:*),"
               "Bash(python tools/leak_sweep.py:*),Bash(python -m ruff:*),"
-              "Bash(python tools/ocr_bench.py:*)")
+              "Bash(python tools/ocr_bench.py:*),Bash(python tools/ew_tests.py:*)")
 sys.path.insert(0, str(ROOT / "tools"))
 import eta  # noqa: E402
 

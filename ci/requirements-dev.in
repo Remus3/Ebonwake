@@ -1,0 +1,9 @@
+# Plan 097: dev-only test accelerator for the loop gate box. NOT a runtime
+# dependency (server/, tools/ and tests/ import only the stdlib and pytest) and
+# NOT installed by ci. The loop gate adds `-n 4 --dist loadfile` only when
+# pytest-xdist is importable; without it the gate runs serially.
+# Hash-pinned file (not yet generated - plan 097 as-built deviation 2):
+#    uv pip compile ci/requirements-dev.in --universal --generate-hashes --python-version 3.11 -o ci/requirements-dev.txt
+# Install with: python -m pip install --require-hashes -r ci/requirements-dev.txt
+-r requirements-ci.in
+pytest-xdist==3.8.0

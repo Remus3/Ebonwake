@@ -8,11 +8,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tests"))
 import ew_loop  # noqa: E402
 import test_ew_loop as L  # noqa: E402
+
+pytestmark = pytest.mark.git  # plan 097: real git worlds under tmp_path
 
 NOW = 1_790_000_000.0
 

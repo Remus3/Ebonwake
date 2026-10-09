@@ -6,6 +6,8 @@ import io
 import json
 import urllib.error
 
+import pytest
+
 from server.ew import app as ewapp
 from server.ew import ports, single
 
@@ -78,6 +80,7 @@ def test_main_exits_zero_without_binding_when_ew_answers(monkeypatch):
     assert ewapp.main([], probe=lambda: "ew") == 0
 
 
+@pytest.mark.git  # plan 097: main() reads the commit with git rev-parse
 def test_main_binds_when_nothing_answers(monkeypatch):
     calls = []
 

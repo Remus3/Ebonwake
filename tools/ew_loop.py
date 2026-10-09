@@ -476,7 +476,12 @@ def next_number(root, rel, pattern, width):
 GATES = ("Gates before you finish: `python -m ruff check server tools tests` green, "
          "the test files your change touched or added green (targeted, e.g. `python -m "
          "pytest -q tests/test_x.py`), and `npm test --prefix app` green if you changed "
-         "app/. Do NOT run the whole pytest suite: the loop runs the authoritative ci "
+         "app/. If you changed shared server/ or tools/ code, also run the fast tier "
+         "(plan 097: no slow or real-git tests) with `python tools/ew_tests.py fast "
+         "--owner <id>` (it takes a kit suite-gate slot; <id> is the owner id a "
+         "denied bare `python -m pytest -q` names). A test that spawns git or binds "
+         "a socket needs @pytest.mark.git / @pytest.mark.server (the tier guard fails "
+         "it otherwise). Do NOT run the whole pytest suite: the loop runs the authoritative ci "
          "gates (ruff, whole pytest suite, npm test) once on your finished tree and "
          "sends any failure back to you. Every authored file ASCII + LF "
          "(tests/test_ascii_lf.py); no absolute machine path, drive "
@@ -818,13 +823,40 @@ def _whole_suite(argv):
     return not any(a.endswith(".py") or "::" in a for a in rest)
 
 
-def _gate_argv(cmd):
+# Plan 097: the whole suite runs on 4 xdist workers when pytest-xdist (an
+# optional dev-only accelerator, never imported by EW code) is importable;
+# loadfile keeps each module - every real-git module included - on one worker.
+XDIST_ARGS = ("-n", "4", "--dist", "loadfile")
+
+
+def _xdist_available():
+    import importlib.util
+    try:
+        return importlib.util.find_spec("xdist") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _names_workers(argv):
+    """True when a pytest argv already decides xdist itself."""
+    for i, a in enumerate(argv):
+        if a == "-n" or a.startswith("--numprocesses") or re.match(r"-n(\d|auto|logical)", a):
+            return True
+        if a == "-pno:xdist" or (a == "-p" and argv[i + 1:i + 2] == ["no:xdist"]):
+            return True
+    return False
+
+
+def _gate_argv(cmd, xdist=None):
     argv = shlex.split(cmd)
     if argv[0] == "python":
         argv[0] = _python()
     elif argv[0] == "npm" and sys.platform == "win32":
         argv[0] = "npm.cmd"
     if _whole_suite(argv):
+        use = _xdist_available() if xdist is None else xdist
+        if use and not _names_workers(argv):
+            argv = [*argv, *XDIST_ARGS]
         argv = [_python(), str(ROOT / SUITE_GATE_REL), "run", "--owner", _owner(), "--", *argv]
     return argv
 
