@@ -86,11 +86,14 @@ def progress_task(index):
 
 def run_lane(lane, prompt, writes_code=False, timeout=3600, dry_run=False, root=ROOT,
              spawn=None, lane_ctx=None, progress=None, record=eta.record,
-             clock=time.time):
+             clock=time.time, model=None, effort=None):
     """One headless run on one lane. Returns the kit usage line plus "worktree".
     Progress goes to the MAIN checkout's progress/lane-<i>.json once the lane
-    index is claimed; a dry run or a refused claim has no index and writes none."""
+    index is claimed; a dry run or a refused claim has no index and writes none.
+    model / effort (plan 099 routing) reach the kit spawn only when given; a
+    by-hand run without them keeps the kit default (pick_model / pick_effort)."""
     check_lane(lane)
+    route = {k: v for k, v in (("model", model), ("effort", effort)) if v is not None}
     run_id = f"lane-{lane}"
     if progress is None:
         progress = kit().write_progress
@@ -116,7 +119,8 @@ def run_lane(lane, prompt, writes_code=False, timeout=3600, dry_run=False, root=
             line = spawn(root, CODE, prompt, note=run_id, writes_code=writes_code,
                          timeout=timeout, cwd=wt, stdin=True,
                          extra=CODE_EXTRA if writes_code else (),
-                         governor="queued", governor_timeout=timeout, kind="build")
+                         governor="queued", governor_timeout=timeout, kind="build",
+                         **route)
         line = dict(line, worktree=str(wt))
         ok = line.get("rc") == 0 and not line.get("error")
         return line

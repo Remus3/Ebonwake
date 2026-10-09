@@ -125,6 +125,25 @@ MAX_ATTEMPTS = 2
 DEFAULT_MAX_PLANS = 2
 LANE_TIMEOUT_S = 5400
 GATE_TIMEOUT_S = 1800
+# Plan 099 (perf 2.5): model / effort per run kind. Opus only for implementation
+# (plan, order, hand-off); sonnet for data refreshes, resolve-merge, research and
+# fix rounds; effort low for the verifier and the order-closing inbox answer.
+# Effort always goes through the kit's pick_effort (validated, explicit wins).
+# load_config()["routes"] is this table plus valid loop.routes overrides.
+ROUTES = {
+    "plan": ("opus", "medium"),
+    "order": ("opus", "medium"),
+    "handoff": ("opus", "medium"),
+    "data": ("sonnet", "medium"),
+    "resolve": ("sonnet", "medium"),
+    "deep-dive": ("sonnet", "medium"),
+    "fix": ("sonnet", "medium"),
+    "verify": ("sonnet", "low"),
+    "inbox": ("sonnet", "low"),
+}
+ROUTE_EFFORTS = ("low", "medium", "high", "xhigh", "max")  # the kit's EFFORTS
+_ROUTE_MODEL = re.compile(r"^(?:opus|sonnet|haiku|claude-[a-z0-9][a-z0-9.-]*)(?:\[1m\])?$")
+_DATA_ID = re.compile(r"^D[0-9a-f]{6}$")  # plan 085 data_items id
 NOTE_HEAD = 600
 NOTE_MAX = 20000
 DONE_STATES = ("merged", "no-change", "failed")
@@ -260,7 +279,40 @@ def load_config(root):
             "max_notes_per_day": min(int(loop.get("max_notes_per_day", DEFAULT_MAX_NOTES)),
                                      DEFAULT_MAX_NOTES),
             "lane_timeout_s": int(loop.get("lane_timeout_s", LANE_TIMEOUT_S)),
-            "tick_s": int(loop.get("tick_s", TICK_S))}
+            "tick_s": int(loop.get("tick_s", TICK_S)),
+            "routes": load_routes(loop.get("routes"))}
+
+
+def load_routes(over):
+    """Plan 099: ROUTES with each valid per-kind override merged in. An unknown
+    kind, a model that is not an alias / claude-* id, or an effort outside the
+    kit's EFFORTS is ignored, so a config typo never stops a lane."""
+    routes = dict(ROUTES)
+    for kind, val in (over.items() if isinstance(over, dict) else ()):
+        if kind not in routes or not isinstance(val, dict):
+            continue
+        model, effort = routes[kind]
+        m, e = val.get("model", model), val.get("effort", effort)
+        if isinstance(m, str) and _ROUTE_MODEL.match(m) and e in ROUTE_EFFORTS:
+            routes[kind] = (m, e)
+    return routes
+
+
+def route_kind(rec):
+    """Plan 099: the ROUTES key for a lane item. A resolve run is `resolve`
+    whatever its base kind; a plan 085 data hand-off item is `data`; an
+    unknown kind routes as a plan."""
+    kind = rec.get("kind")
+    if kind == "handoff" and _DATA_ID.match(str(rec.get("id", ""))):
+        return "data"
+    return kind if kind in ROUTES else "plan"
+
+
+def route_kw(routes, kind, note, pick_effort):
+    """{"model", "effort"} for one run: the route's model, its effort passed
+    through the kit's pick_effort (validates it; an explicit effort wins)."""
+    model, effort = routes.get(kind) or routes["plan"]
+    return {"model": model, "effort": pick_effort(note, effort)}
 
 
 def is_limit(text):
@@ -1078,6 +1130,10 @@ class Tick:
         self.open_ids = set()  # open ROADMAP row ids, set by work_list()
         self.last_tree = None  # plan 096: tree id of the last gate() call
 
+    def route(self, kind, note):
+        """Plan 099: spawn() model / effort keywords for one run of `kind`."""
+        return route_kw(self.cfg["routes"], kind, note, self.d.pick_effort)
+
     # -- plan 096: one authoritative gate run per tree state
     def gate(self, cwd):
         """(ok, detail) of the ci gates on cwd's tree, from the verdict cache
@@ -1350,7 +1406,7 @@ class Tick:
             self.paused += 1
             return False
         line = self.spawn(inbox_prompt(name, text, context), note=name, writes_code=False,
-                          model="sonnet", effort=self.d.pick_effort(name), timeout=1800,
+                          **self.route("inbox", name), timeout=1800,
                           kind="inbox")
         reply = (line or {}).get("result")
         if not line or line.get("rc") != 0 or not reply:
@@ -1500,8 +1556,9 @@ class Tick:
             if not findings and rounds < MAX_ROUNDS:  # never a round 4 (rule 7)
                 if self.blocked():
                     return  # retry next tick
+                note = f"lane-review-{rec['id']}"
                 line = self.spawn(verify_prompt(rec, rounds + 1, self.last_tree),
-                                  note=f"lane-review-{rec['id']}",
+                                  note=note, **self.route("verify", note),
                                   writes_code=False, cwd=wt, extra=VERIFY_EXTRA, kind="build",
                                   governor="queued", governor_timeout=GATE_TIMEOUT_S,
                                   timeout=GATE_TIMEOUT_S)
@@ -1535,8 +1592,9 @@ class Tick:
             rounds += 1
             rec["rounds"] = rounds
             self.items.put(rec)
-            line = self.spawn(fix_prompt(rec, rounds, findings), note=f"lane-build-{rec['id']}",
-                              writes_code=True, cwd=wt, extra=ew_lane.CODE_EXTRA, kind="build",
+            note = f"lane-build-{rec['id']}"
+            line = self.spawn(fix_prompt(rec, rounds, findings), note=note,
+                              **self.route("fix", note), writes_code=True, cwd=wt, extra=ew_lane.CODE_EXTRA, kind="build",
                               governor="queued", governor_timeout=self.cfg["lane_timeout_s"],
                               timeout=self.cfg["lane_timeout_s"])
             if not line:
@@ -2310,8 +2368,12 @@ def lane_worker(iid, deps=None, run_lane=None):
     if why:
         return pause(why)
     run_lane = run_lane or ew_lane.run_lane
-    timeout = load_config(d.root)["lane_timeout_s"]
+    cfg = load_config(d.root)
+    timeout = cfg["lane_timeout_s"]
     extra = {"extra": DEEP_EXTRA} if rec.get("kind") == "deep-dive" else {}
+    # plan 099: model / effort by item kind, recorded on the item
+    route = route_kw(cfg["routes"], route_kind(rec), f"lane-{rec['lane']}", d.pick_effort)
+    rec["route"] = route
 
     def spawn(root, code, prompt, **kw):
         kw.update(extra, halt_file=halt)  # the kit refuses if HALT appears meanwhile
@@ -2328,7 +2390,7 @@ def lane_worker(iid, deps=None, run_lane=None):
 
     try:
         line = run_lane(rec["lane"], rec["prompt"], writes_code=True, timeout=timeout,
-                        root=d.root, spawn=spawn)
+                        root=d.root, spawn=spawn, **route)
     except Exception as exc:  # noqa: BLE001 - LaneRefused, Refused, OSError: all retryable
         text = f"{type(exc).__name__}: {exc}"
         if is_limit(text):
