@@ -81,6 +81,7 @@ def deps(root, **over):
         estimate=lambda kind: 2700.0,
         record=lambda kind, s, ok=True: seen["record"].append(kind),
         clock=lambda: 1_790_000_000.0,
+        roster_path=None,  # plan 093: never the machine roster from FLEET_ROSTER
     )
     base.update(over)
     d = ew_loop.Deps(root, **base)
@@ -304,6 +305,116 @@ def test_answers_to_one_destination_batch_into_one_note(tmp_path):
     assert "first" in body and "second" in body and "HOP: 2" in body
     ledger = (root / "ops/loop/control/outbound_notes.jsonl").read_text().splitlines()
     assert len(ledger) == 1 and json.loads(ledger[0])["parts"] == 2
+
+
+# ---------------------------------------------------------------- plan 093 delivery
+
+def _sha(path):
+    import hashlib
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _deliveries(root):
+    return [json.loads(x) for x in
+            (root / "ops/loop/control/delivery.jsonl").read_text().splitlines()]
+
+
+def test_batch_reply_lands_in_destination_inbox_with_matching_hash(tmp_path):
+    dest = tmp_path / "main_inbox"
+    dest.mkdir()
+    root, inbox, outbox = _inbox_root(tmp_path, local_extra={
+        "dest_inboxes": {"MAIN": str(dest)}})
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: ANSWER\nyes"}])
+    d = deps(root, spawn=sp)
+    ew_loop.tick(deps=d, no_push=True)
+    (inbox / "q1-from-MAIN-QUESTION-a.md").write_text("# From MAIN - QUESTION\nq1\n")
+    doc = ew_loop.tick(deps=d, no_push=True)
+    [out] = list(outbox.iterdir())
+    [copy] = list(dest.iterdir())
+    assert copy.name == out.name
+    assert re.match(r"\d{4}-\d{2}-\d{2}-\d{4}-from-EW-ANSWER-", copy.name)
+    assert _sha(copy) == _sha(out)
+    [rec] = _deliveries(root)
+    assert rec["note"] == out.name and rec["to"] == "MAIN" and rec["reached"] is True
+    assert rec["sha256"] == _sha(out)
+    assert any("1/1 reached" in s for s in doc["log"])
+    ew_loop.tick(deps=d, no_push=True)  # re-run is a no-op
+    assert len(_deliveries(root)) == 1 and len(list(dest.iterdir())) == 1
+
+
+def test_order_answer_uses_dashed_stamp_and_lands_in_sender_inbox(tmp_path):
+    dest = tmp_path / "main_inbox"
+    dest.mkdir()
+    root, inbox, outbox = _inbox_root(tmp_path, roadmap=ROADMAP, local_extra={
+        "dest_inboxes": {"MAIN": str(dest)}})
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "# From EW - ANSWER\ndone"}])
+    d = deps(root, spawn=sp)
+    ew_loop.tick(deps=d, no_push=True)
+    name = "b-from-MAIN-ORDER-to-EW-harden.md"
+    (inbox / name).write_text("# From MAIN - ORDER\nadd dependabot\n")
+    ew_loop.tick(deps=d, no_push=True)
+    rec = ew_loop.Items(root).get(ew_loop.order_id(name))
+    rec.update(state="merged", commit="abc123", verdict="PASS", rounds=1)
+    ew_loop.Items(root).put(rec)
+    ew_loop.tick(deps=d, no_push=True)
+    [out] = list(outbox.iterdir())
+    assert re.match(r"\d{4}-\d{2}-\d{2}-\d{4}-from-EW-ANSWER-re-b-from-MAIN", out.name)
+    [copy] = list(dest.iterdir())
+    assert copy.name == out.name and _sha(copy) == _sha(out)
+
+
+def test_roster_resolves_destination_inbox(tmp_path):
+    main_root = tmp_path / "mainrepo"
+    (main_root / "moon_sync_inbox").mkdir(parents=True)
+    roster = tmp_path / "fleet_roster.json"
+    roster.write_text(json.dumps({"repos": [{"code": "MAIN", "root": str(main_root)}]}))
+    root, inbox, outbox = _inbox_root(tmp_path)
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: ANSWER\nyes"}])
+    d = deps(root, spawn=sp, roster_path=roster)
+    ew_loop.tick(deps=d, no_push=True)
+    (inbox / "q1-from-MAIN-QUESTION-a.md").write_text("# From MAIN - QUESTION\nq1\n")
+    ew_loop.tick(deps=d, no_push=True)
+    [out] = list(outbox.iterdir())
+    [copy] = list((main_root / "moon_sync_inbox").iterdir())
+    assert _sha(copy) == _sha(out)
+
+
+def test_unresolved_destination_is_recorded_0_of_1_then_retried(tmp_path):
+    root, inbox, outbox = _inbox_root(tmp_path)
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: ANSWER\nyes"}])
+    d = deps(root, spawn=sp)
+    ew_loop.tick(deps=d, no_push=True)
+    (inbox / "q1-from-MAIN-QUESTION-a.md").write_text("# From MAIN - QUESTION\nq1\n")
+    doc = ew_loop.tick(deps=d, no_push=True)
+    assert len(list(outbox.iterdir())) == 1  # the outbox copy is still the record
+    assert any("0/1 reached" in s for s in doc["log"])
+    assert _deliveries(root)[-1]["reached"] is False
+    # the destination becomes known: the next tick delivers the outbox copy
+    dest = tmp_path / "main_inbox"
+    dest.mkdir()
+    cfg = json.loads((root / "config/local.json").read_text())
+    cfg["loop"]["dest_inboxes"] = {"MAIN": str(dest)}
+    (root / "config/local.json").write_text(json.dumps(cfg))
+    doc = ew_loop.tick(deps=d, no_push=True)
+    [out] = list(outbox.iterdir())
+    [copy] = list(dest.iterdir())
+    assert _sha(copy) == _sha(out) and _deliveries(root)[-1]["reached"] is True
+    assert any("redelivered 1/1 reached" in s for s in doc["log"])
+    assert len(sp.calls) == 1  # no second triage spawn
+
+
+def test_existing_destination_copy_with_other_bytes_is_not_overwritten(tmp_path):
+    dest = tmp_path / "main_inbox"
+    dest.mkdir()
+    root, inbox, outbox = _inbox_root(tmp_path, local_extra={
+        "dest_inboxes": {"MAIN": str(dest)}})
+    t = ew_loop.Tick(deps(root))
+    note = outbox / "2026-10-08-2300-from-EW-ANSWER-to-MAIN-x.md"
+    note.write_text("# From EW - ANSWER\nHOP: 2\nreal\n", newline="\n")
+    (dest / note.name).write_text("other\n", newline="\n")
+    assert t.deliver_note(note, "MAIN") is False
+    assert (dest / note.name).read_text() == "other\n"
+    assert _deliveries(root)[-1]["reached"] is False
 
 
 def test_max_notes_default_is_kit_cap_and_config_cannot_raise_it(tmp_path):
