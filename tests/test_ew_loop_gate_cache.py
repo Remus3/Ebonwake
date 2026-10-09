@@ -152,15 +152,21 @@ def test_cache_keeps_the_newest_entries_only(tmp_path):
 
 # ---------------------------------------------------------------- push
 
+def push_log(root):
+    """Plan 098: the push runs in the detached push worker; its log lands in
+    push_last.json, not in the tick's own log."""
+    return json.loads((root / ew_loop.PUSH_LAST_REL).read_text())["log"]
+
+
 def test_push_skips_an_already_gated_tree(tmp_path):
     root = repo(tmp_path)
     gates, g = Counter(), HybridGit()
     d = L.deps(root, git=g, gates=gates)
     ew_loop.tick(deps=d)
     assert len(gates.calls) == 1 and g.pushes == 1
-    doc = ew_loop.tick(deps=d)  # same tree: no second gate run, push still goes
+    ew_loop.tick(deps=d)  # same tree: no second gate run, push still goes
     assert len(gates.calls) == 1 and g.pushes == 2
-    assert any("cached green" in s for s in doc["log"])
+    assert any("cached green" in s for s in push_log(root))
 
 
 def test_push_on_cached_red_tree_is_skipped_without_a_rerun(tmp_path):
@@ -179,14 +185,14 @@ def test_merged_plan_is_pushed_on_the_lane_verdict(tmp_path):
     gates, g = Counter(), HybridGit()
     sp = L.FakeSpawn([{"rc": 0, "error": None, "result": "VERDICT: PASS"}])
     d = L.deps(root, spawn=sp, git=g, gates=gates, lane_state=running)
-    doc = ew_loop.tick(deps=d)
+    ew_loop.tick(deps=d)
     assert ew_loop.Items(root).get("012")["state"] == "merged"
     assert gates.calls == [wt]  # the lane tree only; main's flip-only tree is carried
     assert g.pushes == 1
     head_tree = L.git(root, "rev-parse", "HEAD^{tree}")
     entry = ew_loop.GateCache(root).get(head_tree, NOW)
     assert entry["ok"] and entry.get("via")
-    assert any("cached green" in s for s in doc["log"])
+    assert any("cached green" in s for s in push_log(root))
 
 
 def test_moved_main_is_gated_again_before_push(tmp_path):
