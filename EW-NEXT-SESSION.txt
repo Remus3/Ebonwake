@@ -2,20 +2,15 @@ EW NEXT SESSION
 ---------------
 SESSION: 21
 
-Next action: MAIN ORDER 2246 (Nab3300, REPO-REVIEW) worked in session 20
-"continue" (2026-10-09) and answered: ONE ANSWER HOP 2
-2026-10-09-0945-from-EW-ANSWER-to-MAIN-2246-... delivered into MAIN's
-inbox, re-hashed 1/1 (plus 0920 INFORMATION on stuck suite-gate slots,
-1/1); outbound cap 2/6 used 2026-10-09; Nab3300 session_done + seen.
-Next: (1) RR: REPO-REVIEW driver was reaped ~10:00 for low memory (see
-In flight); re-run it only when memory allows, then read
-progress/repo-review.json + lane-0.json: the headless
-REPO-REVIEW driver (label repo-review-20261009, lane review) - when
-done, check its plan file,
-findings file (every top-level folder, DONE / FILED / N-A, files reviewed
-N of N), that it merged and was pushed, then send its result in a later
-batched ANSWER to MAIN (section 8 result); (2) let the loop build rows
-096-101 (perf audit; 096 / 098 priority).
+Next action: RR - re-run the REPO-REVIEW driver (MAIN ORDER 2246 sec 8)
+as a separate detached process when memory allows, starting from its
+partial work on refs/ew/keep/repo-review-20261009 (a808292); check plan +
+findings files (every top-level folder, DONE / FILED / N-A, files reviewed
+N of N), merged and pushed, then send its result to MAIN in the next
+batched ANSWER. That ANSWER MUST correct the 0945 ANSWER's "driver
+queued / running" claim (it was reaped ~10:00 for low memory, never
+finished). Then let the loop build perf rows 096 / 098 (priority), then
+097, 099, 100, 101.
 
 Carried forward (not acted on yet):
 - NOTE: session 20 continue: history REWRITTEN and force-pushed
@@ -52,13 +47,14 @@ Carried forward (not acted on yet):
   TypeError) and deleted; FLOORS_IN_HOOKS=False; no harness attribution
   trailer (FLEET-COMMON 17); fleet.operatorIdent local only (history holds
   3 non-operator commits; rewrite only on MAIN ORDER).
-- Subagent-first hook in LOG mode since 2026-10-08; session 19 =
-  interactive session 1 of 3. Session 19 logged 19 would-deny / 53 allow
-  rows in ops/loop/control/subagent_first.jsonl - review whether any was
-  undispatchable. Deny target 2026-10-11 after 3 interactive sessions with
-  no undispatchable would-deny row; then write `deny` into
-  ops/loop/control/subagent_first.mode and say so in the next batched note
-  to MAIN.
+- SF: subagent-first hook in LOG mode since 2026-10-08. Session 19
+  logged 19 would-deny / 53 allow rows in
+  ops/loop/control/subagent_first.jsonl (still to review: was any
+  undispatchable?); session 20 logged 0 would-deny / 271 allow
+  (2026-10-09). On 2026-10-11, if 3 interactive sessions show no
+  undispatchable would-deny row, write `deny` into
+  ops/loop/control/subagent_first.mode and say so in the next batched
+  note to MAIN.
 - NOTE: Dd505bd merged; read back 2026-10-09 on server 9a0b58d: band-62-64,
   band-65-75 and cap-62-64 all confirmed (band split intact).
 - NOTE: session 17 (2026-10-08): old C: checkout + C: ew-worktrees sent to
@@ -242,7 +238,15 @@ Acceptance: repo-review driver done with plan + findings files (file count
 reviewed == on disk), merged, pushed, result ANSWERed to MAIN; nothing in
 adjudicate / merge-conflict / gave-up / failed-dirty.
 
-Do NOT redo: session 19: N94ff08 kit v10 adjudicated (decision: merge
+Do NOT redo: session 20 (2026-10-09): kit v10-v13 vendored (1614965
+post-rewrite; 5a59f50 pre-rewrite); MAIN answered, 2 notes delivered
+2026-10-09 (0920 INFORMATION, 0945 ANSWER HOP 2), 1/1 each, cap 2/6;
+MAIN 2246 history rewrite force-pushed (backup bundle in the sidecar
+folder); README 7ab693a/b360e76, perf 87c706c, rows 096-101 f55db3a, root
+ROADMAP rm 9cd829a, leak_sweep exemption 76708c7; lane-0 salvaged to the
+keep ref (8455ba9); bug PV patchverify checked_at fixed 008dd76 (verifier
+PASS, refute-rounds 1/3). ROADMAP 093 (loop delivery of outbox notes to
+the destination inbox) is DONE (2026-10-08) - not open. session 19: N94ff08 kit v10 adjudicated (decision: merge
 0bbc472 as partial, then F1-F7 in one main-checkout commit; alts
 accept-as-is / reject-redo in lane; why: lane brief forbade
 ops/fleet_kit/, CLAUDE.md, .claude/ edits and could not read the bundle;
@@ -280,10 +284,10 @@ detached (not a session background shell): python tools/ew_lane.py run
 review --prompt-file ops/runtime/repo-review-prompt.txt --writes-code
 --timeout 10800.
 
-Status: session 20 continue commits (post-rewrite SHAs): 7ab693a README,
-ed78003 perf inline, f55db3a rows 096-101, 9cd829a root ROADMAP rm,
-76708c7 leak_sweep exemption; force-pushed; ci 37943680231 + codeql
-37943680140 success. Gates: gated pytest 3562 passed (73 s), node 707
-pass 0 fail, leak ARMED (19). Server restarted on 9a0b58d (pre-push).
+Status: HEAD 008dd76 == origin/main (pushed; upstream tracking re-set
+after the rewrite). CI 37946689548 + codeql 37946689466 success on
+008dd76. /done gates: gated pytest 3564 passed (97 s), node 707 pass 0 fail,
+leak sweep ARMED (19). Server running on 008dd76 (/api/version read
+back). Loop HALT absent. Session jsonl < 10 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
