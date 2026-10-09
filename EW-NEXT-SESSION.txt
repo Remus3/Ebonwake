@@ -1,18 +1,40 @@
 EW NEXT SESSION
 ---------------
-SESSION: 20
+SESSION: 21
 
-Next action: kit catch-up DONE in session 20 (sub-agent): kit v13
-vendored in 5a59f50 (pushed), orders N715c44 / N67971f / N94ff08 /
-Nf0e1ea / N0fcd68 session-done + seen-ledger ANSWER, ONE batched ANSWER
-HOP 2 2026-10-08-2245-from-EW-ANSWER-to-MAIN-kit-v10-v11-v12-v13-... copied
-into MAIN's inbox, re-hashed 1/1. Outbound cap 6/6 used on 2026-10-08.
-Next: (1) when MAIN's v13 ORDER note lands, diff its per-tree steps / hashes
-against plan 092 and fix only differences (no second ANSWER unless
-something changed); (2) let the loop build ROADMAP 093 (reply delivery into
-the sender's inbox); (3) check Dd505bd (ran) and Hd83660 (ran) merged.
+Next action: MAIN ORDER 2246 (Nab3300, REPO-REVIEW) worked in session 20
+"continue" (2026-10-09) and answered: ONE ANSWER HOP 2
+2026-10-09-0945-from-EW-ANSWER-to-MAIN-2246-... delivered into MAIN's
+inbox, re-hashed 1/1 (plus 0920 INFORMATION on stuck suite-gate slots,
+1/1); outbound cap 2/6 used 2026-10-09; Nab3300 session_done + seen.
+Next: (1) read progress/repo-review.json + lane-0.json: the headless
+REPO-REVIEW driver (label repo-review-20261009, lane review on lane-0,
+timeout 3 h, started 09:22 2026-10-09) - when done, check its plan file,
+findings file (every top-level folder, DONE / FILED / N-A, files reviewed
+N of N), that it merged and was pushed, then send its result in a later
+batched ANSWER to MAIN (section 8 result); (2) let the loop build rows
+096-101 (perf audit; 096 / 098 priority).
 
 Carried forward (not acted on yet):
+- NOTE: session 20 continue: history REWRITTEN and force-pushed
+  (operator-approved via MAIN 2246 sec 4): PLAN f3dc20264bb1 3 -> 0,
+  tree hash equal, 9a0b58d...76708c7 forced; branch protection force push
+  re-disabled and read back; contributors 1; backup bundle in the EW
+  sidecar folder (rewrite-backup, sha256 d0055f70...). Every SHA from the
+  oldest rewritten commit changed: SHA citations in this file / docs older
+  than 2026-10-09 are pre-rewrite. Other clones must re-clone or hard-reset.
+- NOTE: adjudicated session 20 continue: (a) root ROADMAP.md git rm'd
+  (stale), docs/plans/ROADMAP.md is the single roadmap (9cd829a; reverses
+  on a MAIN order to move the queue to root); (b) pre-push leak sweep
+  skips messages byte-identical to ones on the remote ref (76708c7;
+  reverses if MAIN orders the owner name scrubbed from history); (c) hold
+  push until a GATED full suite is green, never push on targeted tests.
+- NOTE: README clone URL stays an owner-free pointer (leak-sweep needle
+  holds the owner name); CI badge is the repo-relative workflow badge.
+- NOTE: suite now 3562 tests in ~75 s (poll_interval 0.01, ed78003).
+  The machine suite gate can starve: both slots were held 07:52-09:2x
+  2026-10-09 by another tree; a gated run times out at 3600 s with rc 3 -
+  re-queue it.
 - NOTE: session 20 kit catch-up: claims hook is LIVE in deny mode (kit
   default); a bare whole-suite pytest or bare git commit / push is denied -
   run `python ops/fleet_kit/fleet_suite_gate.py run --owner <id> -- ...`
@@ -36,14 +58,11 @@ Carried forward (not acted on yet):
   ops/loop/control/subagent_first.mode and say so in the next batched note
   to MAIN.
 - Patchverify checked_at: every /api/data/verdicts checked_at still read
-  2026-10-08T11:35:22Z after merge 4979187 + server restart. Check whether
+  2026-10-08T11:35:22Z after merge 4979187 + server restart, and still on 2026-10-09 after a restart on 9a0b58d. Check whether
   the patchverify recompute refreshes checked_at (stale verdict cache vs
   only the timestamp not updated); fix with a failing test first.
-- NOTE: xp_epochs cap-62-75 reads contradicted, which is intended (the
-  notes split it into band-62-64 / band-65-75, both confirmed). Loop item
-  Dd505bd (data lane, lane-1, dispatched 20:26) was spawned on that verdict
-  and is editing the row; after it merges, check it did not undo the band
-  split, restart the server on the merge, read back verdicts.
+- NOTE: Dd505bd merged; read back 2026-10-09 on server 9a0b58d: band-62-64,
+  band-65-75 and cap-62-64 all confirmed (band split intact).
 - NOTE: session 17 (2026-10-08): old C: checkout + C: ew-worktrees sent to
   the Recycle Bin after the reference check (tasks / shortcuts / env /
   worktrees clean); Test-Path both False read back. Desktop Ebonwake.lnk
@@ -221,10 +240,9 @@ tools/launch.py --server-only`. Proxy probe: netstat for :3456 LISTENING.
 Memory is tight on the box: Claude Code reaped a background watcher
 ~19:45 2026-10-08 for low system memory; run suites sequentially.
 
-Acceptance: (met session 20: kit v13 vendored 5a59f50, conformance v13
-green, hook still log, ONE ANSWER HOP 2 delivered 1/1.) Dd505bd merged
-without undoing the band split (band rows read confirmed); nothing in adjudicate /
-merge-conflict / gave-up / failed-dirty.
+Acceptance: repo-review driver done with plan + findings files (file count
+reviewed == on disk), merged, pushed, result ANSWERed to MAIN; nothing in
+adjudicate / merge-conflict / gave-up / failed-dirty.
 
 Do NOT redo: session 19: N94ff08 kit v10 adjudicated (decision: merge
 0bbc472 as partial, then F1-F7 in one main-checkout commit; alts
@@ -249,15 +267,13 @@ Sessions 16-17 under the NOTE bullets above. Older sessions 10-15:
 loop/inbox read-backs, 73553e9, dependabot PR 2, research 0010-0012,
 plans 079-086, c3df83e, b8fbef8.
 
-In flight: none from session 20. Loop items Dd505bd and Hd83660 read
-state `ran` at 22:00 (loop was HALTed 21:55-session end for the kit
-commit; HALT removed after push).
+In flight: headless REPO-REVIEW driver on lane-0 (review lane, started
+09:22 2026-10-09, timeout 3 h; progress/repo-review.json). Loop unHALTed.
 
-Status: session 19 commits: 126cfc7 + 92801b4 (kit v10), plus this
-hand-off commit. Loop pushed 4 commits at fire 304 (19:39): d4c3308,
-2c07b79, a7ea26b, 4979187; ci 37865894958 + codeql 37865894961 success.
-Gates (session 19 /done): pytest ok (229 s), node 699 pass 0 fail, leak
-ARMED (19). Server on 4979187, /api/version read back. Session jsonl
-< 2 MB (largest 1.97 MB).
+Status: session 20 continue commits (post-rewrite SHAs): 7ab693a README,
+ed78003 perf inline, f55db3a rows 096-101, 9cd829a root ROADMAP rm,
+76708c7 leak_sweep exemption; force-pushed; ci 37943680231 + codeql
+37943680140 success. Gates: gated pytest 3562 passed (73 s), node 707
+pass 0 fail, leak ARMED (19). Server restarted on 9a0b58d (pre-push).
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
