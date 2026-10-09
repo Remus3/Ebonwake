@@ -96,6 +96,18 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 091 | loop: route ORDER items needing ops/fleet_kit/, CLAUDE.md or .claude/ edits to a session (or grant that lane those paths) - lane briefs block them by construction (N94ff08) | [x] done 2026-10-08 (loop; refute 0/3 PASS) |
 | 092 | Fleet kit v11 -> v13 catch-up (Nf0e1ea, N0fcd68, v13 bundle): vendor, anchored + claims hooks, gitlock / suite gate, test guard, identity hooks | [x] done 2026-10-08 (session 20) |
 | 093 | loop: reply notes never reach the destination inbox (written only to moon_sync_outbox, undashed 20261008- stamps); copy each reply into the sender's inbox with the dashed stamp, re-hash, record N/M reached; test a reply lands with a matching hash | [x] done 2026-10-08 (loop; refute 0/3 PASS) |
+| 095 | Event currency planner: guaranteed currency by event end vs an exchange wishlist, shortfall and buy-by warnings (depends on 064, 075, 021) | [ ] open |
+
+Deep dive 2026-10-09 (research 0017): one plan. 095 - the live Marni event
+(10673, to 11-05) pays seals by login, 60-min play and weekly games against
+a limited exchange, and the shape repeats every season. Number 094 is left
+unused: the My Information EXP-table candidate was dropped at refute round
+1 as a duplicate of the Progress tab (004; leveling card 011, OCR 066).
+Data items (no plan): My Information absolute EXP (10678) for the 004 /
+011 / 066 leveling card; Twitch drops Fri-Sun only, 12:00 UTC reset, claim
+by 11-19 (006 / 086); quest anchors Lv 56 / 60 / 61; Godslayer: Force Palm
+(034); Lv 75 pace target. Dropped: My Information EXP table (dup of 004),
+per-level class stat card (0006), BDOVision / Fashion Show trackers.
 
 Deep dive 2026-10-08 (research 0015): two plans. Ranking: 087 first - NA
 patch notes post today and the shipped 085 hints miss the official
