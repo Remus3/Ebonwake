@@ -2,25 +2,32 @@ EW NEXT SESSION
 ---------------
 SESSION: 20
 
-Next action: finish order Nf0e1ea (MAIN ORDER kit v11, note
-2026-10-08-1840-from-MAIN-ORDER-to-EW-FLEET-KIT-v11-supersedes-v10-anchored-
-hook-permission-mode-triage-kwargs-ONE-ANSWER.md). Read
-ops/loop/control/loop_items/Nf0e1ea.json first. At 20:28 it was kind
-resolve, lane build (lane-0), state dispatched, keep ref
-refs/ew/keep/Nf0e1ea = 930fe43 (plan 092 + tools/ew_loop.py
-triage_spawn_kwargs fallback + tests; refute round 1 FAIL: v11 NOT
-vendored, conformance not re-pinned - the lane brief forbids
-ops/fleet_kit/, CLAUDE.md, .claude/, it was dispatched before 091
-merged). If it reaches adjudicate / partial / merged-partial: run the
-adjudicator, then in the MAIN checkout do the v11 vendoring the same way
-as v10 (verify bundle hashes vs the order, vendor into ops/fleet_kit/,
-re-embed FLEET-COMMON, re-pin tests/test_fleet_kit_conformance.py to v11,
-wire hook verbatim from the bundle, keep subagent_first.mode = log), gates,
-push, then ONE ANSWER HOP 2 to MAIN. If the loop merged it complete:
-verify ops/fleet_kit/MANIFEST.json version 11 and conformance green.
-Outbound cap: 5/6 used on 2026-10-08 (resets per local day).
+Next action: kit catch-up DONE in session 20 (sub-agent): kit v13
+vendored in 5a59f50 (pushed), orders N715c44 / N67971f / N94ff08 /
+Nf0e1ea / N0fcd68 session-done + seen-ledger ANSWER, ONE batched ANSWER
+HOP 2 2026-10-08-2245-from-EW-ANSWER-to-MAIN-kit-v10-v11-v12-v13-... copied
+into MAIN's inbox, re-hashed 1/1. Outbound cap 6/6 used on 2026-10-08.
+Next: (1) when MAIN's v13 ORDER note lands, diff its per-tree steps / hashes
+against plan 092 and fix only differences (no second ANSWER unless
+something changed); (2) let the loop build ROADMAP 093 (reply delivery into
+the sender's inbox); (3) check Dd505bd (ran) and Hd83660 (ran) merged.
 
 Carried forward (not acted on yet):
+- NOTE: session 20 kit catch-up: claims hook is LIVE in deny mode (kit
+  default); a bare whole-suite pytest or bare git commit / push is denied -
+  run `python ops/fleet_kit/fleet_suite_gate.py run --owner <id> -- ...`
+  and `python ops/fleet_kit/fleet_gitlock.py run --owner <id> -- git ...`;
+  the deny reason names <id>. pytest.ini addopts -q plus -q = no summary
+  line; run `python -m pytest` for counts. Gated suite waited ~30 min for a
+  slot held by a sibling (reported to MAIN).
+- NOTE: core.hooksPath pointed at the recycled C: checkout since the move
+  (no git hook ran); re-pointed to relative .githooks in session 20.
+- NOTE: adjudicated session 20 (plan 092 deviations D1-D5): v13 vendored
+  from MAIN's staged committed bundle before its ORDER (reverses if the
+  ORDER differs); keep ref 930fe43 not merged (no-arg triage_spawn_kwargs
+  TypeError) and deleted; FLOORS_IN_HOOKS=False; no harness attribution
+  trailer (FLEET-COMMON 17); fleet.operatorIdent local only (history holds
+  3 non-operator commits; rewrite only on MAIN ORDER).
 - Subagent-first hook in LOG mode since 2026-10-08; session 19 =
   interactive session 1 of 3. Session 19 logged 19 would-deny / 53 allow
   rows in ops/loop/control/subagent_first.jsonl - review whether any was
@@ -214,8 +221,8 @@ tools/launch.py --server-only`. Proxy probe: netstat for :3456 LISTENING.
 Memory is tight on the box: Claude Code reaped a background watcher
 ~19:45 2026-10-08 for low system memory; run suites sequentially.
 
-Acceptance: Nf0e1ea closed with v11 vendored, conformance pinned to v11 and
-green, hook still log, ONE ANSWER HOP 2 in moon_sync_outbox; Dd505bd merged
+Acceptance: (met session 20: kit v13 vendored 5a59f50, conformance v13
+green, hook still log, ONE ANSWER HOP 2 delivered 1/1.) Dd505bd merged
 without undoing the band split (band rows read confirmed); nothing in adjudicate /
 merge-conflict / gave-up / failed-dirty.
 
@@ -242,10 +249,9 @@ Sessions 16-17 under the NOTE bullets above. Older sessions 10-15:
 loop/inbox read-backs, 73553e9, dependabot PR 2, research 0010-0012,
 plans 079-086, c3df83e, b8fbef8.
 
-In flight: Nf0e1ea resolve, lane-0 (build), progress/lane-0.json +
-progress/pNf0e1ea-resolve.json, dispatched 20:26, ETA ~14m. Dd505bd
-data fix, lane-1 (data), progress/lane-1.json, dispatched 20:26, ETA
-~21m. Lane-2 idle (done 19:22).
+In flight: none from session 20. Loop items Dd505bd and Hd83660 read
+state `ran` at 22:00 (loop was HALTed 21:55-session end for the kit
+commit; HALT removed after push).
 
 Status: session 19 commits: 126cfc7 + 92801b4 (kit v10), plus this
 hand-off commit. Loop pushed 4 commits at fire 304 (19:39): d4c3308,
