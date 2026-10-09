@@ -3,6 +3,8 @@
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 TEXT_SUFFIXES = {".py", ".md", ".txt", ".json", ".js", ".css", ".html", ".yml", ".yaml",
                  ".ini", ".toml", ".cfg", ""}
@@ -15,6 +17,7 @@ def _tracked():
     return [ROOT / f for f in out.stdout.decode().split("\0") if f]
 
 
+@pytest.mark.git  # plan 097: git ls-files (read-only); run it by name
 def test_tracked_text_is_ascii_lf():
     files = [p for p in _tracked() if p.suffix in TEXT_SUFFIXES and p.is_file()
              and p.name not in {"LICENSE"} and "fleet_kit" not in p.parts]

@@ -196,6 +196,7 @@ def test_non_portrait_names_ignored(env):
     assert svc.scan() == []
 
 
+@pytest.mark.slow  # plan 097: about 3 s (32 scans of the archive)
 def test_archive_cap_per_character(env):
     svc, face, _, _ = env
     for i in range(portraits.ARCHIVE_CAP + 2):

@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 import leak_sweep as ls  # noqa: E402
@@ -60,6 +62,7 @@ def test_diff_scans_added_lines_and_paths():
     assert kinds == ["needle-slot-0"]
 
 
+@pytest.mark.git  # plan 097: git ls-files
 def test_tracked_tree_is_clean_structurally():
     findings, n = ls.scan_tree(ls.compile_needles([]))
     assert n > 0
@@ -123,18 +126,21 @@ def _rewritten(repo, old_msg, new_file_text="b\n", new_msg="later"):
     return local, remote
 
 
+@pytest.mark.git
 def test_pre_push_exempts_message_already_on_remote(tmp_path):
     repo = _repo(tmp_path)
     local, remote = _rewritten(repo, "Merge pull request #2 from zorblax-quux/dep")
     assert _push_kinds(repo, local, remote) == []
 
 
+@pytest.mark.git
 def test_pre_push_new_message_with_needle_still_fails(tmp_path):
     repo = _repo(tmp_path)
     local, remote = _rewritten(repo, "plain", new_msg="leak Zorblax Quux")
     assert _push_kinds(repo, local, remote) == ["needle-slot-0"]
 
 
+@pytest.mark.git
 def test_pre_push_one_byte_different_message_still_fails(tmp_path):
     repo = _repo(tmp_path)
     base = _commit(repo, "a.txt", "a\n", "base")
@@ -144,6 +150,7 @@ def test_pre_push_one_byte_different_message_still_fails(tmp_path):
     assert _push_kinds(repo, local, remote) == ["needle-slot-0"]
 
 
+@pytest.mark.git
 def test_pre_push_added_line_with_needle_still_fails(tmp_path):
     repo = _repo(tmp_path)
     local, remote = _rewritten(repo, "from zorblax-quux/dep",
@@ -151,6 +158,7 @@ def test_pre_push_added_line_with_needle_still_fails(tmp_path):
     assert _push_kinds(repo, local, remote) == ["needle-slot-1"]
 
 
+@pytest.mark.git
 def test_pre_push_new_branch_gets_no_exemption(tmp_path):
     repo = _repo(tmp_path)
     _commit(repo, "a.txt", "a\n", "base")

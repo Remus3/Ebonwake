@@ -29,7 +29,7 @@ def test_whole_suite_detection():
 
 
 def test_gate_argv_routes_whole_pytest_through_suite_gate():
-    argv = ew_loop._gate_argv("python -m pytest -q")
+    argv = ew_loop._gate_argv("python -m pytest -q", xdist=False)  # xdist: test_tiers.py
     i = argv.index("--")
     assert argv[1].replace("\\", "/").endswith("ops/fleet_kit/fleet_suite_gate.py")
     assert argv[2:5] == ["run", "--owner", ew_loop._owner()]
