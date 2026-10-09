@@ -4,6 +4,8 @@
     ew_loop.py tick [--dry-run] [--no-push]   one self-monitoring, idempotent pass
     ew_loop.py checklist                      print the last tick's checklist
     ew_loop.py lane <ID>                      (internal) run one dispatched item
+    ew_loop.py review <ID>                    (internal, plan 098) review / fix / merge one item
+    ew_loop.py push                           (internal, plan 098) gate main and push
     ew_loop.py session                        orders routed to the session (plan 091)
     ew_loop.py session-done <ID> [--commit S] the session marks a routed order done
 
@@ -20,7 +22,10 @@ One tick, under ops/loop/control/loop.lock (fleet_watch.watch_lock):
      to one destination go in ONE batch note, HOP lines, OutboundCap (6 a
      day). No governor slot (kit ruling: acknowledgements stay outside).
   d. Finished lane worktrees (before c, so a dirty worktree never blocks a
-     claim): gates, review-lane verifier (refute rounds capped at 3, then
+     claim). Plan 098: the tick only launches one DETACHED `review <ID>`
+     worker per item (parallel, each in its own worktree), watches its pid
+     and counts a dead one (MAX_ATTEMPTS, then parked); the worker runs:
+     gates, review-lane verifier (refute rounds capped at 3, then
      accept and record), commit, merge --no-ff into main, flip the ROADMAP row
      in main inside the merge commit (never in the lane commit); a conflict in
      ROADMAP.md alone is resolved row by row (resolve_roadmap). Any other
@@ -41,8 +46,9 @@ One tick, under ops/loop/control/loop.lock (fleet_watch.watch_lock):
      ops/loop/control/progress/loop.json with a "checklist" array (FLEET item
      13 d: remaining tasks as kit rows {id, task, state, eta_s}, at most 20;
      "fire" = this tick's run count, the item-13 session number).
-  Push (unless --no-push): main clean, gates green, leak_sweep --pre-push
-  clean, local main ahead of origin/main; at most one push per tick.
+  Push (unless --no-push): when main is clean and ahead of origin/main the
+  tick launches ONE detached `push` worker (plan 098), which under the merge
+  lock needs gates green and leak_sweep --pre-push clean.
 
 Every side effect goes through Deps, so tests never spawn, never touch a git
 remote and never call schtasks. Paths are resolved at run time.
@@ -79,6 +85,14 @@ WATCH_REL = CONTROL_REL / "loop_inbox_watch.json"
 ORDERS_REL = CONTROL_REL / "loop_orders.json"
 LEGACY_LEDGER_REL = CONTROL_REL / "inbox_ledger.jsonl"  # pre-kit-v8 shim (deviation 13)
 DELIVERY_REL = CONTROL_REL / "delivery.jsonl"  # plan 093: one line per destination copy
+# plan 098: review / fix / merge and push run in detached workers; merges into
+# main serialize on MERGE_LOCK_REL; one push worker at a time (PUSH_WORKER_REL)
+MERGE_LOCK_REL = CONTROL_REL / "merge.lock"
+PUSH_WORKER_REL = CONTROL_REL / "push_worker.json"
+PUSH_LAST_REL = CONTROL_REL / "push_last.json"
+REVIEW_START_S = 300  # a launched worker that wrote no pid by then never started
+TICK_TARGET_S = 60
+REVIEW_LOG_KEEP = 10
 NOTE_STAMP = "%Y-%m-%d-%H%M"  # the fleet's dashed note stamp (kit batch_note)
 # Responder diet (operator 2026-10-05) + kit v8 item 14: an ORDER / FIX /
 # RULING note escalates to a lane work item (a lane does the work, the loop
@@ -834,10 +848,11 @@ def _leak_pre_push(cwd, ref_line):
     return r.returncode == 0
 
 
-def _launch(root, iid, popen=subprocess.Popen):
-    """Start the lane worker detached. It breaks away from the Task Scheduler
-    job when the job allows it, so the tick's end never ends the lane."""
-    argv = [_pythonw(), str(Path(root) / "tools" / "ew_loop.py"), "lane", iid]
+def _launch(root, iid, popen=subprocess.Popen, cmd="lane"):
+    """Start a worker (`lane <ID>`, plan 098 `review <ID>` / `push`) detached.
+    It breaks away from the Task Scheduler job when the job allows it, so the
+    tick's end never ends the worker."""
+    argv = [_pythonw(), str(Path(root) / "tools" / "ew_loop.py"), cmd] + ([iid] if iid else [])
     kw = dict(cwd=str(root), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
               stderr=subprocess.DEVNULL, close_fds=True)
     flags = _NO_WINDOW | _DETACHED
@@ -867,6 +882,8 @@ class Deps:
         self.pid_alive = fl.pid_alive
         self.main_tree = fl.main_tree(self.root)
         self.launch = lambda iid: _launch(self.root, iid)
+        self.launch_review = lambda iid: _launch(self.root, iid, cmd="review")
+        self.launch_push = lambda: _launch(self.root, None, cmd="push")
         self.git = _git
         self.gates = _gates
         self.leak_pre_push = _leak_pre_push
@@ -1246,12 +1263,76 @@ class Tick:
 
     # -- d. finished worktrees
     def finished(self):
+        """Plan 098: the tick never reviews inline. Each ran / committed item
+        gets one detached `review <ID>` worker (gates in its own worktree,
+        verifier, fix rounds, commit, merge), so independent items are gated
+        in parallel and the tick stays short. The tick only launches, watches
+        and reaps those workers."""
+        now = self.d.clock()
         for rec in self.items.all().values():
-            if rec.get("state") in ("ran", "committed"):
-                if self.dry:
-                    self.step(f"{rec['id']}: would review + merge")
+            if rec.get("state") not in HOLD_STATES:
+                continue
+            if self.dry:
+                self.step(f"{rec['id']}: would launch review")
+                continue
+            if rec.get("review_launch"):
+                if self.review_alive(rec, now):
                     continue
-                self.process(rec)
+                if not self.review_crashed(rec):
+                    continue
+            if rec["state"] == "ran":  # a committed item only merges: no spawn
+                why = self.blocked()
+                if why:
+                    self.step(f"{rec['id']}: review waits: {why}")
+                    continue
+            self.launch_review(rec, now)
+
+    def review_alive(self, rec, now):
+        pid = rec.get("worker_pid")
+        if pid:
+            return bool(self.d.pid_alive(pid))
+        launched = epoch_of(rec.get("review_launch"))
+        return launched is not None and now - launched < REVIEW_START_S
+
+    def review_crashed(self, rec):
+        """A review worker that died (or never started): counted; True when it
+        may be relaunched now. At MAX_ATTEMPTS the item is parked for a
+        session: ran -> failed-dirty (retry_refused keeps the work as an
+        unmerged WIP commit), committed -> merge-refused under its keep ref."""
+        rec.pop("worker_pid", None)
+        rec.pop("review_launch", None)
+        n = rec.get("review_crashes", 0) + 1
+        rec["review_crashes"] = n
+        if n < MAX_ATTEMPTS:
+            self.items.put(rec)
+            self.step(f"{rec['id']}: review worker gone ({n}/{MAX_ATTEMPTS}), relaunch")
+            return True
+        rec["error"] = f"review worker died {n} times"
+        if rec["state"] == "committed":
+            self.keep(rec)
+            rec["state"] = "merge-refused"
+        else:
+            rec["state"] = "failed-dirty"
+        self.items.put(rec)
+        self.step(f"{rec['id']}: {rec['error']}, parked {rec['state']}")
+        return False
+
+    def launch_review(self, rec, now):
+        """The marker is written BEFORE the launch and the record is never
+        written after it, so the tick never overwrites the worker's writes."""
+        rec["review_launch"] = iso(now)
+        rec.pop("worker_pid", None)
+        self.items.put(rec)
+        try:
+            self.d.launch_review(rec["id"])
+        except Exception as exc:  # noqa: BLE001 - OSError, ValueError: next tick retries
+            cur = self.items.get(rec["id"]) or rec
+            cur.pop("review_launch", None)
+            cur["error"] = ascii_text(f"review launch: {type(exc).__name__}: {exc}", 300)
+            self.items.put(cur)
+            self.step(f"{rec['id']}: review launch failed ({type(exc).__name__})")
+            return
+        self.step(f"{rec['id']}: review worker launched")
 
     def dirty(self, wt):
         r = self.d.git(["status", "--porcelain"], wt)
@@ -1530,6 +1611,16 @@ class Tick:
             self.commit(rec, wt, rec.get("gates_ok", rec.get("verdict") == "PASS"))
 
     def merge(self, rec):
+        """Plan 098: every merge into main holds MERGE_LOCK_REL, whoever calls
+        it (review worker, the tick's salvage path); a busy lock defers the
+        merge and the item stays committed for the next worker."""
+        try:
+            with self.d.lock(self.root / MERGE_LOCK_REL):
+                return self._merge(rec)
+        except self.d.watch.LockBusy:
+            self.step(f"{rec['id']}: merge lock busy, merge deferred")
+
+    def _merge(self, rec):
         main = self.d.main_tree
         br = self.d.git(["rev-parse", "--abbrev-ref", "HEAD"], main).stdout.strip()
         if br != "main" or self.dirty(main):
@@ -1837,17 +1928,47 @@ class Tick:
                 "label": f"deep-dive {date}", "prompt": prompt}
 
     # -- push
-    def push(self):
+    def push_needed(self):
+        """Commits main is ahead of origin/main (git only, no gates), 0 when
+        there is nothing to push or main is not clean on main."""
         if self.no_push or self.dry:
-            return
+            return 0
         main, g = self.d.main_tree, self.d.git
         if g(["rev-parse", "--abbrev-ref", "HEAD"], main).stdout.strip() != "main" or \
                 self.dirty(main):
             self.step("push skipped: main not clean")
-            return
+            return 0
         ahead = g(["rev-list", "--count", "origin/main..main"], main).stdout.strip()
-        if not ahead.isdigit() or int(ahead) == 0:
+        return int(ahead) if ahead.isdigit() else 0
+
+    def launch_push(self):
+        """Plan 098: the tick never gates main itself; when main is ahead it
+        launches ONE detached push worker (none while one is in flight)."""
+        if not self.push_needed():
             return
+        now, p = self.d.clock(), self.root / PUSH_WORKER_REL
+        doc = read_json(p, {})
+        if isinstance(doc, dict) and doc:
+            pid, launched = doc.get("pid"), epoch_of(doc.get("launched"))
+            if (pid and self.d.pid_alive(pid)) or (
+                    not pid and launched is not None and now - launched < REVIEW_START_S):
+                self.step("push worker in flight")
+                return
+        atomic_write(p, json.dumps({"launched": iso(now)}))
+        try:
+            self.d.launch_push()
+        except Exception as exc:  # noqa: BLE001 - next tick retries
+            with contextlib.suppress(OSError):
+                p.unlink()
+            self.step(f"push launch failed ({type(exc).__name__})")
+            return
+        self.step("push worker launched")
+
+    def push(self):
+        ahead = self.push_needed()
+        if not ahead:
+            return
+        main, g = self.d.main_tree, self.d.git
         ok, detail = self.d.gates(main)
         if not ok:
             self.step("push skipped: gates red on main")
@@ -1887,9 +2008,12 @@ class Tick:
             return "blocked on " + ", ".join(rec.get("needs") or [])
 
         def shown(rec, state):
-            """Plan 058 step 5: a resolve lane in flight reads `resolving, run n/2`."""
+            """Plan 058 step 5: a resolve lane in flight reads `resolving, run n/2`;
+            plan 098: a held item with a review worker in flight reads `reviewing`."""
             if rec.get("kind") == "resolve" and state in IN_FLIGHT:
                 return f"resolving, run {rec.get('resolve_runs', 1)}/{MAX_ATTEMPTS}"
+            if state in HOLD_STATES and rec.get("review_launch"):
+                return "reviewing"
             return state
 
         for item in work:
@@ -1930,9 +2054,13 @@ class Tick:
             pass
         prev = read_json(self.root / self.d.kit.PROGRESS_REL / f"{PROGRESS_TASK}.json", {}) or {}
         fire = int(prev.get("fire", 0) or 0) + 1 if isinstance(prev, dict) else 1
+        took = round(max(now - started, 0), 1)
+        if took > TICK_TARGET_S:  # plan 098: the tick target is under 60 s
+            self.step(f"tick took {int(took)}s, target {TICK_TARGET_S}s")
         doc = {"task": PROGRESS_TASK, "pct": 100, "step": "; ".join(self.log)[-200:] or state,
                "eta_s": self.cfg["tick_s"], "status": "done", "updated": iso(now),
-               "state": state, "fire": fire, "log": self.log[-40:], "checklist": lines}
+               "state": state, "fire": fire, "tick_s": took, "log": self.log[-40:],
+               "checklist": lines}
         atomic_write(self.root / self.d.kit.PROGRESS_REL / f"{PROGRESS_TASK}.json",
                      json.dumps(doc, indent=1))
         return doc
@@ -1965,7 +2093,7 @@ class Tick:
                 self.dispatch([dd])
             else:
                 self.step("idle: deep-dive already done today")
-        self.push()
+        self.launch_push()
         lines = self.checklist(rows, work, skipped)
         why = self.blocked()
         state = {"halted": "halted", "backoff": "backoff", "runs cap": "limit",
@@ -2064,6 +2192,69 @@ def lane_worker(iid, deps=None, run_lane=None):
     return 0
 
 
+# ---------------------------------------------------------------- plan 098 workers
+
+def review_worker(iid, deps=None):
+    """The detached process reviewing one ran / committed item: Tick.process
+    (gates in its own worktree, verifier, fix rounds, commit, merge under the
+    merge lock). It owns the record while it runs; markers are cleared only on
+    a normal end, so a crash leaves its dead pid for the tick to count."""
+    d = deps or Deps()
+    items = Items(d.root)
+    rec = items.get(iid)
+    if not rec or rec.get("state") not in HOLD_STATES:
+        return 0
+    me, pid = os.getpid(), rec.get("worker_pid")
+    if pid and pid != me and d.pid_alive(pid):
+        return 0
+    t0 = d.clock()
+    rec["worker_pid"] = me
+    items.put(rec)
+    t = Tick(d)
+    rc = 0
+    try:
+        t.process(rec)
+    except Exception as exc:  # noqa: BLE001 - recorded; the dead pid is counted
+        t.step(f"{iid}: review worker error {type(exc).__name__}: {exc}")
+        rc = 1
+    cur = items.get(iid) or rec
+    if rc == 0 and cur.get("worker_pid") == me:
+        cur.pop("worker_pid", None)
+        cur.pop("review_launch", None)
+    cur["review_log"] = (t.log or cur.get("review_log") or [])[-REVIEW_LOG_KEEP:]
+    items.put(cur)
+    d.record("loop-review", d.clock() - t0)
+    return rc
+
+
+def push_worker(deps=None):
+    """The detached push: Tick.push (main clean, ahead, gates green on main,
+    leak sweep) under the merge lock, so main cannot move while it gates."""
+    d = deps or Deps()
+    p = d.root / PUSH_WORKER_REL
+    doc = read_json(p, {})
+    doc = doc if isinstance(doc, dict) else {}
+    me, pid = os.getpid(), doc.get("pid")
+    if pid and pid != me and d.pid_alive(pid):
+        return 0
+    t0 = d.clock()
+    atomic_write(p, json.dumps({"pid": me, "launched": doc.get("launched") or iso(t0)}))
+    t = Tick(d)
+    try:
+        with d.lock(d.root / MERGE_LOCK_REL):
+            t.push()
+    except d.watch.LockBusy:
+        t.step("push deferred: merge lock busy")
+    finally:
+        if (read_json(p, {}) or {}).get("pid") == me:
+            with contextlib.suppress(OSError):
+                p.unlink()
+    atomic_write(d.root / PUSH_LAST_REL,
+                 json.dumps({"finished": iso(d.clock()), "pushed": t.pushed, "log": t.log[-10:]}))
+    d.record("loop-push", d.clock() - t0)
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="EW loop tick")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2073,6 +2264,9 @@ def main(argv=None):
     sub.add_parser("checklist")
     ln = sub.add_parser("lane")
     ln.add_argument("item")
+    rv = sub.add_parser("review", help="plan 098: (internal) review / fix / merge one item")
+    rv.add_argument("item")
+    sub.add_parser("push", help="plan 098: (internal) gate main and push")
     sub.add_parser("session", help="plan 091: orders routed to the session")
     sd = sub.add_parser("session-done", help="plan 091: mark a routed order done")
     sd.add_argument("item")
@@ -2093,6 +2287,10 @@ def main(argv=None):
         return 0
     if a.cmd == "lane":
         return lane_worker(a.item)
+    if a.cmd == "review":
+        return review_worker(a.item)
+    if a.cmd == "push":
+        return push_worker()
     doc = read_json(ROOT / "ops/loop/control/progress/loop.json", {}) or {}
     # kit v10: emit() never raises (a cp1252 console gets "[ ]", pythonw prints nothing)
     ew_lane._load("fleet_checklist", "ops/fleet_kit/fleet_checklist.py").emit(render_checklist(doc))
