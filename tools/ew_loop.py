@@ -78,6 +78,8 @@ ITEMS_REL = CONTROL_REL / "loop_items"
 WATCH_REL = CONTROL_REL / "loop_inbox_watch.json"
 ORDERS_REL = CONTROL_REL / "loop_orders.json"
 LEGACY_LEDGER_REL = CONTROL_REL / "inbox_ledger.jsonl"  # pre-kit-v8 shim (deviation 13)
+DELIVERY_REL = CONTROL_REL / "delivery.jsonl"  # plan 093: one line per destination copy
+NOTE_STAMP = "%Y-%m-%d-%H%M"  # the fleet's dashed note stamp (kit batch_note)
 # Responder diet (operator 2026-10-05) + kit v8 item 14: an ORDER / FIX /
 # RULING note escalates to a lane work item (a lane does the work, the loop
 # answers after merge); any other note is classified for free and only what
@@ -218,6 +220,11 @@ def load_config(root):
     # (gitignored); replies go to <root>/moon_sync_outbox. Config overrides.
     return {"inbox_dir": loop.get("inbox_dir") or str(Path(root) / INBOX_REL),
             "outbox_dir": loop.get("outbox_dir") or str(Path(root) / OUTBOX_REL),
+            # plan 093: where a reply to <CODE> is copied (per-host, gitignored)
+            "dest_inboxes": {str(k).upper(): str(v) for k, v in
+                             (loop.get("dest_inboxes") or {}).items()
+                             if v} if isinstance(loop.get("dest_inboxes"), dict) else {},
+            "roster": loop.get("roster") or None,
             "max_new_plans_per_day": int(loop.get("max_new_plans_per_day",
                                                   DEFAULT_MAX_PLANS)),
             "max_notes_per_day": min(int(loop.get("max_notes_per_day", DEFAULT_MAX_NOTES)),
@@ -845,6 +852,9 @@ class Deps:
         self.estimate = eta.estimate
         self.record = eta.record
         self.clock = time.time
+        # plan 093: the machine fleet roster ({"repos": [{code, root, inbox?}]}),
+        # the same FLEET_ROSTER the kit statusline reads; tests pass None.
+        self.roster_path = os.environ.get("FLEET_ROSTER") or None
         for key, val in over.items():
             setattr(self, key, val)
 
@@ -953,6 +963,7 @@ class Tick:
             new = [n for n in fetch() if n not in seen]
             self.step(f"inbox: {len(new)} new (dry run)")
             return
+        self.redeliver(outbox)
 
         def deliver(names):
             batch = {}  # destination -> [(note, answer text, incoming hop)]
@@ -1030,7 +1041,7 @@ class Tick:
     def send_batches(self, batch, outbox):
         """ONE note per destination (kit batch_note); returns notes left pending."""
         pending = []
-        stamp = _dt.datetime.fromtimestamp(self.d.clock()).strftime("%Y-%m-%d-%H%M")
+        stamp = _dt.datetime.fromtimestamp(self.d.clock()).strftime(NOTE_STAMP)
         for to, parts in batch.items():
             hop_n = self.fi.next_hop(max(dec.hop for _, _, dec in parts))
             fname, body, names = self.fi.batch_note(CODE, to, [(n, b) for n, b, _ in parts],
@@ -1045,8 +1056,87 @@ class Tick:
             self.cap.record(fname, "ANSWER", to, parts=len(parts))
             for n, _, dec in parts:
                 self.fi.mark_seen(self.root, n, dec, verdict="ANSWER", clock=self.d.clock)
-            self.step(f"inbox answered: {', '.join(names)} -> {to} (1/1 reached)"[:200])
+            n_ok = int(self.deliver_note(outbox / fname, to))
+            self.step(f"inbox answered: {', '.join(names)} -> {to} "
+                      f"({n_ok}/1 reached)"[:200])
         return pending
+
+    # -- plan 093: destination copies (FLEET-COMMON 7: re-hash, N/M reached)
+    def dest_inbox(self, to):
+        """The destination tree's inbox dir for code `to`, or None: config
+        loop.dest_inboxes first, then the fleet roster (loop.roster, else
+        FLEET_ROSTER) entry's inbox, else its root/moon_sync_inbox."""
+        to = str(to or "").upper()
+        if self.cfg["dest_inboxes"].get(to):
+            return Path(self.cfg["dest_inboxes"][to])
+        roster = self.cfg.get("roster") or self.d.roster_path
+        doc = read_json(Path(roster), {}) if roster else {}
+        for r in (doc or {}).get("repos") or []:
+            if isinstance(r, dict) and str(r.get("code", "")).upper() == to:
+                if r.get("inbox"):
+                    return Path(r["inbox"])
+                if r.get("root"):
+                    return Path(r["root"]) / INBOX_REL
+        return None
+
+    def deliver_note(self, src, to, record_failure=True):
+        """Byte-copy an outbox note into `to`'s inbox, re-hash the copy against
+        the outbox copy and append a delivery ledger line. True = reached.
+        An existing copy with the same bytes counts as reached; one with other
+        bytes is never overwritten."""
+        src = Path(src)
+        data = src.read_bytes()
+        want = hashlib.sha256(data).hexdigest()
+        inbox = self.dest_inbox(to)
+        dest, reached, detail = None, False, ""
+        own = Path(self.cfg["inbox_dir"]).resolve() if self.cfg["inbox_dir"] else None
+        if inbox is None:
+            detail = f"no inbox known for {to}"
+        elif not inbox.is_dir():
+            detail = "destination inbox missing"
+        elif own is not None and inbox.resolve() == own:
+            detail = "destination is EW's own inbox"
+        else:
+            dest = inbox / src.name
+            try:
+                if not dest.exists():
+                    tmp = inbox / f".{src.name}.{os.getpid()}.tmp"  # dot: never scanned
+                    tmp.write_bytes(data)
+                    tmp.replace(dest)
+                got = hashlib.sha256(dest.read_bytes()).hexdigest()
+                reached = got == want
+                detail = "" if reached else "destination copy hash differs"
+            except OSError as exc:
+                detail = ascii_text(f"copy failed: {exc}", 200)
+        if reached or record_failure:
+            line = {"ts": iso(self.d.clock()), "note": src.name, "to": to,
+                    "sha256": want, "reached": reached, "count": f"{int(reached)}/1"}
+            if dest is not None:
+                line["dest_name"] = dest.name
+            if detail:
+                line["detail"] = detail
+            path = self.root / DELIVERY_REL
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="ascii", newline="\n") as fh:
+                fh.write(json.dumps(line, sort_keys=True) + "\n")
+        if not reached:
+            self.step(f"delivery {src.name} -> {to}: {detail}"[:200])
+        return reached
+
+    def redeliver(self, outbox):
+        """Retry every outbox note whose latest ledger line is not reached
+        (idempotent: a reached note is never copied again)."""
+        last = {}
+        for line in read_jsonl(self.root / DELIVERY_REL):
+            if line.get("note"):
+                last[line["note"]] = line
+        todo = [d for d in last.values() if not d.get("reached")
+                and (outbox / d["note"]).is_file()]
+        if not todo:
+            return
+        ok = sum(self.deliver_note(outbox / d["note"], d.get("to"), record_failure=False)
+                 for d in todo)
+        self.step(f"inbox: redelivered {ok}/{len(todo)} reached")
 
     def write_note(self, dest, body):
         body = ascii_text(body).rstrip("\n") + "\n"
@@ -1084,13 +1174,15 @@ class Tick:
         reply = (line or {}).get("result")
         if not line or line.get("rc") != 0 or not reply:
             return False
-        stamp = _dt.datetime.fromtimestamp(self.d.clock()).strftime("%Y%m%d-%H%M")
+        stamp = _dt.datetime.fromtimestamp(self.d.clock()).strftime(NOTE_STAMP)
         dest = outbox / f"{stamp}-from-{CODE}-ANSWER-re-{Path(name).stem}.md"
         if not self.write_note(dest, with_hop(ascii_text(reply), self.fi.next_hop(dec.hop))):
             return False
-        self.cap.record(dest.name, "ANSWER", dec.sender or "MAIN")
+        to = dec.sender or "MAIN"
+        self.cap.record(dest.name, "ANSWER", to)
         self.fi.mark_seen(self.root, name, dec, verdict="ANSWER", clock=self.d.clock)
-        self.step(f"inbox answered: {name} (1/1 reached)")
+        n_ok = int(self.deliver_note(dest, to))
+        self.step(f"inbox answered: {name} -> {to} ({n_ok}/1 reached)"[:200])
         return True
 
     def orders(self):
