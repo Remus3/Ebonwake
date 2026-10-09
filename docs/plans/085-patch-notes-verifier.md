@@ -90,9 +90,15 @@ Depends on: 064, 073.
    replaces an older one, a silent page never erases a verdict. Each verdict
    carries the row's fingerprint (sha1 of the tracked row incl. its hint);
    when a lane edits the row the old verdict is dropped on the next read.
-   `checked_at` = the page's fetch time (deterministic, so a re-read writes
-   nothing). Reverses if: a patch reverts a value and the older verdict
-   should win.
+   `checked_at` = the time of the recompute that checked the row (amended
+   2026-10-09, bug PV: the page's fetch time never moved because a stamped
+   page is never re-fetched; a verdict kept because a newer page was silent
+   is re-stamped, one whose page left the cache keeps its stamp; the state
+   file is written once per memo miss - restart or note set change - never
+   per request; alternatives top-level last-run stamp only / periodic
+   re-fetch rejected; the stamp reverses if the file is rewritten without a
+   memo miss or a consumer needs fetch-time semantics). Reverses if: a patch
+   reverts a value and the older verdict should win.
 6. "Treat confirmed as verified": the epoch view's `verified` becomes true,
    presets / drop rows show the patch-notes date; every surfaced row gains a
    `patch` field `{verdict, date, evidence, url}` (null when silent / none).

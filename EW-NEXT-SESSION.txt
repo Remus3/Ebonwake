@@ -59,10 +59,6 @@ Carried forward (not acted on yet):
   no undispatchable would-deny row; then write `deny` into
   ops/loop/control/subagent_first.mode and say so in the next batched note
   to MAIN.
-- Patchverify checked_at: every /api/data/verdicts checked_at still read
-  2026-10-08T11:35:22Z after merge 4979187 + server restart, and still on 2026-10-09 after a restart on 9a0b58d. Check whether
-  the patchverify recompute refreshes checked_at (stale verdict cache vs
-  only the timestamp not updated); fix with a failing test first.
 - NOTE: Dd505bd merged; read back 2026-10-09 on server 9a0b58d: band-62-64,
   band-65-75 and cap-62-64 all confirmed (band split intact).
 - NOTE: session 17 (2026-10-08): old C: checkout + C: ew-worktrees sent to

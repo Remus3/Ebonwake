@@ -229,7 +229,7 @@ def test_verdict_file_round_trip_and_tracked_data_untouched(tmp_path):
     before = _digest(DATA)
     path = tmp_path / "data_verdicts.json"
     notes = [_note()]
-    svc = dataverdicts.VerdictService(lambda: notes, path=path)
+    svc = dataverdicts.VerdictService(lambda: notes, path=path, clock=lambda: T0)
     v = svc.view()
     assert v["verdicts"][EPOCH]["verdict"] == "confirmed"
     assert v["verdicts"][EPOCH]["notice_no"] == PATCH_NO
@@ -258,17 +258,50 @@ def test_row_change_drops_its_old_verdict(tmp_path):
 def test_newer_notice_wins_silent_never_erases(tmp_path):
     hinted = patchverify.load()["hinted"]
     v = {}
-    dataverdicts.apply(v, hinted, _note())
+    dataverdicts.apply(v, hinted, _note(), dataverdicts._iso(T0))
     newer = _note(no=PATCH_NO + 5, title="[Updates] Patch Notes - October 15, 2026",
                   text="Adventure Blessing: Combat EXP gain changed from 30% to 40%.",
                   at=T0 + 7 * 86400)
-    dataverdicts.apply(v, hinted, newer)
+    dataverdicts.apply(v, hinted, newer, dataverdicts._iso(T0))
     assert v[BLESS]["verdict"] == "contradicted" and v[BLESS]["notice_no"] == PATCH_NO + 5
     assert v[EPOCH]["verdict"] == "confirmed", "the Oct 15 page says nothing on the epoch"
     quiet = _note(no=PATCH_NO + 9, title="[Updates] Patch Notes - October 22, 2026",
                   text="Nothing here.", at=T0 + 14 * 86400)
-    dataverdicts.apply(v, hinted, quiet)
+    dataverdicts.apply(v, hinted, quiet, dataverdicts._iso(T0))
     assert v[BLESS]["verdict"] == "contradicted"
+
+
+def test_pv_checked_at_is_the_recompute_time_not_the_page_fetch(tmp_path):
+    """Bug PV: checked_at was pinned to the page's fetch time; a page carrying a
+    stamp is never re-fetched, so every later check still read the first fetch."""
+    path = tmp_path / "v.json"
+    day = 86400
+    first = dataverdicts.VerdictService(lambda: [_note()], path=path, clock=lambda: T0 + day)
+    assert first.view()["verdicts"][EPOCH]["checked_at"] == dataverdicts._iso(T0 + day)
+    # a restart re-checks the same cached page: the stamp moves, on disk too
+    again = dataverdicts.VerdictService(lambda: [_note()], path=path,
+                                        clock=lambda: T0 + 2 * day)
+    assert again.view()["verdicts"][EPOCH]["checked_at"] == dataverdicts._iso(T0 + 2 * day)
+    on_disk = json.loads(path.read_text())
+    assert on_disk["verdicts"][EPOCH]["checked_at"] == dataverdicts._iso(T0 + 2 * day)
+    # a row whose page left the cache was not re-checked: its stamp stays
+    gone = dataverdicts.VerdictService(lambda: [], path=path, clock=lambda: T0 + 3 * day)
+    assert gone.view()["verdicts"][EPOCH]["checked_at"] == dataverdicts._iso(T0 + 2 * day)
+
+
+def test_pv_silent_newer_page_still_refreshes_checked_at():
+    """Sibling of PV: a verdict kept because the newer page is silent was still
+    checked against that page."""
+    hinted = patchverify.load()["hinted"]
+    v = {}
+    dataverdicts.apply(v, hinted, _note(), dataverdicts._iso(T0))
+    quiet = _note(no=PATCH_NO + 9, title="[Updates] Patch Notes - October 22, 2026",
+                  text="Nothing here.", at=T0 + 14 * 86400)
+    dataverdicts.apply(v, hinted, quiet, dataverdicts._iso(T0 + 20 * 86400))
+    assert v[BLESS]["verdict"] == "confirmed" and v[BLESS]["notice_no"] == PATCH_NO
+    assert v[BLESS]["checked_at"] == dataverdicts._iso(T0 + 20 * 86400)
+    # a row the newer page's title does not cover was not checked by it
+    assert v[EPOCH]["checked_at"] == dataverdicts._iso(T0)
 
 
 def test_bad_hint_table_is_an_error_not_a_crash(tmp_path):

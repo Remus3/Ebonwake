@@ -4,7 +4,9 @@
 keeps their text; this module never fetches). Each run checks every hinted
 row (`patchverify`) against every cached page, oldest first: a newer
 non-silent verdict replaces an older one, a silent page never erases a
-confirmed / contradicted one. Verdicts persist in `ops/runtime/
+confirmed / contradicted one. `checked_at` is the time of the run that
+checked the row (bug PV: the page's fetch time never moved, since a stamped
+page is never re-fetched). Verdicts persist in `ops/runtime/
 data_verdicts.json` (atomic write), keyed `<file>#<row id>`, each carrying the
 row fingerprint: once a lane edits the tracked row (value or hint) its old
 verdict is dropped. Tracked data files are never written here.
@@ -43,11 +45,11 @@ def _clean(v, fp):
     return dict(v)
 
 
-def apply(verdicts, hinted, note):
+def apply(verdicts, hinted, note, checked):
     """Fold one cached note {group_no, title, url, stamp, fetched_at, text} into
-    `verdicts` (in place); returns it."""
+    `verdicts` (in place), stamping every row it checks with `checked` (ISO);
+    returns it."""
     date = patchverify.note_date(note["title"], note.get("stamp"))
-    checked = _iso(note["fetched_at"])
     for key, r in patchverify.check(note["text"], note["title"], hinted).items():
         new = {"verdict": r["verdict"], "evidence": r["evidence"], "notice_no": note["group_no"],
                "url": note["url"], "date": date, "checked_at": checked, "fp": hinted[key]["fp"]}
@@ -55,6 +57,8 @@ def apply(verdicts, hinted, note):
         if (old is None or old["verdict"] == "silent"
                 or (new["verdict"] != "silent" and _order(new) >= _order(old))):
             verdicts[key] = new
+        else:
+            old["checked_at"] = checked  # kept, but checked against this page too
     return verdicts
 
 
@@ -113,8 +117,9 @@ class VerdictService:
                 c = _clean(prev.get(k), h["fp"])
                 if c is not None:
                     verdicts[k] = c
+            checked = _iso(self.clock())
             for n in notes:
-                apply(verdicts, hints["hinted"], n)
+                apply(verdicts, hints["hinted"], n, checked)
             last = doc.get("last_notice") if isinstance(doc.get("last_notice"), dict) else None
             if notes:
                 n = notes[-1]
