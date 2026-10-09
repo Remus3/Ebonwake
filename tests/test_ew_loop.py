@@ -1912,3 +1912,82 @@ def test_contradicted_data_rows_become_work_items(tmp_path):
     assert work[-1]["kind"] == "handoff" and work[-1]["text"] == items[0]["text"]
     p.write_text("junk", newline="\n")
     assert ew_loop.data_items(root) == []
+
+
+# ---------------------------------------------------------------- plan 091
+
+def test_session_paths_names_protected_targets():
+    sp = ew_loop.session_paths
+    assert sp("o-from-MAIN-ORDER-to-EW-x.md", "add dependabot\n") == []
+    assert sp("n.md", "vendor into ops/fleet_kit/ and re-pin") == ["ops/fleet_kit/"]
+    assert sp("n.md", "edit ops\\fleet_kit\\MANIFEST.json") == ["ops/fleet_kit/"]
+    assert sp("2026-FLEET-KIT-v10-ORDER.md", "ship it") == ["ops/fleet_kit/"]
+    assert sp("n.md", "wire .claude/settings.json and re-embed CLAUDE.md") == \
+        [".claude/", "CLAUDE.md"]
+    assert sp("n.md", "the app/.claudex dir and NOTCLAUDE.mdx") == []
+
+
+KIT_ORDER = "k-from-MAIN-ORDER-to-EW-kit-v10.md"
+
+
+def _session_order(tmp_path):
+    root, inbox, outbox = _inbox_root(tmp_path, roadmap=ROADMAP)
+    sp = FakeSpawn([{"rc": 0, "error": None, "result": "# From EW - ANSWER\nvendored"}])
+    d = deps(root, spawn=sp)
+    ew_loop.tick(deps=d, no_push=True)  # baseline
+    (inbox / KIT_ORDER).write_text("# From MAIN - ORDER\nvendor kit into ops/fleet_kit/\n"
+                                   "wire the hook in .claude/settings.json\n")
+    return root, outbox, sp, d
+
+
+def test_session_order_is_not_dispatched_and_shows_in_checklist(tmp_path):
+    root, outbox, sp, d = _session_order(tmp_path)
+    doc = ew_loop.tick(deps=d, no_push=True)
+    oid = ew_loop.order_id(KIT_ORDER)
+    assert oid not in d.seen["launch"] and ew_loop.Items(root).get(oid) is None
+    _, work, skipped = ew_loop.Tick(d).work_list()
+    assert oid not in [w["id"] for w in work]
+    hit = [h for h in skipped if h["id"] == oid]
+    assert hit and hit[0]["skip"] == "session"
+    row = [r for r in doc["checklist"] if r["id"] == oid]
+    assert row and row[0]["state"].startswith("session: needs ops/fleet_kit/")
+    assert not list(outbox.iterdir())
+
+
+def test_session_order_waits_past_adjudicate_then_answers_after_session_done(tmp_path):
+    root, outbox, sp, d = _session_order(tmp_path)
+    ew_loop.tick(deps=d, no_push=True)
+    oid = ew_loop.order_id(KIT_ORDER)
+    ew_loop.Items(root).put({"id": oid, "kind": "order", "state": "adjudicate",
+                             "commit": "wip0", "rounds": 3, "title": KIT_ORDER})
+    ew_loop.tick(deps=d, no_push=True)
+    assert not list(outbox.iterdir())  # a partial lane run does not close it
+    assert [o["id"] for o in ew_loop.session_orders(root)] == [oid]
+    rec = ew_loop.session_done(root, oid, "abc1234", clock=lambda: 1_790_000_000.0)
+    assert rec["state"] == "merged" and rec["session_done"] and rec["commit"] == "abc1234"
+    assert ew_loop.session_orders(root) == []
+    again = ew_loop.session_done(root, oid, "other", clock=lambda: 1_790_000_100.0)
+    assert again["commit"] == "abc1234"  # idempotent: the first record stands
+    ew_loop.tick(deps=d, no_push=True)
+    calls = [c for c in sp.calls if c.get("note") == KIT_ORDER]
+    assert len(calls) == 1 and "abc1234" in calls[0]["prompt"]
+    assert len(list(outbox.glob("*-re-k-from-MAIN-ORDER-to-EW-kit-v10.md"))) == 1
+    ew_loop.tick(deps=d, no_push=True)
+    assert len([c for c in sp.calls if c.get("note") == KIT_ORDER]) == 1
+
+
+def test_session_cli_lists_and_refuses_unknown_id(tmp_path, monkeypatch, capsys):
+    root, outbox, sp, d = _session_order(tmp_path)
+    ew_loop.tick(deps=d, no_push=True)
+    monkeypatch.setattr(ew_loop, "ROOT", root)
+    oid = ew_loop.order_id(KIT_ORDER)
+    assert ew_loop.main(["session"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith(oid + " " + KIT_ORDER) and "needs: ops/fleet_kit/, .claude/" in out
+    assert ew_loop.main(["session-done", "Nffffff"]) == 2
+    assert ew_loop.Items(root).get("Nffffff") is None
+    assert ew_loop.main(["session-done", oid, "--commit", "f00d"]) == 0
+    assert ew_loop.Items(root).get(oid)["commit"] == "f00d"
+    capsys.readouterr()
+    assert ew_loop.main(["session"]) == 0
+    assert capsys.readouterr().out.strip() == "none"
