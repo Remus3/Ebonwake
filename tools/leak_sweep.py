@@ -170,7 +170,12 @@ def scan_pre_push(ref_lines, needles_rx, cwd=ROOT):
             msgs = _git("log", "--format=%B", local_sha, cwd=cwd)
         else:
             diff = _git("diff", "--no-color", rng, cwd=cwd)
-            msgs = _git("log", "--format=%B", rng, cwd=cwd)
+            # A message byte-identical to one already reachable from the remote
+            # ref is public already (a history rewrite re-pushes old messages
+            # under new SHAs); only messages new to the remote are scanned.
+            public = set(_git("log", "-z", "--format=%B", remote_sha, cwd=cwd).split("\0"))
+            msgs = "\n".join(m for m in _git("log", "-z", "--format=%B", rng, cwd=cwd).split("\0")
+                             if m not in public)
         scanned += len(diff) + len(msgs)
         findings += scan_diff(diff, needles_rx)
         findings += scan_text(msgs, "commit-message", needles_rx)
