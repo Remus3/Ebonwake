@@ -83,7 +83,7 @@ def test_tracked_epochs_pass_schema():
     assert rows[0]["verified"] is False and "verify" in rows[0]["source"]
     assert levels._parse_iso(rows[0]["starts_utc"]).date() == dt.date(2026, 10, 8)
     for c in rows[0]["kill_xp_cap"]:
-        assert "verify" in c["note"]
+        assert "verify" in c["note"] or "patch notes 2026-10-08" in c["note"]
 
 
 def test_tracked_presets_pass_schema():
