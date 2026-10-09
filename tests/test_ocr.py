@@ -369,7 +369,7 @@ def srv(tmp_path, watch):
                           profile_cfg={}, game_watch=watch, ocr_runner=runner,
                           ocr_cache_dir=tmp_path / "ocr")
     s.ocr_calls = calls
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s
     s.shutdown()
@@ -413,7 +413,7 @@ def test_route_ocr_failure_is_502(tmp_path, watch):
                                                            cache_dir=tmp_path / "cache"),
                           profile_cfg={}, game_watch=watch, ocr_runner=runner,
                           ocr_cache_dir=tmp_path / "ocr")
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     try:
         name = _shot(watch)
@@ -1113,7 +1113,7 @@ def test_route_loot_import_never_writes_grind(tmp_path, watch):
                                                            cache_dir=tmp_path / "cache"),
                           profile_cfg={}, game_watch=watch, ocr_runner=lambda p: LOOT_DOC,
                           ocr_cache_dir=tmp_path / "ocr")
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     try:
         s.grind.add_spot("Gyfin")

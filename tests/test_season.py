@@ -372,7 +372,7 @@ def srv(tmp_path):
                           sse_interval=0.05, market_seed=[], profile_cfg={},
                           market_client=market.ArshaClient(fetch=no_net,
                                                            cache_dir=tmp_path / "cache"))
-    th = threading.Thread(target=s.serve_forever, daemon=True)
+    th = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     th.start()
     yield s
     s.shutdown()

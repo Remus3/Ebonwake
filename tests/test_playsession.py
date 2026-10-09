@@ -385,7 +385,7 @@ def psrv(tmp_path):
                           market_client=market.ArshaClient(fetch=_no_network,
                                                            cache_dir=tmp_path / "cache"),
                           profile_cfg={}, game_watch=w, config_path=cfg)
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s, w
     s.shutdown()

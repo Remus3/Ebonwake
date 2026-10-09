@@ -104,7 +104,7 @@ def test_real_server_banner_and_doc_pass_probe(tmp_path):
                           market_client=market.ArshaClient(
                               fetch=lambda u, t: (_ for _ in ()).throw(AssertionError()),
                               cache_dir=tmp_path / "cache"))
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     try:
         url = f"http://127.0.0.1:{s.server_address[1]}/api/version"

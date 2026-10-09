@@ -653,7 +653,7 @@ def gsrv(tmp_path, dirs):
                           market_client=market.ArshaClient(fetch=_no_network,
                                                            cache_dir=tmp_path / "cache"),
                           profile_cfg={}, game_watch=w)
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s, w, clk
     s.shutdown()

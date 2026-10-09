@@ -375,7 +375,7 @@ def test_routes(tmp_path):
                           sse_interval=0.05, market_seed=[], events_clock=clk, today_clock=clk)
     s.store.put("logindays", {"dates": DATES, "marked": [], "open": None, "seen": None,
                               "since": "2026-10-01", "backfilled": True})
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
 
     def req(method, path, body=None):

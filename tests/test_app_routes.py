@@ -33,7 +33,7 @@ def srv(tmp_path):
     w = gamewatch.GameWatch(install_dir=str(inst), documents_dir=str(docs), tasklist=Tasklist())
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
                           market_seed=[], profile_cfg={}, game_watch=w)
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s, inst, docs
     s.shutdown()

@@ -3,6 +3,11 @@ name: ci
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "ops/loop/control/**"
+      - "**/*.md"
+      - "EW-NEXT-SESSION.txt"
   pull_request:
     branches: [main]
   workflow_dispatch:

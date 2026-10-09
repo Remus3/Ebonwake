@@ -49,7 +49,7 @@ def env(tmp_path):
                           today_clock=clock, grind_clock=clock, deadeye_clock=clock,
                           leveling_clock=clock)
     s.market.settings = {"vp": False, "fame_pct": 0}  # never the host's config/local.json
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s, clock
     s.shutdown()

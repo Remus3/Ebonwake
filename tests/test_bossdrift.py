@@ -318,7 +318,7 @@ def srv(tmp_path):
                           drift_client=bossdrift.DriftClient(CFG, fetch=net, clock=clock,
                                                              cache_dir=tmp_path / "dc"),
                           drift_spawn=_sync, config_path=tmp_path / "local.json")
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s, net
     s.shutdown()

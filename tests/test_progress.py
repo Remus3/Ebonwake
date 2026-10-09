@@ -384,7 +384,7 @@ def psrv(tmp_path):
                           market_client=market.ArshaClient(fetch=_no_network,
                                                            cache_dir=tmp_path / "cache"),
                           profile_client=pc)
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s
     s.shutdown()
@@ -552,7 +552,7 @@ def test_route_post_does_not_wait_on_slow_upstream(tmp_path):
                           market_client=market.ArshaClient(fetch=_no_network,
                                                            cache_dir=tmp_path / "cache"),
                           profile_client=pc)
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     try:
         import time as _t
@@ -1066,7 +1066,7 @@ def hsrv(tmp_path):
                                                            cache_dir=tmp_path / "cache"),
                           profile_client=pc)
     s.progress.spawn = _sync
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s, clk, pc
     s.shutdown()

@@ -450,7 +450,7 @@ def srv(tmp_path):
                           leveling_clock=lambda: T0, config_path=tmp_path / "local.json",
                           notice_client=client, notice_spawn=lambda fn: None,
                           verdict_data_dir=_stale_dir(tmp_path))
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s
     s.shutdown()
@@ -515,7 +515,7 @@ def test_notice_detail_list_links_confirm_the_cap75_epoch(tmp_path):
                           leveling_clock=lambda: T0, config_path=tmp_path / "local.json",
                           notice_client=client, notice_spawn=lambda fn: None,
                           verdict_data_dir=_stale_dir(tmp_path))
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     try:
         st, v = _get(s, "/api/data/verdicts")
@@ -884,7 +884,7 @@ def srv_asia(tmp_path):
                                                            cache_dir=tmp_path / "mcache"),
                           leveling_clock=lambda: T0, config_path=tmp_path / "local.json",
                           notice_client=client, notice_spawn=lambda fn: None)
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s
     s.shutdown()

@@ -477,7 +477,7 @@ def srv(tmp_path):
                                                            cache_dir=tmp_path / "mcache"),
                           events_clock=clock, config_path=tmp_path / "local.json",
                           notice_client=_client(tmp_path, net, clock), notice_spawn=_sync)
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     s.test_net = net
     s.test_clock = clock

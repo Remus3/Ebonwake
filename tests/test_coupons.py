@@ -325,7 +325,7 @@ def srv(tmp_path):
                                                            cache_dir=tmp_path / "mcache"),
                           events_clock=clock,
                           coupon_client=_client(tmp_path, net, clock), coupon_spawn=_sync)
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     s.test_net = net
     yield s

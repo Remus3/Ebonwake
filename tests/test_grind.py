@@ -338,7 +338,7 @@ def test_out_of_range_stamp_route_ok(tmp_path, clock):
                      "updated": "0001-01-01T00:00:00+01:00"})
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
                           sse_interval=0.05, market_seed=[], grind_clock=clock)
-    threading.Thread(target=s.serve_forever, daemon=True).start()
+    threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     try:
         status, doc, _ = _req(s, "GET", "/api/grind")
         assert status == 200 and _buff(doc, "X")["ends"] is None
@@ -360,7 +360,7 @@ def test_source(svc):
 def gsrv(tmp_path, clock):
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
                           sse_interval=0.05, market_seed=[], grind_clock=clock)
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s
     s.shutdown()
@@ -975,7 +975,7 @@ def test_route_loot_get_and_post(tmp_path, clock):
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
                           sse_interval=0.05, market_seed=[], grind_clock=clock,
                           market_client=mc)
-    threading.Thread(target=s.serve_forever, daemon=True).start()
+    threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     try:
         _req(s, "POST", "/api/grind", {"add_spot": "Polly's Forest"})
         st, doc, _ = _req(s, "POST", "/api/grind",

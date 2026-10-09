@@ -2107,3 +2107,41 @@ def test_session_cli_lists_and_refuses_unknown_id(tmp_path, monkeypatch, capsys)
     capsys.readouterr()
     assert ew_loop.main(["session"]) == 0
     assert capsys.readouterr().out.strip() == "none"
+
+
+# ---------------------------------------------------------------- perf audit 2.10: hooksPath
+
+def _cp(rc, out=""):
+    import subprocess
+    return subprocess.CompletedProcess(["git"], rc, out, "")
+
+
+def test_hooks_path_check_ok_when_inside_repo(tmp_path):
+    (tmp_path / ".githooks").mkdir()
+    git = lambda args, cwd, input=None: _cp(0, ".githooks\n")  # noqa: E731
+    assert ew_loop.hooks_path_problem(tmp_path, git) is None
+
+
+def test_hooks_path_check_flags_missing_outside_or_unset(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    gone = lambda args, cwd, input=None: _cp(0, ".githooks\n")  # noqa: E731
+    assert "does not exist" in ew_loop.hooks_path_problem(root, gone)
+    outside = lambda args, cwd, input=None: _cp(0, str(tmp_path / "elsewhere") + "\n")  # noqa: E731
+    assert "outside" in ew_loop.hooks_path_problem(root, outside)
+    unset = lambda args, cwd, input=None: _cp(1, "")  # noqa: E731
+    assert "unset" in ew_loop.hooks_path_problem(root, unset)
+
+
+def test_tick_logs_a_bad_hooks_path_without_failing(tmp_path):
+    root = make_root(tmp_path)
+
+    def git(args, cwd, input=None):
+        if args[:2] == ["config", "core.hooksPath"]:
+            return _cp(0, "gone-hooks\n")
+        return real_git(args, cwd, input)
+
+    doc = ew_loop.tick(deps=deps(root, git=git), no_push=True)
+    assert doc.get("state") != "busy"
+    assert any("hooksPath" in line for line in progress(root)["log"])

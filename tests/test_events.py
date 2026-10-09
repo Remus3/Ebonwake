@@ -398,7 +398,7 @@ def test_concurrent_adds_unique_ids(svc):
 def esrv(tmp_path, clock):
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
                           sse_interval=0.05, market_seed=[], events_clock=clock)
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s
     s.shutdown()

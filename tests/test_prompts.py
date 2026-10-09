@@ -205,7 +205,7 @@ def psrv(tmp_path):
                                                            cache_dir=tmp_path / "cache"),
                           profile_cfg={}, game_watch=w, config_path=tmp_path / "local.json",
                           today_clock=clk, context_clock=clk)
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s, w, clk
     s.shutdown()

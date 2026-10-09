@@ -715,6 +715,27 @@ def _git(args, cwd, input=None, lock=None):
                                            f"git lock: {type(exc).__name__}: {exc}")
 
 
+def hooks_path_problem(root, git):
+    """Perf audit 2.10: why core.hooksPath does not resolve to an existing
+    directory inside the repo (a moved checkout left it pointing elsewhere), or
+    None. Reported in the tick log only; it never fails the tick."""
+    try:
+        r = git(["config", "core.hooksPath"], root)
+    except Exception as exc:  # noqa: BLE001 - a check, never a tick failure
+        return ascii_text(f"hooksPath check failed: {type(exc).__name__}", 200)
+    val = (r.stdout or "").strip() if r.returncode == 0 else ""
+    if not val:
+        return "hooksPath unset: hooks not installed (python tools/install_hooks.py)"
+    root = Path(root).resolve()
+    hp = Path(val)
+    hp = (hp if hp.is_absolute() else root / hp).resolve()
+    if hp != root and root not in hp.parents:
+        return "hooksPath points outside the repo: re-run python tools/install_hooks.py"
+    if not hp.is_dir():
+        return "hooksPath does not exist: re-run python tools/install_hooks.py"
+    return None
+
+
 CI_WORKFLOW_REL = Path(".github/workflows/ci.yml")
 CI_SETUP_RX = re.compile(r"\bpip\s+install\b")
 
@@ -1918,6 +1939,9 @@ class Tick:
 
     def run(self):
         started = self.d.clock()
+        bad_hooks = hooks_path_problem(self.root, self.d.git)
+        if bad_hooks:
+            self.step(bad_hooks)
         self.reap_lost()
         if not self.blocked():
             self.inbox()

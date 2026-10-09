@@ -360,7 +360,7 @@ def csrv(tmp_path):
                                                            cache_dir=tmp_path / "cache"),
                           profile_cfg={}, game_watch=w, config_path=cfg, context_clock=clk,
                           leveling_clock=clk, bosses_clock=clk)
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s, w, clk, at, cfg
     s.shutdown()

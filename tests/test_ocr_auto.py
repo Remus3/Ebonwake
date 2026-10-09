@@ -526,7 +526,7 @@ def srv(tmp_path):
                           ocr_runner=lambda p: docs[p.name], ocr_cache_dir=tmp_path / "ocr",
                           config_path=tmp_path / "local.json")
     s.fake_game, s.fake_docs = game, docs
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s
     s.shutdown()

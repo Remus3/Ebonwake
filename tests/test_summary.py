@@ -367,7 +367,7 @@ def esrv(tmp_path, clock):
                           sse_interval=0.05, market_seed=[], grind_clock=clock,
                           game_watch=w)
     s.listed = listed
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s
     s.shutdown()

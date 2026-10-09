@@ -366,7 +366,7 @@ def srv(tmp_path, request):
                           config_path=tmp_path / "local.json",
                           notice_client=client, notice_spawn=lambda fn: fn())
     s.test_clock = clock
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s
     s.shutdown()

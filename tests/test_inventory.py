@@ -403,7 +403,7 @@ def srv(tmp_path):
                           market_client=market.ArshaClient(fetch=_no_network,
                                                            cache_dir=tmp_path / "cache"),
                           config_path=tmp_path / "local.json")
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s
     s.shutdown()

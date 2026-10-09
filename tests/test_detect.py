@@ -368,7 +368,7 @@ def test_server_wires_the_detector(tmp_path):
                           market_client=market.ArshaClient(fetch=_no_network,
                                                            cache_dir=tmp_path / "cache"),
                           profile_cfg={}, config_path=cfg, game_watch=gw, detector=det)
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     try:
         assert gw.poll() == "not_running"

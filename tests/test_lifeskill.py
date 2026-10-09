@@ -226,7 +226,7 @@ def srv(tmp_path):
                                                            cache_dir=tmp_path / "cache"),
                           profile_client=pc)
     s.progress.spawn = _sync
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s
     s.shutdown()

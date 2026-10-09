@@ -438,7 +438,7 @@ def srv(tmp_path, clock):
     s = ewapp.make_server(port=0, store_root=tmp_path / "store", commit="a" * 40,
                           market_seed=[], grind_clock=clock, leveling_clock=clock,
                           profile_cfg={})
-    t = threading.Thread(target=s.serve_forever, daemon=True)
+    t = threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
     t.start()
     yield s
     s.shutdown()
