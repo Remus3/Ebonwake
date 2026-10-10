@@ -15,6 +15,12 @@ def test_roster_and_cap():
         ew_lane.check_lane("rogue")
 
 
+def test_suite_pins_fleet_sidecar_root_off():
+    """Kit v14 3.4: the suite never depends on the machine FLEET_SIDECAR_ROOT."""
+    import os
+    assert os.environ.get("FLEET_SIDECAR_ROOT") == ""
+
+
 def test_kit_worktree_layout_is_per_lane_index(tmp_path):
     fl = ew_lane.lanes()
     assert fl.LANE_CAP_MAX == 3

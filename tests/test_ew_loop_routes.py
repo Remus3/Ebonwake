@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tests"))
@@ -121,6 +123,7 @@ def test_resolve_lane_runs_sonnet(tmp_path):
     assert (seen[0]["model"], seen[0]["effort"]) == ("sonnet", "medium")
 
 
+@pytest.mark.git  # real git world via test_ew_loop (plan 097 tier guard)
 def test_verifier_is_sonnet_low_and_fix_rounds_are_sonnet(tmp_path):
     root, wt = L.git_world(tmp_path)
     fail = {"rc": 0, "error": None, "result": "VERDICT: FAIL\n1. nit"}
@@ -136,6 +139,7 @@ def test_verifier_is_sonnet_low_and_fix_rounds_are_sonnet(tmp_path):
     assert fixes[0]["model"] == "sonnet" and fixes[0]["effort"] == "medium"
 
 
+@pytest.mark.git  # real git world via test_ew_loop (plan 097 tier guard)
 def test_order_answer_is_sonnet_low(tmp_path):
     root, inbox, outbox = L._inbox_root(tmp_path, roadmap=L.ROADMAP)
     sp = L.FakeSpawn([{"rc": 0, "error": None, "result": "# From EW - ANSWER\ndone"}])

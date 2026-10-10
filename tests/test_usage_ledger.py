@@ -6,6 +6,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "tests"))
@@ -80,6 +82,7 @@ def test_usage_budget_takes_the_larger_ledger(tmp_path):
     assert not b.readable() and not b.can_start()
 
 
+@pytest.mark.git  # real git world via test_ew_loop (plan 097 tier guard)
 def test_spawn_block_counts_usage_rows_the_budget_missed(tmp_path):
     root = make_root(tmp_path)
     d = deps(root)
@@ -136,6 +139,7 @@ def test_backfill_skips_when_the_file_grew_meanwhile(tmp_path):
     assert usage_ledger.backfill_kind(p) == 1
 
 
+@pytest.mark.git  # real git world via test_ew_loop (plan 097 tier guard)
 def test_tick_backfills_usage_log_but_dry_run_does_not(tmp_path):
     root = make_root(tmp_path)
     write_rows(root / USAGE, [row(NOW - 5, kind=None)])

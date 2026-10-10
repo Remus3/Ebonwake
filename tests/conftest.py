@@ -5,8 +5,12 @@ path), so env_roots is empty.
 
 Plan 097: the tier guard (tests/ew_tiers.py) - markers slow / server / git,
 `--fast` deselects slow and git tests, and an unmarked test that spawns git or
-binds a socket fails."""
+binds a socket fails.
 
+Kit v14 3.4: FLEET_SIDECAR_ROOT is pinned to "" (off) for the whole suite, so
+fleet_lanes.worktree_path() never reads the machine variable."""
+
+import os
 import sys
 from pathlib import Path
 
@@ -14,6 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ops" / "fleet_kit"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ew_tiers  # noqa: E402
 import fleet_test_guard  # noqa: E402
+
+os.environ["FLEET_SIDECAR_ROOT"] = ""  # empty value = off (process env wins)
 
 fleet_test_guard.install(globals(), root=Path(__file__).resolve().parents[1], env_roots={})
 ew_tiers.install(globals())

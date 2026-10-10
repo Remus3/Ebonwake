@@ -176,7 +176,7 @@ edit. Tree-specific rules go BELOW this block, never inside it.
 
 # EW rules (tree-specific)
 
-EW channel code: `EW`. Kit: v13, vendored at `ops/fleet_kit/`. Kit conformance:
+EW channel code: `EW`. Kit: v14, vendored at `ops/fleet_kit/`. Kit conformance:
 `tests/test_fleet_kit_conformance.py`. Hand-off: `EW-NEXT-SESSION.txt` (tracked).
 
 ## Operator standing orders (given 2026-10-04, binding on every EW session)
