@@ -1,117 +1,73 @@
 EW NEXT SESSION
 ---------------
-SESSION: 22
+SESSION: 23
 
-Next action: RR - re-run the REPO-REVIEW driver (MAIN ORDER 2246 sec 8)
-as a separate detached process when memory allows, starting from its
-partial work on refs/ew/keep/repo-review-20261009 (a808292); check plan +
-findings files (every top-level folder, DONE / FILED / N-A, files reviewed
-N of N), merged and pushed, then send its result to MAIN in the next
-batched ANSWER. That ANSWER MUST correct the 0945 ANSWER's "driver
-queued / running" claim (it was reaped ~10:00 for low memory, never
-finished). Perf rows 096-100 are done (loop); 101 is open but the loop
-reports "101: no plan doc, no dependency gate" - give it a plan doc.
+Next action: SF - on/after 2026-10-11 (date-gated; before it, skip): if
+the interactive sessions since 2026-10-08 still show 0 undispatchable
+would-deny rows in ops/loop/control/subagent_first.jsonl (session 19: 19
+would-deny, all dispatchable, research 0019; session 20: 0 / 271), write
+`deny` into ops/loop/control/subagent_first.mode, read it back, and say so
+in the next batched note to MAIN. Before 2026-10-11: let the loop work
+ROADMAP rows 101 / 107 and verify what it merged (nothing in adjudicate /
+merge-conflict / gave-up / failed-dirty), then work ROADMAP row 106
+(session work, kept out of Carried forward so the loop does not dispatch
+it): sidecar consolidation (research 0018 F-OUT-2/3) - move lane
+worktrees from ../ew-worktrees to the kit v14 sidecar root
+(<sidecar>/EW/Worktree/lane-<i>, fleet_lanes) with the loop HALTed and
+lanes idle; archive the superseded kit bundles v6-v13 out of
+moon_sync_inbox after an inbox_seen check. Recycle Bin only,
+consumer-checked.
 
 Carried forward (not acted on yet):
-- FIX N7416e2 (MAIN 0805 FIX TEMP-1, ONE ANSWER owed): loop item
-  state failed / verdict adjudicate after refute 3/3; lane commit refused
-  by leak sweep (HALT docs/plans/102-temp1-pytest-retention.md:88,
-  needle-slot-5). WIP on refs/ew/keep/N7416e2 (d6605e5), unmerged.
-  pytest.ini on main still has no retention keys (read 2026-10-09).
-  Adjudicator rules, then land `tmp_path_retention_policy = failed` +
-  `tmp_path_retention_count = 1` (plan doc renumbered: 102 is taken by
-  the repo-review partial), fix the leaking bytes, merge, report the
-  pytest-temp run-dir count after one green run in the ANSWER, drop the
-  keep ref.
-- CHECK: older inbox notes from 10-04/10-05 (v6/v7 ORDERs, SS ANSWER,
-  TERMINAL INFO) are not in inbox_seen.jsonl; likely handled before the
-  seen file existed - confirm and mark seen. Loop at 19:49 2026-10-09
-  reported "inbox: pending 7 new; 1 order(s) awaiting lane" and "push
-  skipped: main not clean" (main was mid-v14 then; clean since 53a1db9).
+- OPERATOR (one batched ask, nothing blocks on it): QA plans 009-073 in
+  the dashboard / overlay (per-plan detail in docs/handoff-ledger.txt;
+  plan 009 needs ~10 screenshots with the game UI SHOWN, via a rebound BDO
+  Screenshot key) AND approve the OpenSSF scorecard v5.5.0 linux binary
+  download into WSL Ubuntu (Scorecard bullet below).
+- Scorecard BEFORE/AFTER (MAIN order 0300 section 4): needs the OpenSSF
+  scorecard v5.5.0 linux binary downloaded into WSL Ubuntu (none present) -
+  OPERATOR approves that download; BEFORE reference = MAIN audit 3.6. Loop
+  item Hf8969a ended no-change (blocked). Nfa7953 ANSWER already sent with it
+  marked BLOCKED.
+- Loop gate limits: the loop runs one local Python (ci runs 3.11 + 3.14) and
+  cannot run shell operators in ci.yml steps (none today).
+- EW sent two v8 ANSWERs to MAIN (04:00 loop note said "blocked on v6";
+  04:11 supersedes it). If MAIN flags the duplicate, point to 04:11.
+- MAIN to record EW's port block 8940-8959 in the machine-wide registry and
+  add EW to the roster / lane widget (roster INFO 0230 says EW is a member).
+- NOTE: loop items H08c2ec (old FIX N7416e2 bullet) and Hf9ac4b (old CHECK
+  bullet) were dispatched 20:04 2026-10-09 AFTER both were done by hand;
+  lanes 1/2 finished 20:06/20:07, items in state `ran`. Expect no-change;
+  if either leaves a branch or keep ref, discard it (main already has
+  fa8e6f0 / the seen marks) - do not merge a duplicate.
+- NOTE: 2 older EW pytest temp leftovers (pytest-554, pytest-2082) are left
+  for MAIN's sweep (ANSWER 2025 said so); not EW's to delete.
+- NOTE: closed records live in docs/handoff-ledger.txt (row 104); move a
+  bullet there once it is only history.
 - NOTE: run the node suite through the gate as
   `fleet_suite_gate.py run --owner <id> -- npm.cmd test --prefix app`
   (bare `npm` = WinError 2 on Windows; kit nit reported to MAIN).
-- NOTE: kit outbound ledger is ops/loop/control/outbound_notes.jsonl; the
-  stale pre-v8 outbound_cap.jsonl went to the Recycle Bin 2026-10-09.
-  config/local.json (gitignored) now carries the MAIN destination inbox;
-  without it notes were written to the outbox but never delivered.
-- NOTE: session 20 continue: history REWRITTEN and force-pushed
-  (operator-approved via MAIN 2246 sec 4): PLAN f3dc20264bb1 3 -> 0,
-  tree hash equal, 9a0b58d...76708c7 forced; branch protection force push
-  re-disabled and read back; contributors 1; backup bundle in the EW
-  sidecar folder (rewrite-backup, sha256 d0055f70...). Every SHA from the
-  oldest rewritten commit changed: SHA citations in this file / docs older
-  than 2026-10-09 are pre-rewrite. Other clones must re-clone or hard-reset.
-- NOTE: adjudicated session 20 continue: (a) root ROADMAP.md git rm'd
-  (stale), docs/plans/ROADMAP.md is the single roadmap (9cd829a; reverses
-  on a MAIN order to move the queue to root); (b) pre-push leak sweep
-  skips messages byte-identical to ones on the remote ref (76708c7;
-  reverses if MAIN orders the owner name scrubbed from history); (c) hold
-  push until a GATED full suite is green, never push on targeted tests.
+- NOTE: kit outbound ledger is ops/loop/control/outbound_notes.jsonl.
+  config/local.json (gitignored) carries the MAIN destination inbox;
+  without it notes are written to the outbox but never delivered.
+- NOTE: hold push until a GATED full suite is green, never push on
+  targeted tests. The machine suite gate can starve (both slots held by
+  another tree); a gated run times out at 3600 s with rc 3 - re-queue it.
+- NOTE: claims hook is LIVE in deny mode: a bare whole-suite pytest or
+  bare git commit / push is denied - run
+  `python ops/fleet_kit/fleet_suite_gate.py run --owner <id> -- ...` and
+  `python ops/fleet_kit/fleet_gitlock.py run --owner <id> -- git ...`;
+  the deny reason names <id>. pytest.ini addopts -q plus -q = no summary
+  line; run `python -m pytest` for counts.
 - NOTE: README clone URL stays an owner-free pointer (leak-sweep needle
   holds the owner name); CI badge is the repo-relative workflow badge.
-- NOTE: suite now 3562 tests in ~75 s (poll_interval 0.01, ed78003).
-  The machine suite gate can starve: both slots were held 07:52-09:2x
-  2026-10-09 by another tree; a gated run times out at 3600 s with rc 3 -
-  re-queue it.
-- NOTE: session 20 kit catch-up: claims hook is LIVE in deny mode (kit
-  default); a bare whole-suite pytest or bare git commit / push is denied -
-  run `python ops/fleet_kit/fleet_suite_gate.py run --owner <id> -- ...`
-  and `python ops/fleet_kit/fleet_gitlock.py run --owner <id> -- git ...`;
-  the deny reason names <id>. pytest.ini addopts -q plus -q = no summary
-  line; run `python -m pytest` for counts. Gated suite waited ~30 min for a
-  slot held by a sibling (reported to MAIN).
-- NOTE: core.hooksPath pointed at the recycled C: checkout since the move
-  (no git hook ran); re-pointed to relative .githooks in session 20.
-- NOTE: adjudicated session 20 (plan 092 deviations D1-D5): v13 vendored
-  from MAIN's staged committed bundle before its ORDER (reverses if the
-  ORDER differs); keep ref 930fe43 not merged (no-arg triage_spawn_kwargs
-  TypeError) and deleted; FLOORS_IN_HOOKS=False; no harness attribution
-  trailer (FLEET-COMMON 17); fleet.operatorIdent local only (history holds
-  3 non-operator commits; rewrite only on MAIN ORDER).
-- SF: subagent-first hook in LOG mode since 2026-10-08. Session 19
-  logged 19 would-deny / 53 allow rows in
-  ops/loop/control/subagent_first.jsonl (still to review: was any
-  undispatchable?); session 20 logged 0 would-deny / 271 allow
-  (2026-10-09). On 2026-10-11, if 3 interactive sessions show no
-  undispatchable would-deny row, write `deny` into
-  ops/loop/control/subagent_first.mode and say so in the next batched
-  note to MAIN.
-- NOTE: Dd505bd merged; read back 2026-10-09 on server 9a0b58d: band-62-64,
-  band-65-75 and cap-62-64 all confirmed (band split intact).
-- NOTE: session 17 (2026-10-08): old C: checkout + C: ew-worktrees sent to
-  the Recycle Bin after the reference check (tasks / shortcuts / env /
-  worktrees clean); Test-Path both False read back. Desktop Ebonwake.lnk
-  still pointed at the old copy and the app ran from it (d58457c): shortcut
-  re-pointed to E: and read back; app restarted via the \Ebonwake task and
-  read back running from E:. Salvage refs 087/088 deleted after the re-runs
-  merged (75b7ee9, 4949f58; re-run >= salvage). 0 refs/ew/ left.
 - NOTE: Electron started from a Claude shell dies (GPU process launch
   failed, error_code=18); start the app with `schtasks /run /tn \Ebonwake`.
   The python server starts fine from the shell (launch.py --server-only).
-- NOTE: plan 018 cap 75 CONFIRMED live: official patch notes 10678
-  (2026-10-08) read; /api/data/verdicts shows xp_epochs cap75-xp-rescale
-  confirmed on server 24171e7. Took two loop fixes (research 0016): list
-  links moved to /News/Notice/Detail (H29230b, 0341fca) and bare list titles
-  without [Updates] (H184b9e, 24171e7). To force a notice re-read: set
-  eventnotices_attempt.json at=0 AND eventnotices_list.json fetched_at=0.
-- NOTE: repo moved itself to drive E: on 2026-10-08 (operator order,
-  same folder name; robocopy 7021/7021 files, git status clean, fsck ok,
-  HEAD equal). Loop task, logon task, both Desktop shortcuts and the
-  claude project dirs re-pointed / copied and read back; server started
-  from E: and /api/health read back ok. Lane worktrees now live under
-  ew-worktrees beside the E: checkout. MIG-1 prune before the move:
-  git worktree list 4 -> 1 (lane-0/1/2 recycled; 087/088 output saved on
-  the salvage refs, lane-2 was clean).
-- NOTE: adjudicated N67971f (refute-rounds: 3/3): merge 4432f11 as is
-  (ca1e51a); v9 items 1/2/3/6 + explicit MIG-1 prune with counts before
-  the operator-ordered self-move to E:; one ANSWER HOP 2 to MAIN carrying
-  v9 conformance, prune counts, 2230 inventory and the move fact. Alts:
-  move-first, separate notes, move-as-prune. Why: order 2354 says
-  pre-move and ONE ANSWER, and item 5 needs a checked prune. Kit v9
-  vendored in 3eb2d01; v9 plan doc renumbered 087 -> 089 (d5d450c,
-  deep-dive owns 087/088). Step D first stopped at its 45 min cap
-  (lane 088 running), resumed on coordinator order once 8268 exited.
+- NOTE: to force an official notice re-read: set eventnotices_attempt.json
+  at=0 AND eventnotices_list.json fetched_at=0.
+- NOTE: a widget "idle" with inbox_status state "limit" = the 120/24 h
+  headless cap, not a stall.
 - NOTE (operator order 2026-10-06): ZERO-TOUCH. EW self-adjusts from
   the live game; no required toggles or typed entry (a changed setting
   gets forgotten and skews output). Every new plan follows research 0010
@@ -135,74 +91,17 @@ Carried forward (not acted on yet):
 - NOTE: background agents share one scratchpad - give each agent's
   helper scripts a unique name (session 9: one agent's prog.py clobbered
   the other's and wrote the wrong progress file).
-- Scorecard BEFORE/AFTER (MAIN order 0300 section 4): needs the OpenSSF
-  scorecard v5.5.0 linux binary downloaded into WSL Ubuntu (none present) -
-  OPERATOR approves that download; BEFORE reference = MAIN audit 3.6. Loop
-  item Hf8969a ended no-change (blocked). Nfa7953 ANSWER already sent with it
-  marked BLOCKED.
-- Loop gate limits: the loop runs one local Python (ci runs 3.11 + 3.14) and
-  cannot run shell operators in ci.yml steps (none today).
-- EW sent two v8 ANSWERs to MAIN (04:00 loop note said "blocked on v6";
-  04:11 supersedes it). If MAIN flags the duplicate, point to 04:11.
-- NOTE: overlay safety check DONE by operator 2026-10-06 ("the overlay is
-  fine"); ADR 0001 reversal condition not met.
-- NOTE: plan 008 System card check DONE by operator 2026-10-07 ("system
-  card is good").
-- OPERATOR (plan 009 QA, optional, still unscored): 2026-10-07 the
-  operator took 25 shots (4096x2304) but with the game UI HIDDEN (scenery /
-  character only) - 0 silver / 0 buffs visible, 0 false reads (research
-  0012). Fixed on the way: auto-OCR double-read files BDO was still writing
-  (c3df83e). Still needed: ~10 shots with the UI SHOWN, inventory open,
-  buffs visible; no screenshot key on the operator's keyboard - they
-  rebind Screenshot in BDO Settings > Controls. Then compare vs
-  /api/ocr/auto; >1/10 silver misreads -> ocr.engine=windows.
-- OPERATOR (plan 010 QA): tray icon shows Show dashboard / Toggle overlay /
-  Restart server / Quit; logon task "Ebonwake" starts EW 60 s after login.
-- OPERATOR (plan 011 QA): Progress tab Leveling card - type level + XP pct a
-  few times while leveling; add the current Hot Time window from the official
-  notice (UTC); optionally enable overlay widget `leveling` in
-  config/local.json overlay.widgets.
-- OPERATOR (plans 012-014 QA): grind spot recommender, season pass tracker,
-  coupon check cards in the dashboard - sanity-check against the game.
-- OPERATOR (plans 019-028 QA): Now tab (025), toasts + opt-in Windows
-  notifications (026), overlay placement off the minimap (022), AP/DP bracket
-  card (023), Olvia deadline pill (024), multi-cadence resets (021), market
-  name search + exact silver (028), System freshness card (020).
-- OPERATOR (plans 029-060 QA, new this session): overlay market ticker (029),
-  Settings tab (030), world boss schedule (031), weekly planner (033), gear
-  roadmap (034), enhancement EV / shopping list / price bands (035/037/052),
-  drop-buff cap (038), loot grind log + OCR loot import (039/040), profile
-  history + lifeskill (041/042), pets / mounts / inventory (043-045),
-  session-end summary (046), density/a11y (047), quick-entry parsers (048),
-  command palette Ctrl+K (050), first-run checklist (051), imperial delivery
-  (053), cooking/alchemy margins (054), Jetina/Caphras (055), dice timer
-  (056), Deadeye notes (057), event-notice import (059), Secret Book ledger
-  (060) - sanity-check in the dashboard / overlay.
-- OPERATOR (plans 061-073 QA, new session 7 - autonomy round): auto play
-  session from login/exit (062), auto-OCR of new screenshots with
-  confidence-gated commit (063), official notice auto-import with undo (064),
-  auto-detected game/screenshot folders (065), progress read from OCR (066),
-  context-aware overlay widgets (067), auto-ticked checklist rows (068),
-  "What now" card (069), stale-prompt expiry / quiet when game closed (070),
-  self-curating market watch (071), boss schedule drift banner (072),
-  signal health digest (073) - play a normal session and note anything that
-  still needs a click.
-- NOTE: ew/salvage-031 deleted session 7 with git branch -D; 32e8ed5
-  was NOT an ancestor of main (031 landed as a different commit a808a8c);
-  recoverable from the reflog for ~90 days if ever needed.
 - NOTE: research 0007 lists Black Desert Foundry / Grumpy Green
   wp-json feeds and Steam RSS (app 582660) as clean backup sources;
   bdoplanner robots forbids; garmoth likely bot-challenged - link only.
-- MAIN to record EW's port block 8940-8959 in the machine-wide registry and
-  add EW to the roster / lane widget (roster INFO 0230 says EW is a member).
 - NOTE: write gitignored config/leak_needles.json on any new host before
   pushing; lane worktrees get it and config/local.json via seed_config.
 - NOTE: npm install on this box does NOT fetch the Electron binary; after any
   Electron bump run `node node_modules/electron/install.js` in app/ (and in
   lane worktrees).
-- NOTE: GitHub dependabot is configured (PR 2 github-actions bump merged session 11 after update-branch turned its stale ruff red green) (npm app/, pip /ci, github-actions);
-  its PRs merge by this tree once ci is green, never auto-merged. Re-check
-  the Security tab alert count.
+- NOTE: GitHub dependabot is configured (npm app/, pip /ci,
+  github-actions); its PRs merge by this tree once ci is green, never
+  auto-merged. Re-check the Security tab alert count.
 - NOTE: non-blocking verifier notes: OCR cache key mtime is whole seconds;
   bridge timeout 10 s vs server OCR timeout 60 s; normalizeOcr hides buffs
   found without a time; main.js postLocal keeps only the first 64 KiB of a
@@ -211,8 +110,6 @@ Carried forward (not acted on yet):
   tasklist failure falls back to the 120 s log grace.
 - NOTE: lane tests must not hold drive-path literals (leak sweep HALTs);
   since 56be70f a backslash-escaped letter (\d) is no longer a drive path.
-- NOTE: SS's 2245 ANSWER to MAIN (v6) was misdelivered into EW's inbox; not
-  acted on, reported to MAIN in EW's v6 ANSWER; marked seen in the loop watch.
 - NOTE: arsha.io v2 re-probed 2026-10-06 (research 0007): list endpoints
   (wait/hot/search/category/util db) work; per-item sublist/history/
   orderbook for tradable items still 500 code 103 (Imperva). Fallbacks stay.
@@ -227,97 +124,64 @@ Carried forward (not acted on yet):
   data file server/ew/data/world_bosses_na.json).
 - NOTE: deferred candidates (0003 C15/C18/C19, 0004 F18-F21/F25) listed in
   ROADMAP under the 019-057 paragraph; revisit now that 023/035/037 merged.
-- NOTE: merge 230e8e4 (plan 028) message says `lane-2` but 028 ran on
-  lane-1; pushed, left as is.
 - NOTE: 028 merge kept 028's rounding fmtSilverExact over 027's; 027 test
   expects fmtSilverExact(1.5) == '2'.
-- NOTE: operator authorized a reset of EW's headless run counter on
-  2026-10-05 ~21:10 (loop had paused at 117/120, lane widget showed idle);
-  ops/loop/control/headless_budget.json set to starts=[], read back; old
-  counts in ops/runtime/headless_budget.pre-reset-*.json. A widget "idle"
-  with inbox_status state "limit" = the 120/24 h cap, not a stall.
 - NOTE: known limit of the 56be70f salvage path: a real leak that
   main's hook refuses lands in merge-conflict and burns up to 2 resolve
   runs before stopping.
-- NOTE: hand-off bullets: write records as `NOTE:`; since 73553e9 the loop
-  also skips `NOTE (...)`, but before it Hdcc881 / H0f5f0d / Hbd9479 /
-  Hea62ec ran NOTE bullets as lane work (Hbd9479 extended 080 settings
-  purge in server/ew/app.py + progress.py, verifier PASS, kept).
+- NOTE: hand-off bullets: write records as `NOTE:` (the loop also skips
+  `NOTE (...)`); anything else under "Carried forward" is dispatched as
+  lane work, and rewording a bullet re-dispatches it (new hash).
 - NOTE: a plain `git pull` merge message carries the repo URL, which the
   pre-push leak sweep refuses; merge origin/main with an explicit -m.
 
 Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew, HALT absent, task
-Ready, last result 0. State: ops/loop/control/loop_items/*.json,
-progress/loop.json, progress/lane-<i>.json, inbox_status.json.
-Merge-stuck items are fixed by a session agent (merge refs/ew/keep/<id>
-onto main, keep both sides, mark item merged, delete keep ref, push).
-Restart: stop the server pid from /api/version, then `python
-tools/launch.py --server-only`. Proxy probe: netstat for :3456 LISTENING.
-Memory is tight on the box: Claude Code reaped a background watcher
-~19:45 2026-10-08 for low system memory; run suites sequentially.
+Ready, last result 0 (read 20:14 2026-10-09; fire 387). State:
+ops/loop/control/loop_items/*.json, progress/loop.json,
+progress/lane-<i>.json, inbox_status.json. Merge-stuck items are fixed by
+a session agent (merge refs/ew/keep/<id> onto main, keep both sides, mark
+item merged, delete keep ref, push). Restart: stop the server pid from
+/api/version, then `python tools/launch.py --server-only`. Proxy probe:
+netstat for :3456 LISTENING. Memory is tight on the box; run suites
+sequentially. Repo-review style whole-checkout work runs by hand in a
+session, not as a loop lane (lanes cannot read gitignored main-checkout
+dirs, the gitlock or the progress file).
 
-Acceptance: repo-review driver done with plan + findings files (file count
-reviewed == on disk), merged, pushed, result ANSWERed to MAIN; nothing in
+Acceptance: SF mode decided per the date gate (mode file read back);
+rows 101 / 107 merged by the loop and verified; row 106 done; nothing in
 adjudicate / merge-conflict / gave-up / failed-dirty.
 
-Do NOT redo: session 21 (2026-10-09): MAIN ORDER N9e7b5a (kit v14)
-DONE: 53a1db9 pushed (kit v14 vendored, MANIFEST d045d4ba v14, CLAUDE.md
-Kit: v14, tests/conftest.py FLEET_SIDECAR_ROOT empty, 4 git-spawning
-tests from plans 099/100 marked `git`); loop item N9e7b5a merged.
-ANSWER 2026-10-09-1955-from-EW-ANSWER-re-...-KIT-v14... sent HOP 2,
-reached 1/1; the 11:04 answer redelivered 1/1 after the delivery fix.
-session 20 (2026-10-09): kit v10-v13 vendored (1614965
-post-rewrite; 5a59f50 pre-rewrite); MAIN answered, 2 notes delivered
-2026-10-09 (0920 INFORMATION, 0945 ANSWER HOP 2), 1/1 each, cap 2/6;
-MAIN 2246 history rewrite force-pushed (backup bundle in the sidecar
-folder); README 7ab693a/b360e76, perf 87c706c, rows 096-101 f55db3a, root
-ROADMAP rm 9cd829a, leak_sweep exemption 76708c7; lane-0 salvaged to the
-keep ref (8455ba9); bug PV patchverify checked_at fixed 008dd76 (verifier
-PASS, refute-rounds 1/3). ROADMAP 093 (loop delivery of outbox notes to
-the destination inbox) is DONE (2026-10-08) - not open. session 19: N94ff08 kit v10 adjudicated (decision: merge
-0bbc472 as partial, then F1-F7 in one main-checkout commit; alts
-accept-as-is / reject-redo in lane; why: lane brief forbade
-ops/fleet_kit/, CLAUDE.md, .claude/ edits and could not read the bundle;
-refute-rounds 3/3) - merged 126cfc7, fixes 92801b4 (v10 17/17 hashes,
-FLEET-COMMON re-embedded, conformance re-pinned, subagent_first.mode=log,
-PreToolUse hook, done.md dispatch, emit()); CI 37861072763 + codeql
-37861072741 success; ANSWER HOP 2
-moon_sync_outbox/20261008-1848-from-EW-ANSWER-re-...-v10... (supersedes
-16:04; carries the proxy no-restart-on-failure mention and the routing
-defect). Session-18 proxy restart-on-failure mention: SENT in that 1848
-ANSWER. Plan 091 merged by loop 2c07b79. Patchverify re-run H0a5846
-merged 4979187 (verifier PASS); server restarted on 4979187, /api/version
-read back; verdicts 37 hinted rows = 32 confirmed, 4 silent (drop_buffs
-adv-item-collection-scroll, agris-fever, ecology-knowledge,
-item-collection-scroll - expected per plan 087, the page never states
-them), 1 contradicted (cap-62-75, above); lv-bonus-70..75 all confirmed.
-Plan 090 marked done in place. Session 18: proxy restart + gave-up reset;
-N19178f merged 2eb1a54 and answered (ANSWER HOP 2 20261008-1449).
-Sessions 16-17 under the NOTE bullets above. Older sessions 10-15:
-loop/inbox read-backs, 73553e9, dependabot PR 2, research 0010-0012,
-plans 079-086, c3df83e, b8fbef8.
+Do NOT redo: session 22 (2026-10-09): RR repo review re-run DONE -
+1135/1135 files, 40 findings (13 done, 6 filed as ROADMAP rows 104 / 106 /
+107, 21 n/a), research docs/research/0018-repo-review-20261009.md, plan
+docs/plans/102-repo-review.md, commits 3205982 + merge 68444b4, keep ref
+repo-review-20261009 dropped; ANSWER 2015 to MAIN delivered 1/1
+(corrects the 0945 "running" claim). TEMP-1 / FIX N7416e2 DONE - plan 105
+(adjudicated, refute-rounds 3/3) fa8e6f0, pytest.ini
+tmp_path_retention_policy=failed + count=1, keep ref N7416e2 deleted,
+ANSWER 2025 delivered 1/1 closing N7416e2, 0 new run dirs. Plan 101 doc
+written (2b379c6), row 101 open for the loop. CHECK of the 10-04/10-05
+inbox notes DONE (all handled, marked seen, 0 pending). SF would-deny
+review DONE (research 0019). Row 104 hand-off prune DONE at this /done
+(docs/handoff-ledger.txt). Outbound cap 6/6 used on 2026-10-09.
+session 21 (2026-10-09): MAIN ORDER N9e7b5a (kit v14) DONE: 53a1db9.
+session 20 (2026-10-09): kit v10-v13 vendored, history rewrite
+force-pushed, README / perf / rows 096-101 / root ROADMAP rm / leak_sweep
+exemption, PV patchverify fix 008dd76. ROADMAP 093 is DONE (2026-10-08).
+Older sessions: docs/handoff-ledger.txt and git log.
 
-In flight: none (lanes 0/1/2 idle, lanes/ empty, 2026-10-09 evening). RR: the REPO-REVIEW driver (lane-0, started 09:22
-2026-10-09) was REAPED for low system memory ~10:00; research 0018 was
-never written. Its partial output (plan doc docs/plans/102-repo-review.md
-with slices S1-S5 + rows 102-104, docs/adr/README.md index,
-docs/plans/ROADMAP-history.md split + trimmed ROADMAP.md, dead
-.gitignore negation drop) is KEPT local-only under
-refs/ew/keep/repo-review-20261009 (a808292, read back: 5 files). The
-re-run should start from it (cherry-pick or diff it) and then write
-research 0018; drop the ref once merged. lanes/0.lock released via kit
-release_lane (pid 34024 dead; lane state read back FREE), lane-0
-worktree reset clean (0 paths). Re-run only when memory allows,
-detached (not a session background shell): python tools/ew_lane.py run
-review --prompt-file ops/runtime/repo-review-prompt.txt --writes-code
---timeout 10800.
+In flight: lane-0 (build) running ROADMAP row 107 (monolith split:
+app/shared/ewcore.js + tools/ew_loop.py by domain), started 20:04
+2026-10-09, pid 33664 alive at 20:14, lanes/0.lock held,
+progress/lane-0.json (loop ETA 363 s, likely far longer for a split this
+size); the loop merges it. Lanes 1/2 done (H08c2ec / Hf9ac4b, see NOTE).
 
-Status: HEAD 53a1db9 == origin/main (nothing new to push at /done).
-CI 38011061998 + codeql 38011061966 success on 53a1db9. /done gates:
-gated pytest 3636 passed (81 s), node 707 pass 0 fail (gated, npm.cmd),
-leak sweep ARMED (19). Server still running on 008dd76 (/api/version read
-back; v14 was kit/tests only, no restart needed). Loop HALT absent,
-lane-0/1/2 progress done, no lane lock held. Keep refs: N7416e2,
-repo-review-20261009. Session jsonl < 10 MB.
+Status: HEAD 68444b4 == origin/main (nothing new to push at the /done
+gate; the /done paperwork commit follows). CI 38012166744 + codeql
+38012166732 success on 68444b4. /done gates: gated pytest 3638 passed
+(76 s), gated node 707 pass 0 fail (npm.cmd), leak sweep ARMED (19).
+Server running on 008dd76 (/api/version read back; no server/ or app/
+change since, no restart). Headless budget 48/120 in 24 h. Keep refs: 0.
+Session jsonl < 10 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
