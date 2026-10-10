@@ -13,7 +13,6 @@ API-Key*
 # Runtime state, caches, store, logs
 ops/runtime/
 ops/loop/control/*
-!ops/loop/control/.gitkeep
 # kit v9 /done marker (fleet_done.py); already covered above, named explicitly
 ops/loop/control/session_done.json
 ops/loop/control/session_done.seen
