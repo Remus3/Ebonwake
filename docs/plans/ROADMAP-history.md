@@ -10,6 +10,10 @@ sections to the roadmap itself).
 
 ## Ranking rationale
 
+Deep dive 2026-10-10 (research 0020): no new plan. Nothing posted after the
+10-08 patch; a Black Spirit's Scheduler mirror is a duplicate of 003 / 025 /
+069; Altar of Blood and Event Horizon rows are data items (033, 012).
+
 Deep dive 2026-10-09 (research 0017): one plan. 095 - the live Marni event
 (10673, to 11-05) pays seals by login, 60-min play and weekly games against
 a limited exchange, and the shape repeats every season. Number 094 is left
