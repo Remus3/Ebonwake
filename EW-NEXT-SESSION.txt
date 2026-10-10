@@ -9,14 +9,10 @@ would-deny, all dispatchable, research 0019; session 20: 0 / 271), write
 `deny` into ops/loop/control/subagent_first.mode, read it back, and say so
 in the next batched note to MAIN. Before 2026-10-11: let the loop work
 ROADMAP rows 101 / 107 and verify what it merged (nothing in adjudicate /
-merge-conflict / gave-up / failed-dirty), then work ROADMAP row 106
-(session work, kept out of Carried forward so the loop does not dispatch
-it): sidecar consolidation (research 0018 F-OUT-2/3) - move lane
-worktrees from ../ew-worktrees to the kit v14 sidecar root
-(<sidecar>/EW/Worktree/lane-<i>, fleet_lanes) with the loop HALTed and
-lanes idle; archive the superseded kit bundles v6-v13 out of
-moon_sync_inbox after an inbox_seen check. Recycle Bin only,
-consumer-checked.
+merge-conflict / gave-up / failed-dirty). Row 106 bundle archive DONE
+2026-10-09 (kit bundles v6-v14 to the Recycle Bin; read back: only the
+v15 bundle dir left in moon_sync_inbox); its worktree move is MAIN-gated
+(bullet below).
 
 Carried forward (not acted on yet):
 - OPERATOR (one batched ask, nothing blocks on it): QA plans 009-073 in
@@ -33,6 +29,14 @@ Carried forward (not acted on yet):
   cannot run shell operators in ci.yml steps (none today).
 - EW sent two v8 ANSWERs to MAIN (04:00 loop note said "blocked on v6";
   04:11 supersedes it). If MAIN flags the duplicate, point to 04:11.
+- MAIN sets FLEET_SIDECAR_ROOT (kit v14 ORDER 3.4: MAIN sets it after all
+  six ANSWERs; adjudicated 2026-10-09, row 106). Each session: read HKCU
+  Environment FLEET_SIDECAR_ROOT; when non-empty (or a MAIN note says set),
+  HALT the loop, wait for 3 FREE lanes, `git worktree move` each idle
+  ../ew-worktrees/lane-<i> to <sidecar>/EW/Worktree/lane-<i>, set any held
+  loop_items record's worktree to the new path, read back `git worktree
+  list` and fleet_lanes.worktree_path(i) for i=0..2, remove HALT, flip ROADMAP
+  row 106 to [x]. Reverses if MAIN orders trees to set it themselves.
 - MAIN to record EW's port block 8940-8959 in the machine-wide registry and
   add EW to the roster / lane widget (roster INFO 0230 says EW is a member).
 - NOTE: loop items H08c2ec (old FIX N7416e2 bullet) and Hf9ac4b (old CHECK
