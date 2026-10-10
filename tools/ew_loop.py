@@ -1267,11 +1267,19 @@ class Tick:
         if name in self.fi.seen(self.root):
             return True
         legacy = read_jsonl(self.root / LEGACY_LEDGER_REL)  # plan 015 deviation 14e
-        if any(d.get("note") == name for d in legacy):
-            return True
         stem = Path(name).stem
-        return outbox.is_dir() and any(p.name.endswith(f"-re-{stem}.md")
-                                       for p in outbox.iterdir())
+        if not (any(d.get("note") == name for d in legacy)
+                or outbox.is_dir() and any(p.name.endswith(f"-re-{stem}.md")
+                                           for p in outbox.iterdir())):
+            return False
+        # Backfill the kit seen ledger (2026-10-09: the 10-04/10-05 notes were
+        # settled before inbox_seen.jsonl existed and were absent from it).
+        path = Path(self.cfg["inbox_dir"]) / name
+        head = path.read_text(encoding="utf-8", errors="replace")[:NOTE_HEAD] \
+            if path.is_file() else ""
+        self.fi.mark_seen(self.root, path, self.fi.classify(name, CODE, head),
+                          verdict="LEGACY", clock=self.d.clock)
+        return True
 
     def answer(self, path, outbox, batch):
         """True when the note needs nothing more (handled now or before); False =
