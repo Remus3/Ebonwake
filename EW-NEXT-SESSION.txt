@@ -1,6 +1,6 @@
 EW NEXT SESSION
 ---------------
-SESSION: 27
+SESSION: 28
 
 Next action: SF - on/after 2026-10-11 (date-gated; before it, skip): if
 the interactive sessions since 2026-10-08 still show 0 undispatchable
@@ -144,8 +144,8 @@ Carried forward (not acted on yet):
 Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew (Ready, last result
 0), HALT absent, no lanes in flight, lane worktrees 0/1/2 clean and
 merged, inbox no unhandled notes, ROADMAP no open rows, headless 27/120
-(read 2026-10-10 session 26). FLEET_SIDECAR_ROOT empty in HKCU
-Environment (read 2026-10-10 session 26; row 106 stays MAIN-gated). State:
+(read 2026-10-10 session 27). FLEET_SIDECAR_ROOT empty in HKCU
+Environment (read 2026-10-10 session 27; row 106 stays MAIN-gated). State:
 ops/loop/control/loop_items/*.json, progress/loop.json,
 progress/lane-<i>.json, inbox_status.json. Merge-stuck items are fixed by
 a session agent (merge refs/ew/keep/<id> onto main, keep both sides, mark
@@ -159,7 +159,10 @@ dirs, the gitlock or the progress file).
 Acceptance: SF mode decided per the date gate (mode file read back);
 nothing in adjudicate / merge-conflict / gave-up / failed-dirty.
 
-Do NOT redo: session 26 (2026-10-10): status check only; no code
+Do NOT redo: session 27 (2026-10-10): status check only; no code
+changes; inbox 0 new, ROADMAP 0 open, SIDECAR read empty (no-op); SF
+date gate not reached (not acted on).
+session 26 (2026-10-10): status check only; no code
 changes; SIDECAR read empty (no-op); SF date gate not reached.
 session 25 (2026-10-10): hang recovery only (NOTE above);
 no code changes; SF date gate not reached (not acted on).
@@ -173,11 +176,12 @@ Older sessions: docs/handoff-ledger.txt and git log.
 
 In flight: none.
 
-Status: HEAD 091da20 == origin/main before this /done (the hand-off
+Status: HEAD 9922bea == origin/main before this /done (the hand-off
 commit follows). CI 38022486736 + codeql 38022486747 success on 633fa46;
-08de0c3, a32b789, 091da20 docs-only. /done gates (session 26): gated
-pytest 3648 passed (95 s), gated node 715 pass 0 fail (npm.cmd), leak
-sweep ARMED (19). Server running on a32b789 (/api/version read back).
-Session jsonl < 10 MB.
+08de0c3, a32b789, 091da20, 9922bea docs-only. /done gates (session 27):
+gated pytest 3648 passed (98 s), gated node 715 pass 0 fail (npm.cmd),
+leak sweep ARMED (19). Server running on a32b789 (/api/version read
+back). Loop task Ready, last result 0, inbox_status idle. Session jsonl
+< 10 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
