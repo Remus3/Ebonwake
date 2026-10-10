@@ -7,7 +7,8 @@ from loop_base import MAX_ROUNDS, next_number
 # ---------------------------------------------------------------- prompts
 
 # Plan 096: producers run touched tests only; the loop runs the authoritative
-# ci gates (whole suite included) once on the finished tree.
+# ci gates (whole suite included) once on the finished tree. Plan 101: a
+# headless lane works inline (nested background agents only added waits).
 GATES = ("Gates before you finish: `python -m ruff check server tools tests` green, "
          "the test files your change touched or added green (targeted, e.g. `python -m "
          "pytest -q tests/test_x.py`), and `npm test --prefix app` green if you changed "
@@ -29,9 +30,10 @@ GATES = ("Gates before you finish: `python -m ruff check server tools tests` gre
          "wait. Write the v7 checklist (FLEET item 13 d) into your progress JSON "
          "ops/loop/control/progress/{task}.json: the FLEET item 12 fields plus "
          "\"checklist\": [{{\"id\", \"task\", \"state\", \"eta_s\"}}, ...] - "
-         "remaining steps only, ASCII, updated after each step. Background agents "
-         "share one scratchpad: name every helper or scratch script after your "
-         "task ({task}_*.py), never a generic name like prog.py.")
+         "remaining steps only, ASCII, updated after each step. Work inline in this "
+         "run: do not start background sub-agents or background shell commands and "
+         "wait on them; run each step in the foreground. Name any helper or scratch "
+         "script after your task ({task}_*.py), never a generic name like prog.py.")
 
 
 NO_ROADMAP = ("Do NOT edit docs/plans/ROADMAP.md: the loop flips your row in main when "

@@ -54,6 +54,17 @@ background agents.
 - Follow-up measure (not a gate): after a day of loop runs, count usage rows
   with <= 3 turns and > 600 s in `headless_usage.jsonl`; expect 0 new ones.
 
+## As-built deviations
+
+- Decision: the edit lands in `tools/loop_prompts.py`, not
+  `tools/ew_loop.py`. Alternatives: move `GATES` back into ew_loop.py.
+  Why: plan 107 split the prompts out; ew_loop.py re-exports the same
+  object, so `ew_loop.GATES` and every prompt builder see the change.
+  Reverses if: the prompts move back into ew_loop.py.
+- Design item 2: the grep found no other prompt in `tools/` naming
+  background agents, sub-agents or the Agent tool; only `GATES` changed.
+  Tests in `tests/test_headless_inline.py`.
+
 ## Out of scope
 
 - 2246 sec 2.10 (startup check that core.hooksPath resolves) - separate row
