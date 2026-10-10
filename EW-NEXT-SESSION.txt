@@ -1,20 +1,29 @@
 EW NEXT SESSION
 ---------------
-SESSION: 23
+SESSION: 24
 
 Next action: SF - on/after 2026-10-11 (date-gated; before it, skip): if
 the interactive sessions since 2026-10-08 still show 0 undispatchable
 would-deny rows in ops/loop/control/subagent_first.jsonl (session 19: 19
 would-deny, all dispatchable, research 0019; session 20: 0 / 271), write
 `deny` into ops/loop/control/subagent_first.mode, read it back, and say so
-in the next batched note to MAIN. Before 2026-10-11: let the loop work
-ROADMAP rows 101 / 107 and verify what it merged (nothing in adjudicate /
-merge-conflict / gave-up / failed-dirty). Row 106 bundle archive DONE
-2026-10-09 (kit bundles v6-v14 to the Recycle Bin; read back: only the
-v15 bundle dir left in moon_sync_inbox); its worktree move is MAIN-gated
-(bullet below).
+in the next batched note to MAIN. Before 2026-10-11: verify the loop
+merged ROADMAP row 101 with gates green (rerun committed on lane-0
+d606095, loop_items/101.json state `committed`, verdict PASS, last review
+log "main not clean on main, merge deferred" at 22:04 2026-10-09; main is
+clean now) and that nothing is in adjudicate / merge-conflict / gave-up /
+failed-dirty. Row 101 decision (session 23): requeue as-is (alternatives:
+narrow scope, defer); first run predated plan doc 2b379c6 and its invented
+scope broke test_lane_prompts_give_scratch_scripts_a_task_unique_name.
+Reverses if: the rerun fails the gates again.
 
 Carried forward (not acted on yet):
+- If no Nc0305f ANSWER is in moon_sync_outbox after the first tick past
+  midnight 2026-10-10, a session writes it by hand (HOP: 2; kit v15
+  vendored 0074764, order + manifest SHA-256 matched MAIN's outbox; order
+  item closed via session-done Nc0305f --commit 0074764). Not sent
+  2026-10-09: 6/6 outbound cap; adjudicated - the loop sends it under the
+  2026-10-10 cap.
 - OPERATOR (one batched ask, nothing blocks on it): QA plans 009-073 in
   the dashboard / overlay (per-plan detail in docs/handoff-ledger.txt;
   plan 009 needs ~10 screenshots with the game UI SHOWN, via a rebound BDO
@@ -39,11 +48,13 @@ Carried forward (not acted on yet):
   row 106 to [x]. Reverses if MAIN orders trees to set it themselves.
 - MAIN to record EW's port block 8940-8959 in the machine-wide registry and
   add EW to the roster / lane widget (roster INFO 0230 says EW is a member).
-- NOTE: loop items H08c2ec (old FIX N7416e2 bullet) and Hf9ac4b (old CHECK
-  bullet) were dispatched 20:04 2026-10-09 AFTER both were done by hand;
-  lanes 1/2 finished 20:06/20:07, items in state `ran`. Expect no-change;
-  if either leaves a branch or keep ref, discard it (main already has
-  fa8e6f0 / the seen marks) - do not merge a duplicate.
+- NOTE: loop item Hf9ac4b (old CHECK bullet) was dispatched 20:04
+  2026-10-09 AFTER it was done by hand; lane-2 finished 20:07. If it
+  leaves a branch or keep ref, discard it (main already has the seen
+  marks) - do not merge a duplicate. H08c2ec merged as e89abd5, a
+  docs-only no-op (deviation 7 note in docs/plans/105) - done.
+- NOTE: loop_items/N7416e2.json reads state `failed`; FIX N7416e2 was
+  done by hand (plan 105, fa8e6f0, ANSWER 2025). Not a live failure.
 - NOTE: 2 older EW pytest temp leftovers (pytest-554, pytest-2082) are left
   for MAIN's sweep (ANSWER 2025 said so); not EW's to delete.
 - NOTE: closed records live in docs/handoff-ledger.txt (row 104); move a
@@ -140,7 +151,8 @@ Carried forward (not acted on yet):
   pre-push leak sweep refuses; merge origin/main with an explicit -m.
 
 Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew, HALT absent, task
-Ready, last result 0 (read 20:14 2026-10-09; fire 387). State:
+Ready, last result 0 (read 22:2x 2026-10-09; fire 396). FLEET_SIDECAR_ROOT
+unset in HKCU Environment (read 2026-10-09). State:
 ops/loop/control/loop_items/*.json, progress/loop.json,
 progress/lane-<i>.json, inbox_status.json. Merge-stuck items are fixed by
 a session agent (merge refs/ew/keep/<id> onto main, keep both sides, mark
@@ -152,40 +164,35 @@ session, not as a loop lane (lanes cannot read gitignored main-checkout
 dirs, the gitlock or the progress file).
 
 Acceptance: SF mode decided per the date gate (mode file read back);
-rows 101 / 107 merged by the loop and verified; row 106 done; nothing in
-adjudicate / merge-conflict / gave-up / failed-dirty.
+row 101 merged by the loop and verified (gated pytest + node green);
+Nc0305f ANSWER in moon_sync_outbox; nothing in adjudicate /
+merge-conflict / gave-up / failed-dirty.
 
-Do NOT redo: session 22 (2026-10-09): RR repo review re-run DONE -
-1135/1135 files, 40 findings (13 done, 6 filed as ROADMAP rows 104 / 106 /
-107, 21 n/a), research docs/research/0018-repo-review-20261009.md, plan
-docs/plans/102-repo-review.md, commits 3205982 + merge 68444b4, keep ref
-repo-review-20261009 dropped; ANSWER 2015 to MAIN delivered 1/1
-(corrects the 0945 "running" claim). TEMP-1 / FIX N7416e2 DONE - plan 105
-(adjudicated, refute-rounds 3/3) fa8e6f0, pytest.ini
-tmp_path_retention_policy=failed + count=1, keep ref N7416e2 deleted,
-ANSWER 2025 delivered 1/1 closing N7416e2, 0 new run dirs. Plan 101 doc
-written (2b379c6), row 101 open for the loop. CHECK of the 10-04/10-05
-inbox notes DONE (all handled, marked seen, 0 pending). SF would-deny
-review DONE (research 0019). Row 104 hand-off prune DONE at this /done
-(docs/handoff-ledger.txt). Outbound cap 6/6 used on 2026-10-09.
+Do NOT redo: session 23 (2026-10-09): kit v15 vendored per MAIN ORDER
+Nc0305f (0074764, pushed, order item closed). Plan 107 merge c1510ba
+verified (pytest 3645/0, node 715/0) - ROADMAP 107 [x]. H08c2ec merge
+e89abd5 verified no-op. Row 106 bundle archive DONE (kit bundles v6-v14 to
+the Recycle Bin, 9fa11b3 pushed; ROADMAP 106 `[>] MAIN-gated`; read back:
+only the v15 bundle dir left in moon_sync_inbox). Row 101 failed run
+recycled (archive ops/runtime/archive/101-failed-20261009.json, WIP
+2fdafc0 discarded) and requeued. Orphan progress/kit-v8.json recycled.
+Loop HALT removed, loop_task read back Ready. Outbound cap 6/6 used on
+2026-10-09.
+session 22 (2026-10-09): RR repo review DONE (research 0018, plan 102,
+3205982 + 68444b4); FIX N7416e2 DONE (plan 105, fa8e6f0); plan 101 doc
+2b379c6; CHECK of 10-04/10-05 inbox DONE; SF would-deny review DONE
+(research 0019); row 104 hand-off prune DONE.
 session 21 (2026-10-09): MAIN ORDER N9e7b5a (kit v14) DONE: 53a1db9.
-session 20 (2026-10-09): kit v10-v13 vendored, history rewrite
-force-pushed, README / perf / rows 096-101 / root ROADMAP rm / leak_sweep
-exemption, PV patchverify fix 008dd76. ROADMAP 093 is DONE (2026-10-08).
 Older sessions: docs/handoff-ledger.txt and git log.
 
-In flight: lane-0 (build) running ROADMAP row 107 (monolith split:
-app/shared/ewcore.js + tools/ew_loop.py by domain), started 20:04
-2026-10-09, pid 33664 alive at 20:14, lanes/0.lock held,
-progress/lane-0.json (loop ETA 363 s, likely far longer for a split this
-size); the loop merges it. Lanes 1/2 done (H08c2ec / Hf9ac4b, see NOTE).
+In flight: none running. lane-0 holds row 101 rerun d606095 (state
+`committed`, PASS) awaiting the loop merge; lanes 1/2 idle (done).
 
-Status: HEAD 68444b4 == origin/main (nothing new to push at the /done
-gate; the /done paperwork commit follows). CI 38012166744 + codeql
-38012166732 success on 68444b4. /done gates: gated pytest 3638 passed
-(76 s), gated node 707 pass 0 fail (npm.cmd), leak sweep ARMED (19).
-Server running on 008dd76 (/api/version read back; no server/ or app/
-change since, no restart). Headless budget 48/120 in 24 h. Keep refs: 0.
-Session jsonl < 10 MB.
+Status: HEAD 9fa11b3 == origin/main before this /done (the hand-off
+commit follows). CI 38019774015 + codeql 38019774122 success on 0074764;
+9fa11b3 docs-only. /done gates: gated pytest 3645 passed (104 s), gated
+node 715 pass 0 fail (npm.cmd), leak sweep ARMED (19). Server running on
+008dd76 (/api/version read back; no server/ change since, no restart).
+Headless budget 47/120 in 24 h. Keep refs: 0. Session jsonl < 10 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
