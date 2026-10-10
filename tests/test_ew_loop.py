@@ -501,6 +501,29 @@ def test_note_settled_by_pre_v8_ledger_is_not_retriaged(tmp_path):
     assert sp.calls == []
 
 
+def test_note_settled_before_the_seen_ledger_is_backfilled_once(tmp_path):
+    # 2026-10-09: 10-04/10-05 notes (legacy ledger or an outbox reply) were
+    # handled before inbox_seen.jsonl existed and never appeared in it.
+    root, inbox, outbox = _inbox_root(tmp_path)
+    sp = FakeSpawn()
+    d = deps(root, spawn=sp)
+    ew_loop.tick(deps=d, no_push=True)
+    (root / "ops/loop/control/inbox_ledger.jsonl").write_text(
+        json.dumps({"note": "q-from-MAIN-QUESTION-a.md", "action": "ack"}) + "\n")
+    (inbox / "q-from-MAIN-QUESTION-a.md").write_text("# From MAIN - QUESTION\nq\n")
+    (inbox / "o-from-MAIN-ORDER-to-EW-v6.md").write_text("# From MAIN - ORDER\nv6\n")
+    (outbox / "2026-10-05-0900-from-EW-ANSWER-re-o-from-MAIN-ORDER-to-EW-v6.md"
+     ).write_text("# From EW - ANSWER\ndone\n")
+    ew_loop.tick(deps=d, no_push=True)
+    ew_loop.tick(deps=d, no_push=True)
+    assert sp.calls == []
+    seen = [json.loads(x) for x in
+            (root / "ops/loop/control/inbox_seen.jsonl").read_text().splitlines()]
+    assert sorted(x["note"] for x in seen) == ["o-from-MAIN-ORDER-to-EW-v6.md",
+                                               "q-from-MAIN-QUESTION-a.md"]
+    assert {x["verdict"] for x in seen} == {"LEGACY"} and all(x.get("sha256") for x in seen)
+
+
 def test_default_cap_reaches_the_kit_outbound_cap(tmp_path):
     root, _, _ = _inbox_root(tmp_path, local_extra={"max_notes_per_day": 40})
     assert ew_loop.Tick(deps(root)).cap.cap == 6
