@@ -103,6 +103,7 @@ push. Spec: `docs/design/0001-ebonwake-spec.md`.
 | 099 | Perf 2.5: model / effort routing by item kind - opus for plan implementation, sonnet for fix rounds, data refreshes, resolve-merge and research; effort low for verifier and inbox via pick_effort; choice recorded in loop config (MAIN 2246 sec 2) | [x] done 2026-10-09 (loop; refute 0/3 PASS) |
 | 100 | Perf 2.8: governor counts runs from headless_usage.jsonl (or reconciles headless_budget.json at tick start); backfill kind build on the 34 rows lacking kind or exclude pre-v8 rows (MAIN 2246 sec 2) | [x] done 2026-10-09 (loop; refute 0/3 PASS) |
 | 101 | Perf 2.9: headless lanes work inline - drop the background agents share one scratchpad clause from headless GATES prompts (MAIN 2246 sec 2) | [ ] open |
+| 105 | TEMP-1 (MAIN FIX N7416e2): pytest.ini tmp_path_retention_policy = failed, tmp_path_retention_count = 1; behavior test in tests/test_pytest_retention.py. Plan: `docs/plans/105-temp1-pytest-retention.md` | [x] done 2026-10-09 (rebuilt on main from keep ref; refute-rounds 3/3, adjudicated) |
 
 Deep dive 2026-10-09 (research 0017): one plan. 095 - the live Marni event
 (10673, to 11-05) pays seals by login, 60-min play and weekly games against
