@@ -112,3 +112,13 @@ ANSWER.
    Deviations 1-4 rewritten with explicit decision lines; deviation 3's
    reverse condition made concrete. Round cap reached: the adjudicator
    rules on merge, no round 4.
+7. Merge H08c2ec (this resolution). Decision: keep main's plan 105, config
+   test and `test_retention_behavior` (the fixed child-pytest version);
+   take nothing from the lane's variant except the same two ini keys, and
+   drop the lane's duplicated ini lines. Alternatives: the lane's minimal
+   key-pin-only test and doc (drops the behavior test main already
+   fixed); both tests side by side (same test names, duplicate content).
+   Why: main's version is a superset - same keys, plus a behavior proof
+   whose temp-dir walk was already fixed in deviation 5. Reverses if: the
+   behavior test proves flaky in the gated suite - then it is marked slow
+   or reduced to the key pin.
