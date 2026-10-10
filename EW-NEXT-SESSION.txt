@@ -1,6 +1,6 @@
 EW NEXT SESSION
 ---------------
-SESSION: 21
+SESSION: 22
 
 Next action: RR - re-run the REPO-REVIEW driver (MAIN ORDER 2246 sec 8)
 as a separate detached process when memory allows, starting from its
@@ -9,10 +9,32 @@ findings files (every top-level folder, DONE / FILED / N-A, files reviewed
 N of N), merged and pushed, then send its result to MAIN in the next
 batched ANSWER. That ANSWER MUST correct the 0945 ANSWER's "driver
 queued / running" claim (it was reaped ~10:00 for low memory, never
-finished). Then let the loop build perf rows 096 / 098 (priority), then
-097, 099, 100, 101.
+finished). Perf rows 096-100 are done (loop); 101 is open but the loop
+reports "101: no plan doc, no dependency gate" - give it a plan doc.
 
 Carried forward (not acted on yet):
+- FIX N7416e2 (MAIN 0805 FIX TEMP-1, ONE ANSWER owed): loop item
+  state failed / verdict adjudicate after refute 3/3; lane commit refused
+  by leak sweep (HALT docs/plans/102-temp1-pytest-retention.md:88,
+  needle-slot-5). WIP on refs/ew/keep/N7416e2 (d6605e5), unmerged.
+  pytest.ini on main still has no retention keys (read 2026-10-09).
+  Adjudicator rules, then land `tmp_path_retention_policy = failed` +
+  `tmp_path_retention_count = 1` (plan doc renumbered: 102 is taken by
+  the repo-review partial), fix the leaking bytes, merge, report the
+  pytest-temp run-dir count after one green run in the ANSWER, drop the
+  keep ref.
+- CHECK: older inbox notes from 10-04/10-05 (v6/v7 ORDERs, SS ANSWER,
+  TERMINAL INFO) are not in inbox_seen.jsonl; likely handled before the
+  seen file existed - confirm and mark seen. Loop at 19:49 2026-10-09
+  reported "inbox: pending 7 new; 1 order(s) awaiting lane" and "push
+  skipped: main not clean" (main was mid-v14 then; clean since 53a1db9).
+- NOTE: run the node suite through the gate as
+  `fleet_suite_gate.py run --owner <id> -- npm.cmd test --prefix app`
+  (bare `npm` = WinError 2 on Windows; kit nit reported to MAIN).
+- NOTE: kit outbound ledger is ops/loop/control/outbound_notes.jsonl; the
+  stale pre-v8 outbound_cap.jsonl went to the Recycle Bin 2026-10-09.
+  config/local.json (gitignored) now carries the MAIN destination inbox;
+  without it notes were written to the outbox but never delivered.
 - NOTE: session 20 continue: history REWRITTEN and force-pushed
   (operator-approved via MAIN 2246 sec 4): PLAN f3dc20264bb1 3 -> 0,
   tree hash equal, 9a0b58d...76708c7 forced; branch protection force push
@@ -238,7 +260,13 @@ Acceptance: repo-review driver done with plan + findings files (file count
 reviewed == on disk), merged, pushed, result ANSWERed to MAIN; nothing in
 adjudicate / merge-conflict / gave-up / failed-dirty.
 
-Do NOT redo: session 20 (2026-10-09): kit v10-v13 vendored (1614965
+Do NOT redo: session 21 (2026-10-09): MAIN ORDER N9e7b5a (kit v14)
+DONE: 53a1db9 pushed (kit v14 vendored, MANIFEST d045d4ba v14, CLAUDE.md
+Kit: v14, tests/conftest.py FLEET_SIDECAR_ROOT empty, 4 git-spawning
+tests from plans 099/100 marked `git`); loop item N9e7b5a merged.
+ANSWER 2026-10-09-1955-from-EW-ANSWER-re-...-KIT-v14... sent HOP 2,
+reached 1/1; the 11:04 answer redelivered 1/1 after the delivery fix.
+session 20 (2026-10-09): kit v10-v13 vendored (1614965
 post-rewrite; 5a59f50 pre-rewrite); MAIN answered, 2 notes delivered
 2026-10-09 (0920 INFORMATION, 0945 ANSWER HOP 2), 1/1 each, cap 2/6;
 MAIN 2246 history rewrite force-pushed (backup bundle in the sidecar
@@ -269,7 +297,7 @@ Sessions 16-17 under the NOTE bullets above. Older sessions 10-15:
 loop/inbox read-backs, 73553e9, dependabot PR 2, research 0010-0012,
 plans 079-086, c3df83e, b8fbef8.
 
-In flight: none. RR: the REPO-REVIEW driver (lane-0, started 09:22
+In flight: none (lanes 0/1/2 idle, lanes/ empty, 2026-10-09 evening). RR: the REPO-REVIEW driver (lane-0, started 09:22
 2026-10-09) was REAPED for low system memory ~10:00; research 0018 was
 never written. Its partial output (plan doc docs/plans/102-repo-review.md
 with slices S1-S5 + rows 102-104, docs/adr/README.md index,
@@ -284,10 +312,12 @@ detached (not a session background shell): python tools/ew_lane.py run
 review --prompt-file ops/runtime/repo-review-prompt.txt --writes-code
 --timeout 10800.
 
-Status: HEAD 008dd76 == origin/main (pushed; upstream tracking re-set
-after the rewrite). CI 37946689548 + codeql 37946689466 success on
-008dd76. /done gates: gated pytest 3564 passed (97 s), node 707 pass 0 fail,
-leak sweep ARMED (19). Server running on 008dd76 (/api/version read
-back). Loop HALT absent. Session jsonl < 10 MB.
+Status: HEAD 53a1db9 == origin/main (nothing new to push at /done).
+CI 38011061998 + codeql 38011061966 success on 53a1db9. /done gates:
+gated pytest 3636 passed (81 s), node 707 pass 0 fail (gated, npm.cmd),
+leak sweep ARMED (19). Server still running on 008dd76 (/api/version read
+back; v14 was kit/tests only, no restart needed). Loop HALT absent,
+lane-0/1/2 progress done, no lane lock held. Keep refs: N7416e2,
+repo-review-20261009. Session jsonl < 10 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
