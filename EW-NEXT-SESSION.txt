@@ -1,6 +1,6 @@
 EW NEXT SESSION
 ---------------
-SESSION: 25
+SESSION: 26
 
 Next action: SF - on/after 2026-10-11 (date-gated; before it, skip): if
 the interactive sessions since 2026-10-08 still show 0 undispatchable
@@ -43,6 +43,11 @@ Carried forward (not acted on yet):
   done by hand (plan 105, fa8e6f0, ANSWER 2025). Not a live failure.
 - NOTE: 2 older EW pytest temp leftovers (pytest-554, pytest-2082) are left
   for MAIN's sweep (ANSWER 2025 said so); not EW's to delete.
+- NOTE: session 25 (2026-10-10): a system hang interrupted no work. A
+  stale 0-byte .git/index.lock (08:21 loop tick, no git process) was
+  cleared via kit fleet_gitlock.clear_index_lock and read back gone
+  (gitlock.jsonl index-lock-removed). A stale claim file of dead pid 19796
+  stays in ops/loop/control/claims/ (kit treats it non-live; left alone).
 - NOTE: closed records live in docs/handoff-ledger.txt (row 104); move a
   bullet there once it is only history.
 - NOTE: run the node suite through the gate as
@@ -136,10 +141,11 @@ Carried forward (not acted on yet):
 - NOTE: a plain `git pull` merge message carries the repo URL, which the
   pre-push leak sweep refuses; merge origin/main with an explicit -m.
 
-Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew, HALT absent, no
-lanes in flight, inbox no unhandled notes, ROADMAP no open rows (read
-2026-10-10). FLEET_SIDECAR_ROOT absent in HKCU Environment (read
-2026-10-10; row 106 stays MAIN-gated). State:
+Context: loop = \EbonwakeOps\LaneLoop PT15M IgnoreNew (Ready, last result
+0), HALT absent, no lanes in flight, lane worktrees 0/1/2 clean and
+merged, inbox no unhandled notes, ROADMAP no open rows (read
+2026-10-10). FLEET_SIDECAR_ROOT empty in HKCU Environment (read
+2026-10-10 session 25; row 106 stays MAIN-gated). State:
 ops/loop/control/loop_items/*.json, progress/loop.json,
 progress/lane-<i>.json, inbox_status.json. Merge-stuck items are fixed by
 a session agent (merge refs/ew/keep/<id> onto main, keep both sides, mark
@@ -153,12 +159,11 @@ dirs, the gitlock or the progress file).
 Acceptance: SF mode decided per the date gate (mode file read back);
 nothing in adjudicate / merge-conflict / gave-up / failed-dirty.
 
-Do NOT redo: session 24 (2026-10-10): V101 DONE - row 101 merge 633fa46
-verified at HEAD 08de0c3 (gated pytest 3648/0 89 s, node 715/0, tree
-clean, no stuck loop_items; progress/v101.json done). Nc0305f ANSWER sent
-by the loop 2026-10-10 00:04 (delivery 1/1) - hand-off item closed.
-Deep-dive DD-20261010 merged 08de0c3 (research 0020, no new plans). No
-code changes this session.
+Do NOT redo: session 25 (2026-10-10): hang recovery only (NOTE above);
+no code changes; SF date gate not reached (not acted on).
+session 24 (2026-10-10): V101 DONE - row 101 merge 633fa46 verified;
+Nc0305f ANSWER sent (delivery 1/1); deep-dive DD-20261010 merged 08de0c3
+(research 0020, no new plans).
 session 23 (2026-10-09): kit v15 vendored per MAIN ORDER Nc0305f
 (0074764); plan 107 merge c1510ba verified; row 106 bundle archive DONE
 (9fa11b3; ROADMAP 106 `[>] MAIN-gated`); row 101 requeued.
@@ -166,11 +171,11 @@ Older sessions: docs/handoff-ledger.txt and git log.
 
 In flight: none.
 
-Status: HEAD 08de0c3 == origin/main before this /done (the hand-off
+Status: HEAD a32b789 == origin/main before this /done (the hand-off
 commit follows). CI 38022486736 + codeql 38022486747 success on 633fa46;
-08de0c3 docs-only. /done gates: gated pytest 3648 passed (91 s), gated
-node 715 pass 0 fail (npm.cmd), leak sweep ARMED (19). Server running on
-08de0c3 (/api/version read back). Headless budget 43/120 in 24 h. Session
+08de0c3 and a32b789 docs-only. /done gates (session 25): gated pytest
+3648 passed (103 s), gated node 715 pass 0 fail (npm.cmd), leak sweep
+ARMED (19). Server running on a32b789 (/api/version read back). Session
 jsonl < 10 MB.
 
 Start with: read this file, then CLAUDE.md, docs/plans/ROADMAP.md, git log -10.
